@@ -23,7 +23,7 @@ from aqt.qt import (
 from aqt.utils import tooltip
 
 from ..config import api_key_configured, load_config, save_config
-from ..i18n import default_brain_import_message, tr
+from ..i18n import effective_brain_import_message, tr
 from ..gemini_client import (
     GeminiError,
     call_gemini,
@@ -290,9 +290,7 @@ class ChatWindow(QWidget):
         self.chat_log.append(preview_html)
         self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
 
-        self.input_field.setPlainText(
-            config.get("brain_import_message") or default_brain_import_message(config)
-        )
+        self.input_field.setPlainText(effective_brain_import_message(config))
         self.input_field.setFocus()
 
     def send_message(self) -> None:
@@ -300,6 +298,7 @@ class ChatWindow(QWidget):
         if not user_text:
             return
 
+        config = load_config()
         safe_html = html.escape(user_text).replace("\n", "<br>")
         you_label = tr("chat.label.you", config=config)
         self.chat_log.append(f"<br><b style='color:#4CAF50;'>{you_label}:</b> {safe_html}")
@@ -307,7 +306,6 @@ class ChatWindow(QWidget):
         self.input_field.clear()
         self._set_input_enabled(False)
 
-        config = load_config()
         if not api_key_configured(config):
             self._append_system_message(
                 tr("chat.api_key_missing", config=config),

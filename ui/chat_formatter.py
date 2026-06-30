@@ -20,7 +20,8 @@ def _parse_field_label_line(line: str) -> str | None:
 
     bold_match = re.match(r"^\*\*(.+?)\*\*:?\s*$", line)
     if bold_match:
-        line = bold_match.group(1).strip()
+        name = bold_match.group(1).strip()
+        return name if _is_plausible_field_name(name) else None
 
     campo_match = re.match(r"^Campo\s*\[([^\]]+)\]\s*:?\s*$", line, re.IGNORECASE)
     if campo_match:

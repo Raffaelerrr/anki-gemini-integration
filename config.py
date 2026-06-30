@@ -6,7 +6,7 @@ from typing import Any
 
 from aqt import mw
 
-from .constants import DEFAULT_BRAIN_IMPORT_MESSAGE, DEFAULT_INSTRUCTION, DEFAULT_MODEL
+from .constants import DEFAULT_INSTRUCTION, DEFAULT_MODEL
 from .i18n import DEFAULT_LANGUAGE
 
 ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -26,7 +26,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_history_turns": 20,
     "confirm_before_apply": True,
     "max_retries": 2,
-    "brain_import_message": DEFAULT_BRAIN_IMPORT_MESSAGE,
+    "brain_import_message": "",
 }
 
 

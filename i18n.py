@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .constants import DEFAULT_BRAIN_IMPORT_MESSAGE
+
 LANG_IT = "it"
 LANG_EN = "en"
 SUPPORTED_LANGUAGES = (LANG_IT, LANG_EN)
@@ -387,3 +389,36 @@ def tr(key: str, *, config: dict[str, Any] | None = None, lang: str | None = Non
 
 def default_brain_import_message(config: dict[str, Any] | None = None) -> str:
     return tr("defaults.brain_import_message", config=config)
+
+
+def _builtin_brain_import_messages() -> frozenset[str]:
+    return frozenset(
+        message.strip()
+        for message in (
+            DEFAULT_BRAIN_IMPORT_MESSAGE,
+            _STRINGS["defaults.brain_import_message"][LANG_IT],
+            _STRINGS["defaults.brain_import_message"][LANG_EN],
+        )
+        if message.strip()
+    )
+
+
+def is_builtin_brain_import_message(text: str | None) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    return stripped in _builtin_brain_import_messages()
+
+
+def effective_brain_import_message(config: dict[str, Any] | None = None) -> str:
+    stored = ((config or {}).get("brain_import_message") or "").strip()
+    if is_builtin_brain_import_message(stored):
+        return default_brain_import_message(config)
+    return stored
+
+
+def normalize_brain_import_message_for_save(text: str, config: dict[str, Any]) -> str:
+    stripped = (text or "").strip()
+    if is_builtin_brain_import_message(stripped):
+        return ""
+    return stripped

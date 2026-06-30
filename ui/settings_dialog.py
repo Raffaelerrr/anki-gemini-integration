@@ -21,7 +21,14 @@ from aqt.qt import (
 )
 
 from ..config import load_config, save_config
-from ..i18n import LANG_EN, LANG_IT, default_brain_import_message, tr
+from ..i18n import (
+    LANG_EN,
+    LANG_IT,
+    effective_brain_import_message,
+    is_builtin_brain_import_message,
+    normalize_brain_import_message_for_save,
+    tr,
+)
 from .chat_dialog import refresh_chat_language
 
 
@@ -59,6 +66,7 @@ class SettingsDialog(QDialog):
         index = self.language_combo.findData(LANG_EN if current_lang.startswith("en") else LANG_IT)
         if index >= 0:
             self.language_combo.setCurrentIndex(index)
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
         layout.addWidget(self.language_combo)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.api_key', config=config)}</b>"))
@@ -137,9 +145,7 @@ class SettingsDialog(QDialog):
         self.brain_message_input = QTextEdit(self)
         self.brain_message_input.setMinimumHeight(70)
         self.brain_message_input.setMaximumHeight(120)
-        self.brain_message_input.setPlainText(
-            self.config.get("brain_import_message") or default_brain_import_message(self.config)
-        )
+        self.brain_message_input.setPlainText(effective_brain_import_message(self.config))
         layout.addWidget(self.brain_message_input)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.system_instruction', config=config)}</b>"))
@@ -181,6 +187,13 @@ class SettingsDialog(QDialog):
         btn_layout.addWidget(btn_cancel)
         root.addLayout(btn_layout)
 
+    def _on_language_changed(self) -> None:
+        current = self.brain_message_input.toPlainText().strip()
+        if not is_builtin_brain_import_message(current):
+            return
+        lang = self.language_combo.currentData() or LANG_IT
+        self.brain_message_input.setPlainText(tr("defaults.brain_import_message", lang=lang))
+
     def _save_and_accept(self) -> None:
         new_key = self.api_key_input.text().strip()
         self.config["language"] = self.language_combo.currentData() or LANG_IT
@@ -193,7 +206,9 @@ class SettingsDialog(QDialog):
         self.config["temperature_chat"] = self.temp_chat_input.value()
         self.config["confirm_before_apply"] = self.confirm_checkbox.isChecked()
         brain_message = self.brain_message_input.toPlainText().strip()
-        self.config["brain_import_message"] = brain_message or default_brain_import_message(self.config)
+        self.config["brain_import_message"] = normalize_brain_import_message_for_save(
+            brain_message, self.config
+        )
         self.config["system_instruction"] = self.instruction_input.toPlainText()
         self.config["dynamic_instructions"] = self.dynamic_input.toPlainText()
         save_config(self.config)
