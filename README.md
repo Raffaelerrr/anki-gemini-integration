@@ -4,7 +4,10 @@ An Anki add-on that integrates **Google Gemini** into the note editor: optimize 
 
 **Version:** 2.0.0  
 **Author:** Raffaele  
-**Requires:** Anki 2.1.49+ (point version 49)
+**Requires:** Anki 2.1.49+ (point version 49)  
+**License:** [MIT](LICENSE)
+
+> **Disclaimer:** This add-on was developed with substantial assistance from AI coding tools (including Cursor and large language models). The author reviewed and tested the project, but errors or unexpected behavior may remain. Use at your own discretion.
 
 ---
 
@@ -120,4 +123,17 @@ When you use this add-on, note field content and chat messages are sent to **Goo
 
 ## License
 
-No license file is included yet. All rights reserved unless otherwise specified by the author.
+This project is licensed under the [MIT License](LICENSE).
+
+You may use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the software, as long as you include the copyright notice and license text. The software is provided **“as is”**, without warranty of any kind.
+
+Other common permissive options (not used here):
+
+| License | In short |
+|---------|----------|
+| **MIT** *(this repo)* | Do almost anything; keep the license notice. Simple and very common. |
+| **Apache 2.0** | Like MIT, plus an explicit patent grant. Slightly longer text. |
+| **BSD 2/3-Clause** | Very similar to MIT. |
+| **Unlicense / CC0** | Public domain–style; no attribution required. |
+
+Copyleft licenses such as **GPL** require derivative works to stay open source under the same license — stricter than what most people mean by “do whatever you want.”
