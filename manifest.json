@@ -1,0 +1,12 @@
+{
+    "name": "Anki AI Assistant (Gemini)",
+    "package": "anki_ai_gemini",
+    "version": "2.0.0",
+    "author": "Rafra",
+    "min_point_version": 49,
+    "max_point_version": 0,
+    "human_version": "2.0.0",
+    "homepage": "",
+    "conflicts": [],
+    "mod": 0
+}

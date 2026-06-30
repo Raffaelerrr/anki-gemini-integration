@@ -1,0 +1,63 @@
+# --- Secrets & local user config (never commit) ---
+config.json
+meta.json
+config_gemini.json
+*.local.json
+.env
+.env.*
+.envrc
+secrets.json
+credentials.json
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# --- Python bytecode & caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Editor & IDE ---
+.vscode/
+.idea/
+*.code-workspace
+*.sublime-project
+*.sublime-workspace
+.cursor/
+
+# --- OS junk ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+._*
+
+# --- Scratch / backup files ---
+codice vecchio.txt
+*.bak
+*.tmp
+*.swp
+*~
+*.orig
