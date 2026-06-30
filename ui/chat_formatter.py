@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import html
 import re
+from typing import Any
 
+from ..i18n import tr
 from ..markdown_loader import get_markdown_converter
 
 _FENCE_RE = re.compile(
@@ -23,6 +25,10 @@ def _parse_field_label_line(line: str) -> str | None:
     campo_match = re.match(r"^Campo\s*\[([^\]]+)\]\s*:?\s*$", line, re.IGNORECASE)
     if campo_match:
         return campo_match.group(1).strip()
+
+    field_match = re.match(r"^Field\s*\[([^\]]+)\]\s*:?\s*$", line, re.IGNORECASE)
+    if field_match:
+        return field_match.group(1).strip()
 
     if not line.endswith(":"):
         return None
@@ -149,20 +155,27 @@ def _render_markdown_prose(text: str) -> str:
     return f'<div style="margin: 6px 0; line-height: 1.45; color: #e0e0e0;">{rendered}</div>'
 
 
-def _render_code_block(label: str | None, content: str, block_id: str) -> str:
+def _render_code_block(
+    label: str | None,
+    content: str,
+    block_id: str,
+    *,
+    config: dict[str, Any] | None = None,
+) -> str:
+    copy_label = tr("formatter.copy", config=config)
     safe_content = html.escape(content.strip())
     if label:
         safe_label = html.escape(label.strip())
         header = (
             f"<b style='color: #9fa8da;'>{safe_label}</b> "
             f"<a href='copy:{block_id}' style='color: #64b5f6; text-decoration: none; "
-            f"margin-left: 8px;'>Copia</a>"
+            f"margin-left: 8px;'>{copy_label}</a>"
         )
     else:
         header = (
-            f"<span style='color: #9fa8da;'>Blocco code</span> "
+            f"<span style='color: #9fa8da;'>{tr('formatter.code_block', config=config)}</span> "
             f"<a href='copy:{block_id}' style='color: #64b5f6; text-decoration: none; "
-            f"margin-left: 8px;'>Copia</a>"
+            f"margin-left: 8px;'>{copy_label}</a>"
         )
 
     return (
@@ -181,6 +194,8 @@ def format_gemini_reply_html(
     text: str,
     copy_store: dict[str, str],
     id_prefix: str,
+    *,
+    config: dict[str, Any] | None = None,
 ) -> str:
     if not text.strip():
         return ""
@@ -213,7 +228,7 @@ def format_gemini_reply_html(
         block_id = f"{id_prefix}-{block_index}"
         block_index += 1
         copy_store[block_id] = content
-        parts.append(_render_code_block(field_name, content, block_id))
+        parts.append(_render_code_block(field_name, content, block_id, config=config))
         last_end = match.end()
 
     tail = text[last_end:]

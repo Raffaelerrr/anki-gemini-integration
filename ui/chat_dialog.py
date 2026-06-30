@@ -23,7 +23,7 @@ from aqt.qt import (
 from aqt.utils import tooltip
 
 from ..config import api_key_configured, load_config, save_config
-from ..constants import DEFAULT_BRAIN_IMPORT_MESSAGE
+from ..i18n import default_brain_import_message, tr
 from ..gemini_client import (
     GeminiError,
     call_gemini,
@@ -131,7 +131,6 @@ class ChatWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self.setWindowModality(Qt.WindowModality.NonModal)
-        self.setWindowTitle("Chat con Gemini")
         self.resize(520, 640)
 
         self.api_history: list[dict[str, Any]] = []
@@ -143,20 +142,19 @@ class ChatWindow(QWidget):
         layout = QVBoxLayout(self)
 
         toolbar = QHBoxLayout()
-        self.context_checkbox = QCheckBox("Includi contesto nota nel prossimo messaggio", self)
+        self.context_checkbox = QCheckBox(self)
         self.context_checkbox.setChecked(False)
         toolbar.addWidget(self.context_checkbox)
 
-        btn_clear = QPushButton("Nuova conversazione", self)
-        btn_clear.clicked.connect(self.clear_conversation)
-        toolbar.addWidget(btn_clear)
+        self.btn_clear = QPushButton(self)
+        self.btn_clear.clicked.connect(self.clear_conversation)
+        toolbar.addWidget(self.btn_clear)
         layout.addLayout(toolbar)
 
         self.chat_log = QTextBrowser(self)
         self.chat_log.setOpenLinks(False)
         self.chat_log.setReadOnly(True)
         self.chat_log.anchorClicked.connect(self._on_anchor_clicked)
-        self.chat_log.setPlaceholderText("La conversazione apparirà qui...")
         self.chat_log.document().setDefaultStyleSheet(
             "body { color: #e0e0e0; }"
             "p { margin: 6px 0; }"
@@ -181,13 +179,9 @@ class ChatWindow(QWidget):
         self.input_field.setFixedHeight(80)
         self.input_field.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self.input_field.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.input_field.setPlaceholderText(
-            "Chiedi a Gemini o digiti: 'Memorizza globalmente la regola X'...\n"
-            "(Invio per inviare, Shift+Invio per andare a capo)"
-        )
         self.input_field.installEventFilter(self)
 
-        self.send_button = QPushButton("Invia", self)
+        self.send_button = QPushButton(self)
         self.send_button.clicked.connect(self.send_message)
         self.send_button.setFixedHeight(80)
 
@@ -198,11 +192,26 @@ class ChatWindow(QWidget):
         self.loading_timer = QTimer(self)
         self.loading_timer.timeout.connect(self._update_loading_animation)
 
+        self._apply_static_texts()
         self._append_system_message(
-            "Ciao! Puoi chiedermi spiegazioni o dirmi di memorizzare nuove direttive di stile.",
+            tr("chat.welcome"),
             color="#2196F3",
-            label="Gemini",
+            label=tr("chat.label.gemini"),
         )
+
+    def _apply_static_texts(self) -> None:
+        config = load_config()
+        self.setWindowTitle(tr("chat.title", config=config))
+        self.context_checkbox.setText(tr("chat.include_context", config=config))
+        self.btn_clear.setText(tr("chat.new_conversation", config=config))
+        self.chat_log.setPlaceholderText(tr("chat.log_placeholder", config=config))
+        self.input_field.setPlaceholderText(tr("chat.input_placeholder", config=config))
+        self.send_button.setText(tr("chat.send", config=config))
+        if self.loading_label.isVisible():
+            self._update_loading_animation()
+
+    def apply_language(self) -> None:
+        self._apply_static_texts()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         global _chat_window
@@ -218,7 +227,7 @@ class ChatWindow(QWidget):
         if content is None:
             return
         QApplication.clipboard().setText(content)
-        tooltip("Contenuto del campo copiato negli appunti.")
+        tooltip(tr("chat.copied"))
 
     def eventFilter(self, obj, event):
         if obj is self.input_field and event.type() == event.Type.KeyPress:
@@ -230,18 +239,20 @@ class ChatWindow(QWidget):
         return super().eventFilter(obj, event)
 
     def clear_conversation(self) -> None:
+        config = load_config()
         self.api_history.clear()
         self.note_context = None
         self._copy_blocks.clear()
         self.context_checkbox.setChecked(False)
         self.chat_log.clear()
         self._append_system_message(
-            "Conversazione azzerata. Puoi iniziare una nuova chat.",
+            tr("chat.cleared", config=config),
             color="#9C27B0",
-            label="Sistema",
+            label=tr("chat.label.system", config=config),
         )
 
     def import_note_from_editor(self, editor) -> None:
+        config = load_config()
         note = editor.note
         field_blocks: list[str] = []
         context_lines: list[str] = []
@@ -257,22 +268,30 @@ class ChatWindow(QWidget):
                 f"<div class='contenuto-campo'>{inner}</div>"
                 f"</div>"
             )
-            context_lines.append(f"Campo [{name}]:\n{value}")
+            context_lines.append(f"{tr('chat.context.field', config=config, name=name)}\n{value}")
 
         if not field_blocks:
-            self._append_system_message("La nota corrente è completamente vuota.", color="#f44336")
+            self._append_system_message(
+                tr("chat.note_empty", config=config),
+                color="#f44336",
+                label=tr("chat.label.system", config=config),
+            )
             return
 
         self.note_context = "\n\n".join(context_lines)
         self.context_checkbox.setChecked(True)
-        self._append_system_message("Contenuto della nota importato con successo!", color="#9C27B0")
+        self._append_system_message(
+            tr("chat.note_imported", config=config),
+            color="#9C27B0",
+            label=tr("chat.label.system", config=config),
+        )
 
         preview_html = PREVIEW_STYLE + "<div class='anteprima-isolata'>" + "".join(field_blocks) + "</div>"
         self.chat_log.append(preview_html)
         self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
 
         self.input_field.setPlainText(
-            load_config().get("brain_import_message") or DEFAULT_BRAIN_IMPORT_MESSAGE
+            config.get("brain_import_message") or default_brain_import_message(config)
         )
         self.input_field.setFocus()
 
@@ -282,22 +301,29 @@ class ChatWindow(QWidget):
             return
 
         safe_html = html.escape(user_text).replace("\n", "<br>")
-        self.chat_log.append(f"<br><b style='color:#4CAF50;'>Tu:</b> {safe_html}")
+        you_label = tr("chat.label.you", config=config)
+        self.chat_log.append(f"<br><b style='color:#4CAF50;'>{you_label}:</b> {safe_html}")
         self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
         self.input_field.clear()
         self._set_input_enabled(False)
 
         config = load_config()
         if not api_key_configured(config):
-            self._append_system_message("Errore: API Key mancante (⚙️).", color="#f44336")
+            self._append_system_message(
+                tr("chat.api_key_missing", config=config),
+                color="#f44336",
+                label=tr("chat.label.system", config=config),
+            )
             self._set_input_enabled(True)
             return
 
         payload_text = user_text
         if self.context_checkbox.isChecked() and self.note_context:
-            payload_text = (
-                f"[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:\n{self.note_context}\n\n"
-                f"[RICHIESTA DELLO STUDENTE]:\n{user_text}"
+            payload_text = tr(
+                "chat.context.prefix",
+                config=config,
+                context=self.note_context,
+                request=user_text,
             )
             self.context_checkbox.setChecked(False)
 
@@ -323,6 +349,7 @@ class ChatWindow(QWidget):
         self._stop_loading()
         self._set_input_enabled(True)
         self.input_field.setFocus()
+        config = load_config()
 
         try:
             raw_text = future.result()
@@ -330,7 +357,6 @@ class ChatWindow(QWidget):
             rules_updated = False
 
             if dynamic_rules is not None:
-                config = load_config()
                 config["dynamic_instructions"] = dynamic_rules
                 save_config(config)
                 rules_updated = True
@@ -342,21 +368,32 @@ class ChatWindow(QWidget):
                 display_text,
                 self._copy_blocks,
                 f"r{self._copy_counter}",
+                config=config,
             )
-            self.chat_log.append(f"<br><b style='color:#2196F3;'>Gemini:</b><br>{reply_html}")
+            gemini_label = tr("chat.label.gemini", config=config)
+            self.chat_log.append(f"<br><b style='color:#2196F3;'>{gemini_label}:</b><br>{reply_html}")
             if rules_updated:
                 self._append_system_message(
-                    "Memoria dinamica dell'add-on aggiornata e salvata!",
+                    tr("chat.rules_updated", config=config),
                     color="#9C27B0",
+                    label=tr("chat.label.system", config=config),
                 )
         except GeminiError as exc:
             if self.api_history and self.api_history[-1]["role"] == "user":
                 self.api_history.pop()
-            self._append_system_message(f"Errore: {exc}", color="#f44336")
+            self._append_system_message(
+                tr("chat.error", config=config, error=exc),
+                color="#f44336",
+                label=tr("chat.label.system", config=config),
+            )
         except Exception as exc:
             if self.api_history and self.api_history[-1]["role"] == "user":
                 self.api_history.pop()
-            self._append_system_message(f"Errore imprevisto: {exc}", color="#f44336")
+            self._append_system_message(
+                tr("chat.unexpected_error", config=config, error=exc),
+                color="#f44336",
+                label=tr("chat.label.system", config=config),
+            )
 
         self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
 
@@ -366,7 +403,7 @@ class ChatWindow(QWidget):
 
     def _start_loading(self) -> None:
         self._loading_phase = 0
-        self.loading_label.setText("🤖 Gemini sta scrivendo.")
+        self.loading_label.setText(tr("chat.loading"))
         self.loading_label.setVisible(True)
         self.loading_timer.start(400)
 
@@ -377,9 +414,11 @@ class ChatWindow(QWidget):
     def _update_loading_animation(self) -> None:
         self._loading_phase = (self._loading_phase % 3) + 1
         dots = "." * self._loading_phase
-        self.loading_label.setText(f"🤖 Gemini sta scrivendo{dots}")
+        self.loading_label.setText(f"{tr('chat.loading')}{dots}")
 
-    def _append_system_message(self, text: str, color: str, label: str = "Sistema") -> None:
+    def _append_system_message(self, text: str, color: str, label: str | None = None) -> None:
+        if label is None:
+            label = tr("chat.label.system")
         safe = html.escape(text)
         self.chat_log.append(
             f"<br><b style='color:{color};'>{label}:</b> {safe}"
@@ -389,6 +428,11 @@ class ChatWindow(QWidget):
 
 
 _chat_window: ChatWindow | None = None
+
+
+def refresh_chat_language() -> None:
+    if _chat_window is not None:
+        _chat_window.apply_language()
 
 
 def get_chat_window() -> ChatWindow:

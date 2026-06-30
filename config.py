@@ -7,6 +7,7 @@ from typing import Any
 from aqt import mw
 
 from .constants import DEFAULT_BRAIN_IMPORT_MESSAGE, DEFAULT_INSTRUCTION, DEFAULT_MODEL
+from .i18n import DEFAULT_LANGUAGE
 
 ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 ADDON_MODULE = os.path.basename(ADDON_DIR)
@@ -14,6 +15,7 @@ LEGACY_CONFIG_PATH = os.path.join(ADDON_DIR, "config_gemini.json")
 META_CONFIG_PATH = os.path.join(ADDON_DIR, "meta.json")
 
 DEFAULT_CONFIG: dict[str, Any] = {
+    "language": DEFAULT_LANGUAGE,
     "api_key": "",
     "system_instruction": DEFAULT_INSTRUCTION,
     "dynamic_instructions": "",

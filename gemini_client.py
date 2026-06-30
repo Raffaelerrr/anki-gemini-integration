@@ -8,6 +8,7 @@ from typing import Any
 import requests
 
 from .constants import CHAT_FORMAT_INSTRUCTION, GEMINI_API_HOST, GEMINI_API_PATH, META_RULE_DYNAMIC
+from .i18n import tr
 
 
 class GeminiError(Exception):
@@ -57,43 +58,41 @@ def build_api_url(model: str) -> str:
     return urllib.parse.urlunparse(("https", GEMINI_API_HOST, path, "", "", ""))
 
 
-def _parse_response_payload(data: dict[str, Any]) -> str:
+def _parse_response_payload(data: dict[str, Any], config: dict[str, Any]) -> str:
     if feedback := data.get("promptFeedback"):
         block_reason = feedback.get("blockReason")
         if block_reason:
-            raise GeminiResponseError(f"Richiesta bloccata da Gemini: {block_reason}")
+            raise GeminiResponseError(tr("gemini.blocked", config=config, reason=block_reason))
 
     candidates = data.get("candidates") or []
     if not candidates:
-        raise GeminiResponseError("Gemini non ha restituito candidati nella risposta.")
+        raise GeminiResponseError(tr("gemini.no_candidates", config=config))
 
     candidate = candidates[0]
     finish_reason = candidate.get("finishReason")
     if finish_reason and finish_reason not in ("STOP", "MAX_TOKENS"):
-        raise GeminiResponseError(f"Generazione interrotta: {finish_reason}")
+        raise GeminiResponseError(tr("gemini.interrupted", config=config, reason=finish_reason))
 
     content = candidate.get("content") or {}
     parts = content.get("parts") or []
     if not parts:
-        raise GeminiResponseError("Risposta vuota da Gemini.")
+        raise GeminiResponseError(tr("gemini.empty_response", config=config))
 
     texts = [part.get("text", "") for part in parts if part.get("text")]
     if not texts:
-        raise GeminiResponseError("Nessun testo nella risposta di Gemini.")
+        raise GeminiResponseError(tr("gemini.no_text", config=config))
 
     return "".join(texts)
 
 
-def _classify_http_error(status_code: int, response_text: str) -> GeminiError:
+def _classify_http_error(status_code: int, response_text: str, config: dict[str, Any]) -> GeminiError:
     if status_code in (401, 403):
-        return GeminiAuthError(
-            "API Key non valida o non autorizzata. Controlla la chiave nelle impostazioni (⚙️)."
-        )
+        return GeminiAuthError(tr("gemini.auth_error", config=config))
     if status_code == 429:
-        return GeminiRateLimitError(
-            "Limite di richieste raggiunto. Riprova tra qualche secondo."
-        )
-    return GeminiError(f"Errore HTTP {status_code}: {response_text[:300]}")
+        return GeminiRateLimitError(tr("gemini.rate_limit", config=config))
+    return GeminiError(
+        tr("gemini.http_error", config=config, status=status_code, detail=response_text[:300])
+    )
 
 
 def call_gemini(
@@ -127,11 +126,11 @@ def call_gemini(
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=timeout)
             if not response.ok:
-                raise _classify_http_error(response.status_code, response.text)
+                raise _classify_http_error(response.status_code, response.text, config)
             data = response.json()
-            return _parse_response_payload(data)
+            return _parse_response_payload(data, config)
         except (requests.Timeout, requests.ConnectionError) as exc:
-            last_error = GeminiError(f"Errore di rete o timeout: {exc}")
+            last_error = GeminiError(tr("gemini.network_error", config=config, error=exc))
         except GeminiError as exc:
             if isinstance(exc, (GeminiAuthError, GeminiRateLimitError)):
                 raise
@@ -140,7 +139,7 @@ def call_gemini(
         if attempt < max_retries:
             time.sleep(1.5 * (attempt + 1))
 
-    raise last_error or GeminiError("Errore sconosciuto durante la chiamata a Gemini.")
+    raise last_error or GeminiError(tr("gemini.unknown_error", config=config))
 
 
 def extract_dynamic_rules(text: str) -> tuple[str, str | None]:
