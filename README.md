@@ -85,7 +85,7 @@ You normally configure everything through the in-editor **⚙️** dialog; copyi
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `language` | `it` | Interface language (`it` or `en`) |
+| `language` | `en` | Interface language (`it` or `en`) |
 | `model_optimize` | `gemini-2.5-flash-lite` | Gemini model for field optimization |
 | `model_chat` | `gemini-2.5-flash` | Gemini model for chat |
 | `thinking_budget_optimize` | `0` | Thinking tokens for optimization (`0` = off; faster) |

@@ -134,7 +134,7 @@ class SettingsDialog(QDialog):
         self.language_combo = QComboBox(form_host)
         self.language_combo.addItem(tr("settings.language.it", config=config), LANG_IT)
         self.language_combo.addItem(tr("settings.language.en", config=config), LANG_EN)
-        current_lang = (self.config.get("language") or LANG_IT).lower()
+        current_lang = (self.config.get("language") or DEFAULT_LANGUAGE).lower()
         index = self.language_combo.findData(LANG_EN if current_lang.startswith("en") else LANG_IT)
         if index >= 0:
             self.language_combo.setCurrentIndex(index)
@@ -333,7 +333,7 @@ class SettingsDialog(QDialog):
             return
 
         help_config = self._config_for_api()
-        help_config["language"] = self.language_combo.currentData() or LANG_IT
+        help_config["language"] = self.language_combo.currentData() or DEFAULT_LANGUAGE
         self._settings_help_dialog = open_settings_help_dialog(self, help_config)
         self._settings_help_dialog.finished.connect(self._on_settings_help_closed)
 
@@ -347,7 +347,7 @@ class SettingsDialog(QDialog):
         super().done(result)
 
     def _ui_config(self) -> dict[str, Any]:
-        return {"language": self.language_combo.currentData() or LANG_IT}
+        return {"language": self.language_combo.currentData() or DEFAULT_LANGUAGE}
 
     def _config_for_api(self) -> dict[str, Any]:
         config = dict(self.config)
@@ -514,7 +514,7 @@ class SettingsDialog(QDialog):
 
         if key == "brain_import_message":
             self.brain_message_input.setPlainText(
-                effective_brain_import_message({"language": self.language_combo.currentData() or LANG_IT})
+                effective_brain_import_message({"language": self.language_combo.currentData() or DEFAULT_LANGUAGE})
             )
             return
 
@@ -541,12 +541,12 @@ class SettingsDialog(QDialog):
         current = self.brain_message_input.toPlainText().strip()
         if not is_builtin_brain_import_message(current):
             return
-        lang = self.language_combo.currentData() or LANG_IT
+        lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
         self.brain_message_input.setPlainText(tr("defaults.brain_import_message", lang=lang))
 
     def _save_and_accept(self) -> None:
         new_key = self.api_key_input.text().strip()
-        self.config["language"] = self.language_combo.currentData() or LANG_IT
+        self.config["language"] = self.language_combo.currentData() or DEFAULT_LANGUAGE
         self.config["api_key"] = new_key if new_key else self._saved_api_key
         self.config["model_optimize"] = model_selector_value(self.model_optimize_input) or DEFAULT_MODEL_OPTIMIZE
         self.config["model_chat"] = model_selector_value(self.model_chat_input) or DEFAULT_MODEL_CHAT

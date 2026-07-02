@@ -7,7 +7,7 @@ from .constants import DEFAULT_BRAIN_IMPORT_MESSAGE
 LANG_IT = "it"
 LANG_EN = "en"
 SUPPORTED_LANGUAGES = (LANG_IT, LANG_EN)
-DEFAULT_LANGUAGE = LANG_IT
+DEFAULT_LANGUAGE = LANG_EN
 
 _STRINGS: dict[str, dict[str, str]] = {
     # Editor buttons & menu
@@ -647,9 +647,14 @@ _STRINGS: dict[str, dict[str, str]] = {
 
 
 def normalize_language(language: str | None) -> str:
-    if language and str(language).lower().startswith(LANG_EN):
+    if not language:
+        return DEFAULT_LANGUAGE
+    normalized = str(language).lower()
+    if normalized.startswith(LANG_IT):
+        return LANG_IT
+    if normalized.startswith(LANG_EN):
         return LANG_EN
-    return LANG_IT
+    return DEFAULT_LANGUAGE
 
 
 def get_language(config: dict[str, Any] | None = None) -> str:

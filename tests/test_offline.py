@@ -462,7 +462,7 @@ class TestI18n(unittest.TestCase):
         self.assertEqual(self.i18n.normalize_language("en"), "en")
         self.assertEqual(self.i18n.normalize_language("EN"), "en")
         self.assertEqual(self.i18n.normalize_language("it"), "it")
-        self.assertEqual(self.i18n.normalize_language(None), "it")
+        self.assertEqual(self.i18n.normalize_language(None), "en")
 
     def test_default_brain_import_message_per_language(self):
         en = self.i18n.default_brain_import_message({"language": "en"})
@@ -614,7 +614,7 @@ class TestConfig(unittest.TestCase):
         cls.config = _load_addon_module("config")
 
     def test_default_config_has_language(self):
-        self.assertIn("language", self.config.DEFAULT_CONFIG)
+        self.assertEqual(self.config.DEFAULT_CONFIG["language"], "en")
 
     def test_default_config_has_model_settings(self):
         defaults = self.config.DEFAULT_CONFIG
