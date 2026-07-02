@@ -72,13 +72,33 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Incolla la chiave da aistudio.google.com",
         "en": "Paste your key from aistudio.google.com",
     },
-    "settings.model": {
-        "it": "Modello Gemini:",
-        "en": "Gemini model:",
+    "settings.model_optimize": {
+        "it": "Modello Gemini (ottimizzazione):",
+        "en": "Gemini model (optimize):",
+    },
+    "settings.model_chat": {
+        "it": "Modello Gemini (chat):",
+        "en": "Gemini model (chat):",
     },
     "settings.model.placeholder": {
         "it": "es. gemini-2.5-flash",
         "en": "e.g. gemini-2.5-flash",
+    },
+    "settings.thinking_budget_optimize": {
+        "it": "Thinking budget (ottimizzazione):",
+        "en": "Thinking budget (optimize):",
+    },
+    "settings.thinking_budget_chat": {
+        "it": "Thinking budget (chat):",
+        "en": "Thinking budget (chat):",
+    },
+    "settings.thinking_budget.hint": {
+        "it": "-1 = dinamico, 0 = più veloce (senza thinking), valori più alti = più ragionamento.",
+        "en": "-1 = dynamic, 0 = fastest (no thinking), higher values = more reasoning.",
+    },
+    "settings.chat_streaming": {
+        "it": "Streaming risposte in chat (mostra il testo man mano che arriva)",
+        "en": "Stream chat replies (show text as it arrives)",
     },
     "settings.timeout": {
         "it": "Timeout (s):",
@@ -145,6 +165,34 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.cancel": {
         "it": "Annulla",
         "en": "Cancel",
+    },
+    "settings.restore_defaults": {
+        "it": "Ripristina predefiniti…",
+        "en": "Restore defaults…",
+    },
+    "settings.restore.title": {
+        "it": "Ripristina impostazioni predefinite",
+        "en": "Restore default settings",
+    },
+    "settings.restore.hint": {
+        "it": "Seleziona le impostazioni da ripristinare ai valori predefiniti, poi clicca Ripristina selezionati.",
+        "en": "Select the settings to restore to their defaults, then click Restore selected.",
+    },
+    "settings.restore.toggle_all": {
+        "it": "Seleziona / deseleziona tutto",
+        "en": "Check / uncheck all",
+    },
+    "settings.restore.apply": {
+        "it": "Ripristina selezionati",
+        "en": "Restore selected",
+    },
+    "settings.restore.back": {
+        "it": "Torna alle impostazioni",
+        "en": "Back to settings",
+    },
+    "settings.restore.none_selected": {
+        "it": "Seleziona almeno un'impostazione da ripristinare.",
+        "en": "Select at least one setting to restore.",
     },
     # Optimize
     "optimize.no_undo": {

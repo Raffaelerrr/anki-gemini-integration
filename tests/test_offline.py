@@ -37,6 +37,7 @@ def _install_anki_mocks() -> None:
     aqt.mw.taskman.run_in_background = MagicMock(
         side_effect=lambda fn, cb: cb(MagicMock(result=fn))
     )
+    aqt.mw.taskman.run_on_main = MagicMock(side_effect=lambda fn: fn())
     aqt.gui_hooks = MagicMock()
 
     aqt_qt = types.ModuleType("aqt.qt")
@@ -64,6 +65,7 @@ def _install_anki_mocks() -> None:
         DialogCode = _Enum(Accepted=1)
         LineWrapMode = _Enum(NoWrap=0)
         MoveOperation = _Enum(End=0)
+        MoveMode = _Enum(KeepAnchor=1)
 
         def __init__(self, *args, **kwargs):
             pass
@@ -86,7 +88,9 @@ def _install_anki_mocks() -> None:
         "QPushButton",
         "QScrollArea",
         "QSpinBox",
+        "QStackedWidget",
         "QTextBrowser",
+        "QTextCursor",
         "QTextEdit",
         "QTimer",
         "QUrl",
@@ -177,6 +181,45 @@ class TestGeminiClient(unittest.TestCase):
         url = self.gc.build_api_url("gemini-2.5-flash")
         self.assertIn("generativelanguage.googleapis.com", url)
         self.assertIn("gemini-2.5-flash", url)
+        self.assertIn("generateContent", url)
+
+    def test_build_stream_api_url(self):
+        url = self.gc.build_api_url("gemini-2.5-flash", stream=True)
+        self.assertIn("streamGenerateContent", url)
+        self.assertIn("alt=sse", url)
+
+    def test_resolve_model_prefers_purpose_specific(self):
+        config = {
+            "model": "legacy-model",
+            "model_optimize": "optimize-model",
+            "model_chat": "chat-model",
+        }
+        self.assertEqual(self.gc.resolve_model(config, "optimize"), "optimize-model")
+        self.assertEqual(self.gc.resolve_model(config, "chat"), "chat-model")
+
+    def test_resolve_model_falls_back_to_legacy(self):
+        config = {"model": "legacy-model"}
+        self.assertEqual(self.gc.resolve_model(config, "optimize"), "legacy-model")
+
+    def test_build_generation_config_includes_thinking_budget(self):
+        config = {"thinking_budget_optimize": 0, "thinking_budget_chat": -1}
+        optimize_gen = self.gc.build_generation_config(config, 0.2, "optimize")
+        chat_gen = self.gc.build_generation_config(config, 0.2, "chat")
+        self.assertEqual(optimize_gen["thinkingConfig"]["thinkingBudget"], 0)
+        self.assertEqual(chat_gen["thinkingConfig"]["thinkingBudget"], -1)
+
+    def test_build_request_payload(self):
+        config = {"system_instruction": "Rules", "thinking_budget_optimize": 0, "thinking_budget_chat": -1}
+        payload = self.gc.build_request_payload(
+            config=config,
+            user_text="Hello",
+            history=[{"role": "user", "parts": [{"text": "Prev"}]}],
+            temperature=0.1,
+            include_meta_rule=False,
+            purpose="optimize",
+        )
+        self.assertEqual(payload["contents"][-1]["parts"][0]["text"], "Hello")
+        self.assertEqual(payload["generationConfig"]["thinkingConfig"]["thinkingBudget"], 0)
 
     def test_parse_response_success(self):
         config = {"language": "en"}
@@ -206,9 +249,10 @@ class TestGeminiClient(unittest.TestCase):
         config = {
             "language": "en",
             "api_key": "bad",
-            "model": "gemini-2.5-flash",
+            "model_chat": "gemini-2.5-flash",
             "timeout_seconds": 5,
             "max_retries": 2,
+            "thinking_budget_chat": -1,
         }
         response = MagicMock(ok=False, status_code=403, text="Forbidden")
 
@@ -322,6 +366,38 @@ class TestConfig(unittest.TestCase):
 
     def test_default_config_has_language(self):
         self.assertIn("language", self.config.DEFAULT_CONFIG)
+
+    def test_default_config_has_model_settings(self):
+        defaults = self.config.DEFAULT_CONFIG
+        self.assertEqual(defaults["model_optimize"], "gemini-2.5-flash-lite")
+        self.assertEqual(defaults["model_chat"], "gemini-2.5-flash")
+        self.assertEqual(defaults["thinking_budget_optimize"], 0)
+        self.assertEqual(defaults["thinking_budget_chat"], -1)
+        self.assertTrue(defaults["chat_streaming"])
+
+    def test_apply_config_migrations_from_legacy_model(self):
+        migrated = self.config._apply_config_migrations(
+            {"model": "legacy-model", "model_optimize": "", "model_chat": ""},
+            {"model": "legacy-model", "model_optimize": "", "model_chat": ""},
+        )
+        self.assertEqual(migrated["model_optimize"], "legacy-model")
+        self.assertEqual(migrated["model_chat"], "legacy-model")
+
+    def test_apply_config_migrations_from_legacy_thinking_budget(self):
+        migrated = self.config._apply_config_migrations(
+            {"thinking_budget": 1024},
+            {"thinking_budget": 1024},
+        )
+        self.assertEqual(migrated["thinking_budget_optimize"], 1024)
+        self.assertEqual(migrated["thinking_budget_chat"], 1024)
+        self.assertNotIn("thinking_budget", migrated)
+
+    def test_restorable_settings_cover_defaults(self):
+        self.assertEqual(set(self.config.RESTORABLE_SETTING_KEYS), set(self.config.DEFAULT_CONFIG.keys()))
+
+    def test_default_config_value(self):
+        self.assertEqual(self.config.default_config_value("model_optimize"), "gemini-2.5-flash-lite")
+        self.assertEqual(self.config.default_config_value("brain_import_message"), "")
 
     def test_api_key_configured(self):
         fn = self.config.api_key_configured

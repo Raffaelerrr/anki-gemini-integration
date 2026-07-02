@@ -56,5 +56,10 @@ META_RULE_DYNAMIC = (
 )
 
 DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL_OPTIMIZE = "gemini-2.5-flash-lite"
+DEFAULT_MODEL_CHAT = "gemini-2.5-flash"
+DEFAULT_THINKING_BUDGET_OPTIMIZE = 0
+DEFAULT_THINKING_BUDGET_CHAT = -1
 GEMINI_API_HOST = "generativelanguage.googleapis.com"
 GEMINI_API_PATH = "/v1beta/models/{model}:generateContent"
+GEMINI_STREAM_API_PATH = "/v1beta/models/{model}:streamGenerateContent"

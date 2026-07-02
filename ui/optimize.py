@@ -91,6 +91,7 @@ def optimize_field_with_gemini(editor) -> None:
             user_text=original,
             temperature=temperature,
             include_meta_rule=False,
+            purpose="optimize",
         ),
         lambda future: _handle_optimize_result(future, editor, field_index, original, config),
     )

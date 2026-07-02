@@ -4,13 +4,17 @@
         "api_key": "",
         "system_instruction": "",
         "dynamic_instructions": "",
-        "model": "gemini-2.5-flash",
+        "model_optimize": "gemini-2.5-flash-lite",
+        "model_chat": "gemini-2.5-flash",
+        "thinking_budget_optimize": 0,
+        "thinking_budget_chat": -1,
+        "chat_streaming": true,
         "temperature_optimize": 0.1,
         "temperature_chat": 0.2,
         "timeout_seconds": 30,
         "max_history_turns": 20,
         "confirm_before_apply": true,
         "max_retries": 2,
-        "brain_import_message": "",
+        "brain_import_message": ""
     }
 }

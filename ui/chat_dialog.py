@@ -13,6 +13,7 @@ from aqt.qt import (
     QLabel,
     QPushButton,
     QTextBrowser,
+    QTextCursor,
     QTextEdit,
     Qt,
     QTimer,
@@ -28,6 +29,7 @@ from ..gemini_client import (
     GeminiError,
     call_gemini,
     extract_dynamic_rules,
+    stream_gemini,
     trim_history,
 )
 from .chat_formatter import format_gemini_reply_html
@@ -138,6 +140,7 @@ class ChatWindow(QWidget):
         self._loading_phase = 0
         self._copy_blocks: dict[str, str] = {}
         self._copy_counter = 0
+        self._stream_block_start: int | None = None
 
         layout = QVBoxLayout(self)
 
@@ -329,6 +332,24 @@ class ChatWindow(QWidget):
         max_turns = int(config.get("max_history_turns", 20))
         history_for_request = trim_history(self.api_history[:-1], max_turns)
         temperature = float(config.get("temperature_chat", 0.2))
+        use_streaming = bool(config.get("chat_streaming", False))
+
+        if use_streaming:
+            self._begin_streaming_reply()
+            mw.taskman.run_in_background(
+                lambda: stream_gemini(
+                    config=config,
+                    user_text=payload_text,
+                    history=history_for_request,
+                    temperature=temperature,
+                    include_meta_rule=True,
+                    on_chunk=lambda text: mw.taskman.run_on_main(
+                        lambda accumulated=text: self._update_streaming_reply(accumulated)
+                    ),
+                ),
+                self._handle_response,
+            )
+            return
 
         self._start_loading()
 
@@ -339,59 +360,106 @@ class ChatWindow(QWidget):
                 history=history_for_request,
                 temperature=temperature,
                 include_meta_rule=True,
+                purpose="chat",
             ),
             self._handle_response,
+        )
+
+    def _begin_streaming_reply(self) -> None:
+        config = load_config()
+        gemini_label = tr("chat.label.gemini", config=config)
+        self.chat_log.append(f"<br><b style='color:#2196F3;'>{gemini_label}:</b><br>")
+        self._stream_block_start = self.chat_log.textCursor().position()
+        self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
+
+    def _update_streaming_reply(self, text: str) -> None:
+        if self._stream_block_start is None:
+            return
+        cursor = self.chat_log.textCursor()
+        cursor.setPosition(self._stream_block_start)
+        cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
+        cursor.removeSelectedText()
+        safe = html.escape(text).replace("\n", "<br>")
+        cursor.insertHtml(f"<span style='color:#e0e0e0;'>{safe}</span>")
+        self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
+
+    def _clear_streaming_reply(self) -> None:
+        if self._stream_block_start is None:
+            return
+        cursor = self.chat_log.textCursor()
+        cursor.setPosition(self._stream_block_start)
+        cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
+        cursor.removeSelectedText()
+        self._stream_block_start = None
+
+    def _finalize_successful_reply(self, raw_text: str) -> None:
+        config = load_config()
+        display_text, dynamic_rules = extract_dynamic_rules(raw_text)
+        rules_updated = False
+
+        if dynamic_rules is not None:
+            config["dynamic_instructions"] = dynamic_rules
+            save_config(config)
+            rules_updated = True
+
+        self.api_history.append({"role": "model", "parts": [{"text": display_text}]})
+
+        self._copy_counter += 1
+        reply_html = format_gemini_reply_html(
+            display_text,
+            self._copy_blocks,
+            f"r{self._copy_counter}",
+            config=config,
+        )
+
+        if self._stream_block_start is not None:
+            cursor = self.chat_log.textCursor()
+            cursor.setPosition(self._stream_block_start)
+            cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+            cursor.insertHtml(reply_html)
+            self._stream_block_start = None
+        else:
+            gemini_label = tr("chat.label.gemini", config=config)
+            self.chat_log.append(f"<br><b style='color:#2196F3;'>{gemini_label}:</b><br>{reply_html}")
+
+        if rules_updated:
+            self._append_system_message(
+                tr("chat.rules_updated", config=config),
+                color="#9C27B0",
+                label=tr("chat.label.system", config=config),
+            )
+
+    def _handle_reply_error(self, exc: Exception) -> None:
+        config = load_config()
+        if self.api_history and self.api_history[-1]["role"] == "user":
+            self.api_history.pop()
+
+        if self._stream_block_start is not None:
+            self._clear_streaming_reply()
+            self._stream_block_start = None
+
+        if isinstance(exc, GeminiError):
+            message = tr("chat.error", config=config, error=exc)
+        else:
+            message = tr("chat.unexpected_error", config=config, error=exc)
+
+        self._append_system_message(
+            message,
+            color="#f44336",
+            label=tr("chat.label.system", config=config),
         )
 
     def _handle_response(self, future) -> None:
         self._stop_loading()
         self._set_input_enabled(True)
         self.input_field.setFocus()
-        config = load_config()
 
         try:
             raw_text = future.result()
-            display_text, dynamic_rules = extract_dynamic_rules(raw_text)
-            rules_updated = False
-
-            if dynamic_rules is not None:
-                config["dynamic_instructions"] = dynamic_rules
-                save_config(config)
-                rules_updated = True
-
-            self.api_history.append({"role": "model", "parts": [{"text": display_text}]})
-
-            self._copy_counter += 1
-            reply_html = format_gemini_reply_html(
-                display_text,
-                self._copy_blocks,
-                f"r{self._copy_counter}",
-                config=config,
-            )
-            gemini_label = tr("chat.label.gemini", config=config)
-            self.chat_log.append(f"<br><b style='color:#2196F3;'>{gemini_label}:</b><br>{reply_html}")
-            if rules_updated:
-                self._append_system_message(
-                    tr("chat.rules_updated", config=config),
-                    color="#9C27B0",
-                    label=tr("chat.label.system", config=config),
-                )
-        except GeminiError as exc:
-            if self.api_history and self.api_history[-1]["role"] == "user":
-                self.api_history.pop()
-            self._append_system_message(
-                tr("chat.error", config=config, error=exc),
-                color="#f44336",
-                label=tr("chat.label.system", config=config),
-            )
+            self._finalize_successful_reply(raw_text)
         except Exception as exc:
-            if self.api_history and self.api_history[-1]["role"] == "user":
-                self.api_history.pop()
-            self._append_system_message(
-                tr("chat.unexpected_error", config=config, error=exc),
-                color="#f44336",
-                label=tr("chat.label.system", config=config),
-            )
+            self._handle_reply_error(exc)
 
         self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
 
