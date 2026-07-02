@@ -8,6 +8,7 @@ from .i18n import tr
 from .ui.chat_dialog import close_chat_window, open_chat
 from .ui.optimize import optimize_field_with_gemini, undo_last_optimization
 from .ui.settings_dialog import open_settings_dialog
+from .ui.theme import refresh_addon_theme
 
 
 def add_editor_buttons(buttons, editor) -> None:
@@ -70,6 +71,11 @@ def cleanup() -> None:
     close_chat_window()
 
 
+def _on_theme_changed() -> None:
+    refresh_addon_theme()
+
+
 gui_hooks.editor_did_init_buttons.append(add_editor_buttons)
 gui_hooks.main_window_did_init.append(init_tools_menu)
 gui_hooks.profile_will_close.append(lambda *_: cleanup())
+gui_hooks.theme_did_change.append(_on_theme_changed)

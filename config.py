@@ -61,6 +61,10 @@ RESTORABLE_SETTING_LABELS: dict[str, str] = {
     "dynamic_instructions": "settings.dynamic_instructions",
 }
 
+SETTING_HELP_KEYS: dict[str, str] = {
+    key: f"settings.help.{key}" for key in RESTORABLE_SETTING_KEYS
+}
+
 
 def default_config_value(key: str) -> Any:
     if key not in DEFAULT_CONFIG:

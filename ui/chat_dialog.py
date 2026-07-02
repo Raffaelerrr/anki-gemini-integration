@@ -33,61 +33,7 @@ from ..gemini_client import (
     trim_history,
 )
 from .chat_formatter import format_gemini_reply_html
-
-PREVIEW_STYLE = (
-    "<style>"
-    "  .anteprima-isolata {"
-    "    background-color: rgba(156, 39, 176, 0.08);"
-    "    border-left: 4px solid #9C27B0;"
-    "    padding: 12px;"
-    "    margin: 14px 0 5px 0;"
-    "    font-size: 11px;"
-    "    border-radius: 4px;"
-    "  }"
-    "  .anteprima-isolata, .anteprima-isolata * {"
-    "    background-color: transparent !important;"
-    "  }"
-    "  .blocco-campo {"
-    "    margin-top: 12px !important;"
-    "    margin-bottom: 0px !important;"
-    "    line-height: 1.35 !important;"
-    "  }"
-    "  .blocco-campo:first-child {"
-    "    margin-top: 0px !important;"
-    "  }"
-    "  .titolo-campo {"
-    "    font-weight: bold;"
-    "    display: block !important;"
-    "    margin: 0 0 4px 0 !important;"
-    "    padding: 0 !important;"
-    "  }"
-    "  .contenuto-campo {"
-    "    margin: 0 !important;"
-    "    padding: 0 !important;"
-    "    display: block !important;"
-    "  }"
-    "  .contenuto-campo p,"
-    "  .contenuto-campo div,"
-    "  .contenuto-campo ol,"
-    "  .contenuto-campo ul {"
-    "    margin-top: 0px !important;"
-    "    margin-bottom: 4px !important;"
-    "    padding-top: 0px !important;"
-    "  }"
-    "  .contenuto-campo > *:first-child {"
-    "    margin-top: 0px !important;"
-    "    padding-top: 0px !important;"
-    "  }"
-    "  .contenuto-campo > *:last-child {"
-    "    margin-bottom: 0px !important;"
-    "    padding-bottom: 0px !important;"
-    "  }"
-    "  .contenuto-campo p:last-child,"
-    "  .contenuto-campo div:last-child {"
-    "    margin-bottom: 0px !important;"
-    "  }"
-    "</style>"
-)
+from .theme import chat_document_stylesheet, loading_label_stylesheet
 
 _TRAILING_EMPTY_HTML = re.compile(
     r"(?:"
@@ -158,23 +104,10 @@ class ChatWindow(QWidget):
         self.chat_log.setOpenLinks(False)
         self.chat_log.setReadOnly(True)
         self.chat_log.anchorClicked.connect(self._on_anchor_clicked)
-        self.chat_log.document().setDefaultStyleSheet(
-            "body { color: #e0e0e0; }"
-            "p { margin: 6px 0; }"
-            "b, strong { font-weight: bold; color: #f5f5f5; }"
-            "i, em { font-style: italic; }"
-            "ul, ol { margin: 6px 0; padding-left: 20px; }"
-            "li { margin: 3px 0; }"
-            "a { color: #64b5f6; text-decoration: none; }"
-            "code { font-family: Consolas, monospace; background: rgba(255,255,255,0.1); "
-            "padding: 1px 4px; border-radius: 3px; }"
-            "hr { border: none; border-top: 1px solid #555; margin: 12px 0; }"
-        )
         layout.addWidget(self.chat_log)
 
         self.loading_label = QLabel("", self)
         self.loading_label.setVisible(False)
-        self.loading_label.setStyleSheet("color: #FF9800; font-weight: bold; padding: 4px;")
         layout.addWidget(self.loading_label)
 
         input_layout = QHBoxLayout()
@@ -195,12 +128,17 @@ class ChatWindow(QWidget):
         self.loading_timer = QTimer(self)
         self.loading_timer.timeout.connect(self._update_loading_animation)
 
+        self._apply_chat_theme()
         self._apply_static_texts()
         self._append_system_message(
             tr("chat.welcome"),
-            color="#2196F3",
+            kind="gemini",
             label=tr("chat.label.gemini"),
         )
+
+    def _apply_chat_theme(self) -> None:
+        self.chat_log.document().setDefaultStyleSheet(chat_document_stylesheet())
+        self.loading_label.setStyleSheet(loading_label_stylesheet())
 
     def _apply_static_texts(self) -> None:
         config = load_config()
@@ -212,6 +150,9 @@ class ChatWindow(QWidget):
         self.send_button.setText(tr("chat.send", config=config))
         if self.loading_label.isVisible():
             self._update_loading_animation()
+
+    def apply_theme(self) -> None:
+        self._apply_chat_theme()
 
     def apply_language(self) -> None:
         self._apply_static_texts()
@@ -250,7 +191,7 @@ class ChatWindow(QWidget):
         self.chat_log.clear()
         self._append_system_message(
             tr("chat.cleared", config=config),
-            color="#9C27B0",
+            kind="system",
             label=tr("chat.label.system", config=config),
         )
 
@@ -266,9 +207,9 @@ class ChatWindow(QWidget):
             cleaned = _strip_field_html_edges(value)
             inner = cleaned if cleaned.startswith("<") else html.escape(cleaned)
             field_blocks.append(
-                f"<div class='blocco-campo'>"
-                f"<div class='titolo-campo'>{html.escape(name)}:</div>"
-                f"<div class='contenuto-campo'>{inner}</div>"
+                f"<div class='chat-field-block'>"
+                f"<div class='chat-field-title'>{html.escape(name)}:</div>"
+                f"<div class='chat-field-content'>{inner}</div>"
                 f"</div>"
             )
             context_lines.append(f"{tr('chat.context.field', config=config, name=name)}\n{value}")
@@ -276,7 +217,7 @@ class ChatWindow(QWidget):
         if not field_blocks:
             self._append_system_message(
                 tr("chat.note_empty", config=config),
-                color="#f44336",
+                kind="error",
                 label=tr("chat.label.system", config=config),
             )
             return
@@ -285,11 +226,11 @@ class ChatWindow(QWidget):
         self.context_checkbox.setChecked(True)
         self._append_system_message(
             tr("chat.note_imported", config=config),
-            color="#9C27B0",
+            kind="system",
             label=tr("chat.label.system", config=config),
         )
 
-        preview_html = PREVIEW_STYLE + "<div class='anteprima-isolata'>" + "".join(field_blocks) + "</div>"
+        preview_html = "<div class='chat-preview-panel'>" + "".join(field_blocks) + "</div>"
         self.chat_log.append(preview_html)
         self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
 
@@ -304,7 +245,7 @@ class ChatWindow(QWidget):
         config = load_config()
         safe_html = html.escape(user_text).replace("\n", "<br>")
         you_label = tr("chat.label.you", config=config)
-        self.chat_log.append(f"<br><b style='color:#4CAF50;'>{you_label}:</b> {safe_html}")
+        self.chat_log.append(f"<br><b class='chat-label-you'>{you_label}:</b> {safe_html}")
         self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
         self.input_field.clear()
         self._set_input_enabled(False)
@@ -312,7 +253,7 @@ class ChatWindow(QWidget):
         if not api_key_configured(config):
             self._append_system_message(
                 tr("chat.api_key_missing", config=config),
-                color="#f44336",
+                kind="error",
                 label=tr("chat.label.system", config=config),
             )
             self._set_input_enabled(True)
@@ -368,7 +309,7 @@ class ChatWindow(QWidget):
     def _begin_streaming_reply(self) -> None:
         config = load_config()
         gemini_label = tr("chat.label.gemini", config=config)
-        self.chat_log.append(f"<br><b style='color:#2196F3;'>{gemini_label}:</b><br>")
+        self.chat_log.append(f"<br><b class='chat-label-gemini'>{gemini_label}:</b><br>")
         self._stream_block_start = self.chat_log.textCursor().position()
         self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
 
@@ -380,7 +321,7 @@ class ChatWindow(QWidget):
         cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
         cursor.removeSelectedText()
         safe = html.escape(text).replace("\n", "<br>")
-        cursor.insertHtml(f"<span style='color:#e0e0e0;'>{safe}</span>")
+        cursor.insertHtml(f"<span class='chat-stream-text'>{safe}</span>")
         self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
 
     def _clear_streaming_reply(self) -> None:
@@ -421,12 +362,12 @@ class ChatWindow(QWidget):
             self._stream_block_start = None
         else:
             gemini_label = tr("chat.label.gemini", config=config)
-            self.chat_log.append(f"<br><b style='color:#2196F3;'>{gemini_label}:</b><br>{reply_html}")
+            self.chat_log.append(f"<br><b class='chat-label-gemini'>{gemini_label}:</b><br>{reply_html}")
 
         if rules_updated:
             self._append_system_message(
                 tr("chat.rules_updated", config=config),
-                color="#9C27B0",
+                kind="system",
                 label=tr("chat.label.system", config=config),
             )
 
@@ -446,7 +387,7 @@ class ChatWindow(QWidget):
 
         self._append_system_message(
             message,
-            color="#f44336",
+            kind="error",
             label=tr("chat.label.system", config=config),
         )
 
@@ -482,12 +423,23 @@ class ChatWindow(QWidget):
         dots = "." * self._loading_phase
         self.loading_label.setText(f"{tr('chat.loading')}{dots}")
 
-    def _append_system_message(self, text: str, color: str, label: str | None = None) -> None:
+    def _append_system_message(
+        self,
+        text: str,
+        *,
+        kind: str = "system",
+        label: str | None = None,
+    ) -> None:
         if label is None:
             label = tr("chat.label.system")
+        label_class = {
+            "gemini": "chat-label-gemini",
+            "system": "chat-label-system",
+            "error": "chat-label-error",
+        }.get(kind, "chat-label-system")
         safe = html.escape(text)
         self.chat_log.append(
-            f"<br><b style='color:{color};'>{label}:</b> {safe}"
+            f"<br><b class='{label_class}'>{label}:</b> {safe}"
             f"<div style='margin-bottom: 10px;'></div>"
         )
         self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
@@ -499,6 +451,11 @@ _chat_window: ChatWindow | None = None
 def refresh_chat_language() -> None:
     if _chat_window is not None:
         _chat_window.apply_language()
+
+
+def refresh_chat_theme() -> None:
+    if _chat_window is not None:
+        _chat_window.apply_theme()
 
 
 def get_chat_window() -> ChatWindow:

@@ -81,8 +81,24 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Gemini model (chat):",
     },
     "settings.model.placeholder": {
-        "it": "es. gemini-2.5-flash",
-        "en": "e.g. gemini-2.5-flash",
+        "it": "Digita per filtrare o scegli un modello",
+        "en": "Type to filter or choose a model",
+    },
+    "settings.model.refresh": {
+        "it": "Aggiorna modelli da API",
+        "en": "Refresh models from API",
+    },
+    "settings.model.refresh.no_key": {
+        "it": "Inserisci una API Key prima di aggiornare l'elenco modelli.",
+        "en": "Enter an API key before refreshing the model list.",
+    },
+    "settings.model.refresh.in_progress": {
+        "it": "Aggiornamento elenco modelli…",
+        "en": "Refreshing model list…",
+    },
+    "settings.model.refresh.done": {
+        "it": "Elenco modelli aggiornato ({count} modelli con generateContent).",
+        "en": "Model list updated ({count} models with generateContent).",
     },
     "settings.thinking_budget_optimize": {
         "it": "Thinking budget (ottimizzazione):",
@@ -193,6 +209,222 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.restore.none_selected": {
         "it": "Seleziona almeno un'impostazione da ripristinare.",
         "en": "Select at least one setting to restore.",
+    },
+    "settings.info": {
+        "it": "Guida impostazioni",
+        "en": "Settings guide",
+    },
+    "settings.help.title": {
+        "it": "Guida alle impostazioni",
+        "en": "Settings guide",
+    },
+    "settings.help.intro": {
+        "it": "Clicca il pulsante <b>i</b> accanto a un'impostazione per leggerne la spiegazione.",
+        "en": "Click the <b>i</b> button next to a setting to read its explanation.",
+    },
+    "settings.help.info_tooltip": {
+        "it": "Mostra spiegazione",
+        "en": "Show explanation",
+    },
+    "settings.help.back": {
+        "it": "← Torna all'elenco",
+        "en": "← Back to list",
+    },
+    "settings.help.close": {
+        "it": "Chiudi",
+        "en": "Close",
+    },
+    "settings.help.language": {
+        "it": (
+            "Lingua dell'interfaccia dell'add-on (menu, chat, messaggi e impostazioni). "
+            "Non cambia la lingua delle risposte di Gemini: quella dipende da cosa scrivi tu "
+            "e dalle istruzioni di sistema."
+        ),
+        "en": (
+            "Language of the add-on interface (menus, chat, messages, and settings). "
+            "It does not change Gemini's reply language — that depends on what you write "
+            "and on the system instructions."
+        ),
+    },
+    "settings.help.api_key": {
+        "it": (
+            "Chiave API di Google AI Studio usata per chiamare Gemini. "
+            "Viene salvata localmente in Anki e non viene mai inviata altrove. "
+            "Puoi lasciare il campo vuoto al salvataggio per mantenere la chiave già memorizzata."
+        ),
+        "en": (
+            "Your Google AI Studio API key used to call Gemini. "
+            "It is stored locally in Anki and is not sent anywhere else. "
+            "When saving, leave the field empty to keep the key already stored."
+        ),
+    },
+    "settings.help.model_optimize": {
+        "it": (
+            "Modello Gemini usato per <b>ottimizzare il campo attivo</b> (Ctrl+Shift+G). "
+            "Modelli più leggeri (es. flash-lite) sono in genere più veloci; modelli più "
+            "capaci possono dare risultati migliori su HTML/MathJax complesso. "
+            "Usa <b>Aggiorna modelli da API</b> per scaricare l'elenco aggiornato da Google."
+        ),
+        "en": (
+            "Gemini model used to <b>optimize the active field</b> (Ctrl+Shift+G). "
+            "Lighter models (e.g. flash-lite) are usually faster; more capable models may "
+            "do better on complex HTML/MathJax. "
+            "Use <b>Refresh models from API</b> to fetch the latest list from Google."
+        ),
+    },
+    "settings.help.model_chat": {
+        "it": (
+            "Modello Gemini usato nella <b>chat</b> (Ctrl+Alt+C) e nell'analisi note 🧠. "
+            "Può essere più capace del modello di ottimizzazione, perché spesso serve "
+            "ragionare e spiegare, non solo riformattare."
+        ),
+        "en": (
+            "Gemini model used in <b>chat</b> (Ctrl+Alt+C) and note analysis 🧠. "
+            "It can be more capable than the optimize model, since chat often requires "
+            "reasoning and explanations, not just reformatting."
+        ),
+    },
+    "settings.help.thinking_budget_optimize": {
+        "it": (
+            "Quanti token Gemini può usare per il <b>ragionamento interno</b> prima di "
+            "rispondere durante l'ottimizzazione.<br>"
+            "• <b>0</b> = nessun thinking (più veloce, consigliato per la riformattazione)<br>"
+            "• <b>-1</b> = dinamico (Gemini decide)<br>"
+            "• Valori più alti = più ragionamento, più lento"
+        ),
+        "en": (
+            "How many tokens Gemini may spend on <b>internal reasoning</b> before answering "
+            "during field optimization.<br>"
+            "• <b>0</b> = no thinking (fastest, recommended for reformatting)<br>"
+            "• <b>-1</b> = dynamic (Gemini decides)<br>"
+            "• Higher values = more reasoning, slower"
+        ),
+    },
+    "settings.help.thinking_budget_chat": {
+        "it": (
+            "Come sopra, ma per la <b>chat</b>. "
+            "Per domande complesse o matematica può aiutare un budget più alto o -1; "
+            "per domande semplici, 0 riduce l'attesa."
+        ),
+        "en": (
+            "Same as above, but for <b>chat</b>. "
+            "For complex or math questions, a higher budget or -1 can help; "
+            "for simple questions, 0 reduces wait time."
+        ),
+    },
+    "settings.help.chat_streaming": {
+        "it": (
+            "Se attivo, le risposte in chat appaiono <b>man mano</b> che Gemini scrive, "
+            "invece di attendere l'intero messaggio. "
+            "Non accorcia il tempo totale, ma rende la chat più reattiva."
+        ),
+        "en": (
+            "When enabled, chat replies appear <b>incrementally</b> as Gemini writes, "
+            "instead of waiting for the full message. "
+            "It does not shorten total time, but makes chat feel more responsive."
+        ),
+    },
+    "settings.help.timeout_seconds": {
+        "it": (
+            "Tempo massimo (in secondi) di attesa per una risposta API prima di segnalare "
+            "un errore di timeout. Aumentalo se ottimizzi campi molto lunghi o se la rete è lenta."
+        ),
+        "en": (
+            "Maximum wait time (in seconds) for an API response before reporting a timeout error. "
+            "Increase it if you optimize very long fields or have a slow connection."
+        ),
+    },
+    "settings.help.max_retries": {
+        "it": (
+            "Quante volte ritentare una chiamata fallita per errori di rete o risposta incompleta. "
+            "Gli errori di API key o limite di richieste (429) non vengono ritentati."
+        ),
+        "en": (
+            "How many times to retry a failed call for network errors or incomplete responses. "
+            "API key errors and rate limits (429) are not retried."
+        ),
+    },
+    "settings.help.max_history_turns": {
+        "it": (
+            "Quanti scambi (tu + Gemini) inviare come contesto in chat. "
+            "Più storico = migliore memoria conversazionale, ma richieste più lente e costose. "
+            "0 = nessuno storico (solo il messaggio corrente)."
+        ),
+        "en": (
+            "How many exchanges (you + Gemini) to send as chat context. "
+            "More history = better conversational memory, but slower and costlier requests. "
+            "0 = no history (current message only)."
+        ),
+    },
+    "settings.help.temperature_optimize": {
+        "it": (
+            "Creatività del modello in ottimizzazione (0 = molto deterministico). "
+            "Valori bassi sono consigliati per riformattare HTML/MathJax in modo coerente."
+        ),
+        "en": (
+            "Model creativity during optimization (0 = highly deterministic). "
+            "Low values are recommended for consistent HTML/MathJax reformatting."
+        ),
+    },
+    "settings.help.temperature_chat": {
+        "it": (
+            "Creatività del modello in chat. "
+            "Valori leggermente più alti possono rendere le spiegazioni più naturali; "
+            "valori bassi rendono le risposte più prevedibili."
+        ),
+        "en": (
+            "Model creativity in chat. "
+            "Slightly higher values can make explanations more natural; "
+            "lower values make replies more predictable."
+        ),
+    },
+    "settings.help.confirm_before_apply": {
+        "it": (
+            "Se attivo, dopo l'ottimizzazione mostra un'<b>anteprima</b> affiancata "
+            "(originale vs ottimizzato) e chiede conferma prima di sostituire il campo."
+        ),
+        "en": (
+            "When enabled, after optimization shows a side-by-side <b>preview</b> "
+            "(original vs optimized) and asks for confirmation before replacing the field."
+        ),
+    },
+    "settings.help.brain_import_message": {
+        "it": (
+            "Testo inserito automaticamente nella chat quando importi una nota con il bottone 🧠. "
+            "Puoi personalizzarlo per chiedere sempre la stessa analisi (es. atomicità, "
+            "semplificazione, ecc.). Lascia il testo predefinito per usare il messaggio "
+            "standard nella lingua scelta."
+        ),
+        "en": (
+            "Text automatically inserted in chat when you import a note with the 🧠 button. "
+            "Customize it to always ask the same kind of analysis (e.g. atomicity, "
+            "simplification). Keep the default text to use the standard message "
+            "in your selected language."
+        ),
+    },
+    "settings.help.system_instruction": {
+        "it": (
+            "Istruzioni di sistema <b>statiche</b> inviate a Gemini in ogni richiesta "
+            "(ottimizzazione e chat). Definiscono stile HTML, MathJax, macro e regole "
+            "metodologiche. Hanno priorità alta rispetto alle regole dinamiche."
+        ),
+        "en": (
+            "<b>Static</b> system instructions sent to Gemini on every request "
+            "(optimize and chat). They define HTML style, MathJax, macros, and methodology rules. "
+            "They take priority over dynamic rules."
+        ),
+    },
+    "settings.help.dynamic_instructions": {
+        "it": (
+            "Regole apprese via chat e salvate dall'add-on (es. quando chiedi a Gemini di "
+            "“ricordare globalmente” una preferenza). Priorità inferiore rispetto alle "
+            "istruzioni statiche sopra. Puoi modificarle o cancellarle manualmente."
+        ),
+        "en": (
+            "Rules learned via chat and saved by the add-on (e.g. when you ask Gemini to "
+            "“remember globally” a preference). Lower priority than the static instructions above. "
+            "You can edit or clear them manually."
+        ),
     },
     # Optimize
     "optimize.no_undo": {
@@ -406,6 +638,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "gemini.unknown_error": {
         "it": "Errore sconosciuto durante la chiamata a Gemini.",
         "en": "Unknown error while calling Gemini.",
+    },
+    "gemini.models_empty": {
+        "it": "L'API Gemini non ha restituito modelli utilizzabili per generateContent.",
+        "en": "The Gemini API returned no usable generateContent models.",
     },
 }
 

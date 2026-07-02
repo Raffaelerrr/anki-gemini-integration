@@ -78,17 +78,17 @@ def _strip_trailing_field_label(text: str, field_name: str) -> str:
 
 
 def _qt_compatible_html(rendered: str) -> str:
-    for level, size in ((1, 16), (2, 15), (3, 14), (4, 13)):
+    for level in (1, 2, 3, 4):
         rendered = re.sub(
             rf"<h{level}>(.*?)</h{level}>",
-            rf'<div style="font-weight: bold; font-size: {size}px; margin: 12px 0 6px 0; color: #eceff1;">\1</div>',
+            rf'<div class="chat-heading chat-heading-{level}">\1</div>',
             rendered,
             flags=re.DOTALL | re.IGNORECASE,
         )
 
     rendered = re.sub(
         r"<hr\s*/?>",
-        '<hr style="border: none; border-top: 1px solid #555; margin: 12px 0;">',
+        '<hr class="chat-hr">',
         rendered,
         flags=re.IGNORECASE,
     )
@@ -96,8 +96,7 @@ def _qt_compatible_html(rendered: str) -> str:
     rendered = re.sub(r"<em>(.*?)</em>", r"<i>\1</i>", rendered, flags=re.DOTALL)
     rendered = re.sub(
         r"<code>(.*?)</code>",
-        r'<span style="font-family: Consolas, monospace; background: rgba(255,255,255,0.1); '
-        r'padding: 1px 4px; border-radius: 3px;">\1</span>',
+        r'<span class="chat-code-inline">\1</span>',
         rendered,
         flags=re.DOTALL,
     )
@@ -112,7 +111,7 @@ def _render_prose_fallback(text: str) -> str:
     escaped = html.escape(text.strip())
     escaped = re.sub(
         r"^---+\s*$",
-        '<hr style="border: none; border-top: 1px solid #555; margin: 12px 0;">',
+        '<hr class="chat-hr">',
         escaped,
         flags=re.MULTILINE,
     )
@@ -120,25 +119,24 @@ def _render_prose_fallback(text: str) -> str:
     escaped = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", escaped, flags=re.DOTALL)
     escaped = re.sub(
         r"`([^`]+)`",
-        r'<span style="font-family: Consolas, monospace; background: rgba(255,255,255,0.1); '
-        r'padding: 1px 4px; border-radius: 3px;">\1</span>',
+        r'<span class="chat-code-inline">\1</span>',
         escaped,
     )
     escaped = re.sub(
         r"^### (.+)$",
-        r'<div style="font-weight: bold; margin-top: 10px;">\1</div>',
+        r'<div class="chat-heading chat-heading-3">\1</div>',
         escaped,
         flags=re.MULTILINE,
     )
     escaped = re.sub(
         r"^## (.+)$",
-        r'<div style="font-weight: bold; font-size: 13px; margin-top: 12px;">\1</div>',
+        r'<div class="chat-heading chat-heading-2">\1</div>',
         escaped,
         flags=re.MULTILINE,
     )
     escaped = escaped.replace("\n\n", "<br><br>")
     escaped = escaped.replace("\n", "<br>")
-    return f'<div style="margin: 6px 0; line-height: 1.45; color: #e0e0e0;">{escaped}</div>'
+    return f'<div class="chat-prose">{escaped}</div>'
 
 
 def _render_markdown_prose(text: str) -> str:
@@ -153,7 +151,7 @@ def _render_markdown_prose(text: str) -> str:
     rendered = converter.convert(prose)
     converter.reset()
     rendered = _qt_compatible_html(rendered)
-    return f'<div style="margin: 6px 0; line-height: 1.45; color: #e0e0e0;">{rendered}</div>'
+    return f'<div class="chat-prose">{rendered}</div>'
 
 
 def _render_code_block(
@@ -168,25 +166,19 @@ def _render_code_block(
     if label:
         safe_label = html.escape(label.strip())
         header = (
-            f"<b style='color: #9fa8da;'>{safe_label}</b> "
-            f"<a href='copy:{block_id}' style='color: #64b5f6; text-decoration: none; "
-            f"margin-left: 8px;'>{copy_label}</a>"
+            f"<b class='chat-code-label'>{safe_label}</b> "
+            f"<a href='copy:{block_id}' class='chat-code-copy'>{copy_label}</a>"
         )
     else:
         header = (
-            f"<span style='color: #9fa8da;'>{tr('formatter.code_block', config=config)}</span> "
-            f"<a href='copy:{block_id}' style='color: #64b5f6; text-decoration: none; "
-            f"margin-left: 8px;'>{copy_label}</a>"
+            f"<span class='chat-code-label'>{tr('formatter.code_block', config=config)}</span> "
+            f"<a href='copy:{block_id}' class='chat-code-copy'>{copy_label}</a>"
         )
 
     return (
-        "<div style='margin: 10px 0; border: 1px solid #5c6bc0; border-radius: 6px; "
-        "background-color: rgba(92, 107, 192, 0.08); padding: 8px;'>"
+        "<div class='chat-code-block'>"
         f"<div style='margin-bottom: 6px;'>{header}</div>"
-        f"<pre style='margin: 0; white-space: pre-wrap; word-wrap: break-word; "
-        f"font-family: Consolas, monospace; font-size: 11px; color: #e0e0e0; "
-        f"background-color: rgba(0, 0, 0, 0.2); padding: 8px; border-radius: 4px;'>"
-        f"{safe_content}</pre>"
+        f"<pre class='chat-code-pre'>{safe_content}</pre>"
         "</div>"
     )
 

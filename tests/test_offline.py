@@ -22,6 +22,7 @@ def _install_anki_mocks() -> None:
     if "requests" not in sys.modules:
         requests_mod = types.ModuleType("requests")
         requests_mod.post = MagicMock()
+        requests_mod.get = MagicMock()
         requests_mod.Timeout = type("Timeout", (Exception,), {})
         requests_mod.ConnectionError = type("ConnectionError", (Exception,), {})
         sys.modules["requests"] = requests_mod
@@ -59,6 +60,8 @@ def _install_anki_mocks() -> None:
         ScrollBarPolicy = _Enum(ScrollBarAlwaysOff=0, ScrollBarAsNeeded=1)
         Key = _Enum(Key_Return=16777220, Key_Enter=16777221)
         KeyboardModifier = _Enum(ShiftModifier=1)
+        MatchFlag = _Enum(MatchContains=1)
+        CaseSensitivity = _Enum(CaseInsensitive=0)
 
     class _Stub:
         EchoMode = _Enum(Password=1)
@@ -78,7 +81,6 @@ def _install_anki_mocks() -> None:
         "QApplication",
         "QCheckBox",
         "QCloseEvent",
-        "QComboBox",
         "QDialog",
         "QDoubleSpinBox",
         "QFrame",
@@ -104,7 +106,115 @@ def _install_anki_mocks() -> None:
         class Shape:
             NoFrame = 0
 
+    class _Signal:
+        def connect(self, *args, **kwargs):
+            return None
+
+    class _LineEditStub(_Stub):
+        def __init__(self):
+            super().__init__()
+            self.textEdited = _Signal()
+
+        def setPlaceholderText(self, *args, **kwargs):
+            return None
+
+        def hasFocus(self):
+            return False
+
+    class _PopupStub(_Stub):
+        def setMaxVisibleItems(self, *args, **kwargs):
+            return None
+
+    class QCompleter(_Stub):
+        CompletionMode = _Enum(PopupCompletion=0)
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._model = None
+
+        def setFilterMode(self, *args, **kwargs):
+            return None
+
+        def setCaseSensitivity(self, *args, **kwargs):
+            return None
+
+        def setCompletionMode(self, *args, **kwargs):
+            return None
+
+        def setMaxVisibleItems(self, *args, **kwargs):
+            return None
+
+        def popup(self):
+            return _PopupStub()
+
+        def setModel(self, model):
+            self._model = model
+
+    class QStringListModel(_Stub):
+        def __init__(self, items=None):
+            super().__init__()
+            self.items = list(items or [])
+
+    class QComboBox(_Stub):
+        InsertPolicy = _Enum(NoInsert=0)
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._items: list[str] = []
+            self._text = ""
+            self._completer = None
+            self._properties: dict[str, object] = {}
+
+        def setEditable(self, *args, **kwargs):
+            return None
+
+        def setInsertPolicy(self, *args, **kwargs):
+            return None
+
+        def setMaxVisibleItems(self, *args, **kwargs):
+            return None
+
+        def setProperty(self, key, value):
+            self._properties[key] = value
+            return True
+
+        def property(self, key):
+            return self._properties.get(key)
+
+        def addItems(self, items):
+            self._items = list(items)
+
+        def clear(self):
+            self._items = []
+
+        def setCurrentText(self, text):
+            self._text = text
+
+        def currentText(self):
+            return self._text
+
+        def setEditText(self, text):
+            self._text = text
+
+        def lineEdit(self):
+            return _LineEditStub()
+
+        def setCompleter(self, completer):
+            self._completer = completer
+
+        def completer(self):
+            return self._completer
+
+        def showPopup(self):
+            return None
+
+        def blockSignals(self, blocked):
+            return True
+
     aqt_qt.QFrame = _Frame
+    aqt_qt.QComboBox = QComboBox
+    aqt_qt.QCompleter = QCompleter
+    aqt_qt.QStringListModel = QStringListModel
     aqt_qt.Qt = Qt
 
     aqt_utils = types.ModuleType("aqt.utils")
@@ -261,6 +371,67 @@ class TestGeminiClient(unittest.TestCase):
                 self.gc.call_gemini(config=config, user_text="test")
         self.assertEqual(post.call_count, 1)
 
+    def test_model_id_from_list_entry_requires_generate_content(self):
+        entry = {
+            "name": "models/gemini-2.5-flash",
+            "baseModelId": "gemini-2.5-flash",
+            "supportedGenerationMethods": ["countTokens"],
+        }
+        self.assertIsNone(self.gc._model_id_from_list_entry(entry))
+
+    def test_model_id_from_list_entry_uses_base_model_id(self):
+        entry = {
+            "name": "models/gemini-2.5-flash",
+            "baseModelId": "gemini-2.5-flash",
+            "supportedGenerationMethods": ["generateContent"],
+        }
+        self.assertEqual(self.gc._model_id_from_list_entry(entry), "gemini-2.5-flash")
+
+    def test_sort_model_ids_orders_newer_and_lite_first(self):
+        models = ["gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]
+        self.assertEqual(
+            self.gc.sort_model_ids(models),
+            ["gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-2.0-flash"],
+        )
+
+    def test_list_gemini_models_paginates(self):
+        config = {"language": "en", "api_key": "good", "timeout_seconds": 5}
+        first = MagicMock(
+            ok=True,
+            status_code=200,
+            text="",
+        )
+        first.json.return_value = {
+            "models": [
+                {
+                    "name": "models/gemini-2.5-flash",
+                    "baseModelId": "gemini-2.5-flash",
+                    "supportedGenerationMethods": ["generateContent"],
+                }
+            ],
+            "nextPageToken": "page-2",
+        }
+        second = MagicMock(
+            ok=True,
+            status_code=200,
+            text="",
+        )
+        second.json.return_value = {
+            "models": [
+                {
+                    "name": "models/gemini-2.5-pro",
+                    "baseModelId": "gemini-2.5-pro",
+                    "supportedGenerationMethods": ["generateContent"],
+                }
+            ]
+        }
+
+        with patch.object(self.gc.requests, "get", side_effect=[first, second]) as get:
+            models = self.gc.list_gemini_models(config=config)
+
+        self.assertEqual(get.call_count, 2)
+        self.assertEqual(models, ["gemini-2.5-flash", "gemini-2.5-pro"])
+
 
 class TestI18n(unittest.TestCase):
     @classmethod
@@ -347,6 +518,84 @@ class TestChatFormatter(unittest.TestCase):
             "",
         )
 
+    def test_format_reply_uses_theme_classes(self):
+        html_out = self.fmt.format_gemini_reply_html(
+            "Hello **world**",
+            {},
+            "t1",
+            config={"language": "en"},
+        )
+        self.assertIn("chat-prose", html_out)
+        self.assertNotIn("#e0e0e0", html_out)
+
+
+class TestTheme(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.theme = _load_addon_module("ui.theme")
+
+    def test_default_palette_is_light_without_anki_theme(self):
+        colors = self.theme.get_theme_colors()
+        self.assertEqual(colors.text, self.theme._LIGHT.text)
+
+    def test_chat_stylesheet_uses_palette_colors(self):
+        stylesheet = self.theme.chat_document_stylesheet()
+        self.assertIn(".chat-label-you", stylesheet)
+        self.assertIn(".chat-prose", stylesheet)
+        self.assertIn(self.theme._LIGHT.text, stylesheet)
+
+    def test_muted_hint_html(self):
+        html_out = self.theme.muted_hint_html("Hint text")
+        self.assertIn("Hint text", html_out)
+        self.assertIn(self.theme._LIGHT.text_muted, html_out)
+
+
+class TestModelSelector(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ms = _load_addon_module("ui.model_selector")
+
+    def test_model_choice_list_adds_custom(self):
+        choices = self.ms.model_choice_list("my-custom-model")
+        self.assertEqual(choices[0], "my-custom-model")
+        self.assertIn("gemini-2.5-flash", choices)
+
+    def test_filter_model_choices_partial_match(self):
+        all_models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]
+        self.assertEqual(
+            self.ms.filter_model_choices(all_models, "lite"),
+            ["gemini-2.5-flash-lite"],
+        )
+
+    def test_filter_model_choices_empty_query_returns_all(self):
+        all_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
+        self.assertEqual(self.ms.filter_model_choices(all_models, ""), all_models)
+
+    def test_create_model_selector_keeps_custom_value(self):
+        combo = self.ms.create_model_selector(
+            None,
+            current="gemini-custom-preview",
+            default="gemini-2.5-flash-lite",
+            config={"language": "en"},
+        )
+        self.assertEqual(self.ms.model_selector_value(combo), "gemini-custom-preview")
+
+    def test_update_model_selector_choices_merges_api_models(self):
+        combo = self.ms.create_model_selector(
+            None,
+            current="gemini-2.5-flash",
+            default="gemini-2.5-flash-lite",
+            config={"language": "en"},
+        )
+        self.ms.update_model_selector_choices(
+            combo,
+            ["gemini-3.5-flash", "gemini-2.5-pro"],
+        )
+        all_models = combo.property("_gemini_all_models")
+        self.assertIn("gemini-3.5-flash", all_models)
+        self.assertIn("gemini-2.5-flash-lite", all_models)
+        self.assertEqual(self.ms.model_selector_value(combo), "gemini-2.5-flash")
+
 
 class TestChatDialogHelpers(unittest.TestCase):
     @classmethod
@@ -394,6 +643,9 @@ class TestConfig(unittest.TestCase):
 
     def test_restorable_settings_cover_defaults(self):
         self.assertEqual(set(self.config.RESTORABLE_SETTING_KEYS), set(self.config.DEFAULT_CONFIG.keys()))
+
+    def test_setting_help_keys_cover_all_settings(self):
+        self.assertEqual(set(self.config.SETTING_HELP_KEYS.keys()), set(self.config.RESTORABLE_SETTING_KEYS))
 
     def test_default_config_value(self):
         self.assertEqual(self.config.default_config_value("model_optimize"), "gemini-2.5-flash-lite")

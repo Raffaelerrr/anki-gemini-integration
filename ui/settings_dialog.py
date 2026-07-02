@@ -20,16 +20,19 @@ from aqt.qt import (
     QVBoxLayout,
     QWidget,
 )
-from aqt.utils import showInfo
+from aqt import mw
+from aqt.utils import showInfo, showWarning
 
 from ..constants import DEFAULT_MODEL_CHAT, DEFAULT_MODEL_OPTIMIZE, DEFAULT_THINKING_BUDGET_CHAT, DEFAULT_THINKING_BUDGET_OPTIMIZE
 from ..config import (
     RESTORABLE_SETTING_KEYS,
     RESTORABLE_SETTING_LABELS,
+    api_key_configured,
     default_config_value,
     load_config,
     save_config,
 )
+from ..gemini_client import GeminiError, list_gemini_models
 from ..i18n import (
     LANG_EN,
     LANG_IT,
@@ -40,6 +43,22 @@ from ..i18n import (
     tr,
 )
 from .chat_dialog import refresh_chat_language
+from .settings_help_dialog import open_settings_help_dialog
+from .model_selector import (
+    create_model_selector,
+    model_selector_value,
+    set_model_selector_value,
+    update_model_selector_choices,
+)
+from .theme import (
+    muted_hint_html,
+    panel_content_html,
+    panel_widget_stylesheet,
+    status_color_stylesheet,
+)
+
+
+_settings_dialog: SettingsDialog | None = None
 
 
 class SettingsDialog(QDialog):
@@ -49,6 +68,8 @@ class SettingsDialog(QDialog):
         self.config = dict(config)
         self._restore_checkboxes: dict[str, QCheckBox] = {}
         self._all_restore_checked = True
+        self._model_refresh_busy = False
+        self._settings_help_dialog = None
 
         self.setWindowTitle(tr("settings.title", config=config))
         self.setWindowFlags(
@@ -70,11 +91,14 @@ class SettingsDialog(QDialog):
         self._form_btn_layout = QHBoxLayout()
         self.btn_restore_mode = QPushButton(tr("settings.restore_defaults", config=config), self)
         self.btn_restore_mode.clicked.connect(self._enter_restore_mode)
+        self.btn_settings_help = QPushButton(tr("settings.info", config=config), self)
+        self.btn_settings_help.clicked.connect(self._open_settings_help)
         self.btn_save = QPushButton(tr("settings.save", config=config), self)
         self.btn_save.clicked.connect(self._save_and_accept)
         self.btn_cancel = QPushButton(tr("settings.cancel", config=config), self)
         self.btn_cancel.clicked.connect(self.reject)
         self._form_btn_layout.addWidget(self.btn_restore_mode)
+        self._form_btn_layout.addWidget(self.btn_settings_help)
         self._form_btn_layout.addStretch(1)
         self._form_btn_layout.addWidget(self.btn_save)
         self._form_btn_layout.addWidget(self.btn_cancel)
@@ -132,24 +156,38 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.api_key_input)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.model_optimize', config=config)}</b>"))
-        self.model_optimize_input = QLineEdit(form_host)
-        self.model_optimize_input.setText(self.config.get("model_optimize", DEFAULT_MODEL_OPTIMIZE))
-        self.model_optimize_input.setPlaceholderText(tr("settings.model.placeholder", config=config))
-        layout.addWidget(self.model_optimize_input)
+        optimize_row = QHBoxLayout()
+        self.model_optimize_input = create_model_selector(
+            form_host,
+            current=self.config.get("model_optimize", DEFAULT_MODEL_OPTIMIZE),
+            default=DEFAULT_MODEL_OPTIMIZE,
+            config=config,
+        )
+        optimize_row.addWidget(self.model_optimize_input, stretch=1)
+        self.btn_refresh_optimize_models = QPushButton(tr("settings.model.refresh", config=config), form_host)
+        self.btn_refresh_optimize_models.clicked.connect(self._refresh_models_from_api)
+        optimize_row.addWidget(self.btn_refresh_optimize_models)
+        layout.addLayout(optimize_row)
 
         layout.addWidget(QLabel(f"<b>{tr('settings.model_chat', config=config)}</b>"))
-        self.model_chat_input = QLineEdit(form_host)
-        self.model_chat_input.setText(self.config.get("model_chat", DEFAULT_MODEL_CHAT))
-        self.model_chat_input.setPlaceholderText(tr("settings.model.placeholder", config=config))
-        layout.addWidget(self.model_chat_input)
-
-        layout.addWidget(
-            QLabel(
-                "<span style='font-size: 11px; color: #666;'>"
-                f"{tr('settings.thinking_budget.hint', config=config)}"
-                "</span>"
-            )
+        chat_row = QHBoxLayout()
+        self.model_chat_input = create_model_selector(
+            form_host,
+            current=self.config.get("model_chat", DEFAULT_MODEL_CHAT),
+            default=DEFAULT_MODEL_CHAT,
+            config=config,
         )
+        chat_row.addWidget(self.model_chat_input, stretch=1)
+        self.btn_refresh_chat_models = QPushButton(tr("settings.model.refresh", config=config), form_host)
+        self.btn_refresh_chat_models.clicked.connect(self._refresh_models_from_api)
+        chat_row.addWidget(self.btn_refresh_chat_models)
+        layout.addLayout(chat_row)
+
+        self.thinking_budget_hint = QLabel(
+            muted_hint_html(tr("settings.thinking_budget.hint", config=config)),
+            form_host,
+        )
+        layout.addWidget(self.thinking_budget_hint)
         thinking_row = QHBoxLayout()
         thinking_row.addWidget(QLabel(tr("settings.thinking_budget_optimize", config=config)))
         self.thinking_budget_optimize_input = QSpinBox(form_host)
@@ -213,13 +251,11 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.confirm_checkbox)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.brain_message', config=config)}</b>"))
-        layout.addWidget(
-            QLabel(
-                "<span style='font-size: 11px; color: #666;'>"
-                f"{tr('settings.brain_message.hint', config=config)}"
-                "</span>"
-            )
+        self.brain_message_hint = QLabel(
+            muted_hint_html(tr("settings.brain_message.hint", config=config)),
+            form_host,
         )
+        layout.addWidget(self.brain_message_hint)
         self.brain_message_input = QTextEdit(form_host)
         self.brain_message_input.setMinimumHeight(70)
         self.brain_message_input.setMaximumHeight(120)
@@ -242,17 +278,12 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.dynamic_input)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.shortcuts', config=config)}</b>"))
-        shortcuts = QLabel(
-            "<div style='font-size: 11px; color: #2c3e50; line-height: 1.4;'>"
-            f"{tr('settings.shortcuts.body', config=config)}"
-            "</div>",
+        self.shortcuts_panel = QLabel(
+            panel_content_html(tr("settings.shortcuts.body", config=config)),
             form_host,
         )
-        shortcuts.setStyleSheet(
-            "background-color: #f7f9fa; border: 1px solid #dcdfe1; "
-            "border-radius: 6px; padding: 8px;"
-        )
-        layout.addWidget(shortcuts)
+        self.shortcuts_panel.setStyleSheet(panel_widget_stylesheet())
+        layout.addWidget(self.shortcuts_panel)
 
         scroll.setWidget(form_host)
         page_layout = QVBoxLayout(page)
@@ -273,13 +304,11 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(4, 4, 4, 4)
 
         layout.addWidget(QLabel(f"<b>{tr('settings.restore.title', config=config)}</b>"))
-        layout.addWidget(
-            QLabel(
-                "<span style='font-size: 11px; color: #666;'>"
-                f"{tr('settings.restore.hint', config=config)}"
-                "</span>"
-            )
+        self.restore_hint_label = QLabel(
+            muted_hint_html(tr("settings.restore.hint", config=config)),
+            host,
         )
+        layout.addWidget(self.restore_hint_label)
         layout.addWidget(QLabel("<br>"))
 
         self._restore_checkboxes.clear()
@@ -297,21 +326,106 @@ class SettingsDialog(QDialog):
         page_layout.addWidget(scroll)
         return page
 
+    def _open_settings_help(self) -> None:
+        if self._settings_help_dialog is not None and self._settings_help_dialog.isVisible():
+            self._settings_help_dialog.raise_()
+            self._settings_help_dialog.activateWindow()
+            return
+
+        help_config = self._config_for_api()
+        help_config["language"] = self.language_combo.currentData() or LANG_IT
+        self._settings_help_dialog = open_settings_help_dialog(self, help_config)
+        self._settings_help_dialog.finished.connect(self._on_settings_help_closed)
+
+    def _on_settings_help_closed(self) -> None:
+        self._settings_help_dialog = None
+
+    def done(self, result: int) -> None:
+        if self._settings_help_dialog is not None:
+            self._settings_help_dialog.close()
+            self._settings_help_dialog = None
+        super().done(result)
+
     def _ui_config(self) -> dict[str, Any]:
         return {"language": self.language_combo.currentData() or LANG_IT}
+
+    def _config_for_api(self) -> dict[str, Any]:
+        config = dict(self.config)
+        config.update(self._ui_config())
+        config["api_key"] = self.api_key_input.text().strip() or self._saved_api_key
+        config["timeout_seconds"] = self.timeout_input.value()
+        return config
+
+    def _set_model_refresh_busy(self, busy: bool) -> None:
+        self._model_refresh_busy = busy
+        label = tr(
+            "settings.model.refresh.in_progress" if busy else "settings.model.refresh",
+            config=self._ui_config(),
+        )
+        for button in (self.btn_refresh_optimize_models, self.btn_refresh_chat_models):
+            button.setEnabled(not busy)
+            button.setText(label)
+
+    def _refresh_models_from_api(self) -> None:
+        if self._model_refresh_busy:
+            return
+
+        config = self._config_for_api()
+        if not api_key_configured(config):
+            showInfo(tr("settings.model.refresh.no_key", config=config))
+            return
+
+        self._set_model_refresh_busy(True)
+
+        def work() -> list[str]:
+            return list_gemini_models(config=config)
+
+        def done(future) -> None:
+            self._set_model_refresh_busy(False)
+            try:
+                models = future.result()
+            except GeminiError as exc:
+                showWarning(str(exc))
+                return
+
+            update_model_selector_choices(self.model_optimize_input, models)
+            update_model_selector_choices(self.model_chat_input, models)
+            showInfo(tr("settings.model.refresh.done", config=config, count=len(models)))
+
+        mw.taskman.run_in_background(work, done)
 
     def _update_api_key_status(self) -> None:
         config = self._ui_config()
         has_key = bool(self._saved_api_key)
         if has_key:
             self.api_key_status.setText(tr("settings.api_key.saved", config=config))
-            self.api_key_status.setStyleSheet("color: #2e7d32; font-size: 11px;")
+            self.api_key_status.setStyleSheet(status_color_stylesheet(ok=True))
         else:
             self.api_key_status.setText(tr("settings.api_key.missing", config=config))
-            self.api_key_status.setStyleSheet("color: #c62828; font-size: 11px;")
+            self.api_key_status.setStyleSheet(status_color_stylesheet(ok=False))
+
+    def apply_theme(self) -> None:
+        config = self._ui_config()
+        self.thinking_budget_hint.setText(
+            muted_hint_html(tr("settings.thinking_budget.hint", config=config))
+        )
+        self.brain_message_hint.setText(
+            muted_hint_html(tr("settings.brain_message.hint", config=config))
+        )
+        self.shortcuts_panel.setText(
+            panel_content_html(tr("settings.shortcuts.body", config=config))
+        )
+        self.shortcuts_panel.setStyleSheet(panel_widget_stylesheet())
+        self.restore_hint_label.setText(
+            muted_hint_html(tr("settings.restore.hint", config=config))
+        )
+        self._update_api_key_status()
+        if self._settings_help_dialog is not None:
+            self._settings_help_dialog.apply_theme()
 
     def _set_restore_buttons_visible(self, visible: bool) -> None:
         self.btn_restore_mode.setVisible(not visible)
+        self.btn_settings_help.setVisible(not visible)
         self.btn_save.setVisible(not visible)
         self.btn_cancel.setVisible(not visible)
         self.btn_toggle_all.setVisible(visible)
@@ -355,11 +469,11 @@ class SettingsDialog(QDialog):
             return
 
         if key == "model_optimize":
-            self.model_optimize_input.setText(str(default_value))
+            set_model_selector_value(self.model_optimize_input, str(default_value))
             return
 
         if key == "model_chat":
-            self.model_chat_input.setText(str(default_value))
+            set_model_selector_value(self.model_chat_input, str(default_value))
             return
 
         if key == "thinking_budget_optimize":
@@ -434,8 +548,8 @@ class SettingsDialog(QDialog):
         new_key = self.api_key_input.text().strip()
         self.config["language"] = self.language_combo.currentData() or LANG_IT
         self.config["api_key"] = new_key if new_key else self._saved_api_key
-        self.config["model_optimize"] = self.model_optimize_input.text().strip() or DEFAULT_MODEL_OPTIMIZE
-        self.config["model_chat"] = self.model_chat_input.text().strip() or DEFAULT_MODEL_CHAT
+        self.config["model_optimize"] = model_selector_value(self.model_optimize_input) or DEFAULT_MODEL_OPTIMIZE
+        self.config["model_chat"] = model_selector_value(self.model_chat_input) or DEFAULT_MODEL_CHAT
         self.config["thinking_budget_optimize"] = self.thinking_budget_optimize_input.value()
         self.config["thinking_budget_chat"] = self.thinking_budget_chat_input.value()
         self.config["chat_streaming"] = self.chat_streaming_checkbox.isChecked()
@@ -459,6 +573,13 @@ class SettingsDialog(QDialog):
 
 
 def open_settings_dialog(editor) -> None:
+    global _settings_dialog
     config = load_config()
-    dialog = SettingsDialog(editor.parentWindow, config)
-    dialog.exec()
+    _settings_dialog = SettingsDialog(editor.parentWindow, config)
+    _settings_dialog.exec()
+    _settings_dialog = None
+
+
+def refresh_settings_theme() -> None:
+    if _settings_dialog is not None:
+        _settings_dialog.apply_theme()

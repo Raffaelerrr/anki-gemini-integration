@@ -17,6 +17,7 @@ from .constants import (
     DEFAULT_THINKING_BUDGET_OPTIMIZE,
     GEMINI_API_HOST,
     GEMINI_API_PATH,
+    GEMINI_MODELS_LIST_PATH,
     GEMINI_STREAM_API_PATH,
     META_RULE_DYNAMIC,
 )
@@ -297,6 +298,87 @@ def stream_gemini(
             time.sleep(1.5 * (attempt + 1))
 
     raise last_error or GeminiError(tr("gemini.unknown_error", config=config))
+
+
+def build_models_list_url(*, page_token: str | None = None, page_size: int = 100) -> str:
+    params: dict[str, str] = {"pageSize": str(page_size)}
+    if page_token:
+        params["pageToken"] = page_token
+    query = urllib.parse.urlencode(params)
+    return urllib.parse.urlunparse(("https", GEMINI_API_HOST, GEMINI_MODELS_LIST_PATH, "", query, ""))
+
+
+def _model_id_from_list_entry(entry: dict[str, Any]) -> str | None:
+    methods = entry.get("supportedGenerationMethods") or []
+    if "generateContent" not in methods:
+        return None
+
+    base_model_id = (entry.get("baseModelId") or "").strip()
+    if base_model_id:
+        return base_model_id
+
+    name = (entry.get("name") or "").strip()
+    if name.startswith("models/"):
+        return name[len("models/") :]
+    return name or None
+
+
+def model_sort_key(model_id: str) -> tuple[Any, ...]:
+    lower = model_id.casefold()
+    if "flash-lite" in lower or "flash_lite" in lower:
+        tier = 0
+    elif "flash" in lower:
+        tier = 1
+    elif "pro" in lower:
+        tier = 2
+    else:
+        tier = 3
+
+    numbers = [int(part) for part in re.findall(r"\d+", model_id)]
+    version = tuple(-num for num in ((numbers + [0, 0, 0])[:3]))
+    return (version, tier, lower)
+
+
+def sort_model_ids(models: list[str]) -> list[str]:
+    return sorted(set(models), key=model_sort_key)
+
+
+def list_gemini_models(*, config: dict[str, Any]) -> list[str]:
+    api_key = (config.get("api_key") or "").strip()
+    if not api_key:
+        raise GeminiAuthError(tr("gemini.auth_error", config=config))
+
+    timeout = int(config.get("timeout_seconds") or 30)
+    headers = _request_headers(api_key)
+    discovered: set[str] = set()
+    page_token: str | None = None
+
+    while True:
+        url = build_models_list_url(page_token=page_token)
+        try:
+            response = requests.get(url, headers=headers, timeout=timeout)
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            raise GeminiError(tr("gemini.network_error", config=config, error=exc)) from exc
+
+        if not response.ok:
+            raise _classify_http_error(response.status_code, response.text, config)
+
+        data = response.json()
+        for entry in data.get("models") or []:
+            if not isinstance(entry, dict):
+                continue
+            model_id = _model_id_from_list_entry(entry)
+            if model_id:
+                discovered.add(model_id)
+
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+
+    if not discovered:
+        raise GeminiResponseError(tr("gemini.models_empty", config=config))
+
+    return sort_model_ids(list(discovered))
 
 
 def extract_dynamic_rules(text: str) -> tuple[str, str | None]:
