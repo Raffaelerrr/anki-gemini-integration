@@ -40,6 +40,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_retries": 2,
     "brain_import_message": "",
     "suppress_default_system_instruction_warning": False,
+    "suppress_api_key_restore_warning": False,
 }
 
 RESTORABLE_SETTING_KEYS: tuple[str, ...] = (
@@ -93,10 +94,12 @@ SETTING_HELP_KEYS: dict[str, str] = {
 
 DISMISSIBLE_WARNING_KEYS: tuple[str, ...] = (
     "suppress_default_system_instruction_warning",
+    "suppress_api_key_restore_warning",
 )
 
 DISMISSIBLE_WARNING_LABELS: dict[str, str] = {
     "suppress_default_system_instruction_warning": "warnings.default_system_instruction",
+    "suppress_api_key_restore_warning": "warnings.api_key_restore",
 }
 
 

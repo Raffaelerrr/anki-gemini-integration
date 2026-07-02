@@ -9,7 +9,6 @@ from typing import Any, Callable, Literal
 import requests
 
 from .constants import (
-    CHAT_FORMAT_INSTRUCTION,
     DEFAULT_MODEL,
     DEFAULT_MODEL_CHAT,
     DEFAULT_MODEL_OPTIMIZE,
@@ -19,7 +18,6 @@ from .constants import (
     GEMINI_API_PATH,
     GEMINI_MODELS_LIST_PATH,
     GEMINI_STREAM_API_PATH,
-    META_RULE_DYNAMIC,
 )
 from .i18n import effective_system_instruction, tr
 
@@ -58,16 +56,13 @@ def merge_system_instructions(
     instruction = effective_system_instruction(config, purpose=purpose)
     dynamic = (config.get("dynamic_instructions") or "").strip()
     if dynamic:
-        instruction += (
-            "\n\nREGOLE DINAMICHE AGGIUNTIVE PRECEDENTEMENTE MEMORIZZATE "
-            "(Priorità inferiore rispetto alle regole sopra):\n"
-            f"{dynamic}"
-        )
+        instruction += tr("instructions.dynamic_rules_prefix", config=config)
+        instruction += dynamic
     if purpose == "optimize":
         instruction += tr("instructions.optimize_output", config=config)
     if include_meta_rule:
-        instruction += CHAT_FORMAT_INSTRUCTION
-        instruction += META_RULE_DYNAMIC
+        instruction += tr("instructions.chat_format", config=config)
+        instruction += tr("instructions.meta_rule_dynamic", config=config)
     return instruction
 
 

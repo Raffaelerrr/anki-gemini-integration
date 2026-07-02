@@ -727,6 +727,94 @@ _STRINGS: dict[str, dict[str, str]] = {
             "- Do not add explanations, comments, or introductory text."
         ),
     },
+    "instructions.dynamic_rules_prefix": {
+        "it": (
+            "\n\nREGOLE DINAMICHE AGGIUNTIVE PRECEDENTEMENTE MEMORIZZATE "
+            "(Priorità inferiore rispetto alle regole sopra):\n"
+        ),
+        "en": (
+            "\n\nADDITIONAL DYNAMIC RULES PREVIOUSLY STORED "
+            "(Lower priority than the rules above):\n"
+        ),
+    },
+    "instructions.chat_format": {
+        "it": (
+            "\nREGOLE DI FORMATTAZIONE PER LE RISPOSTE IN CHAT:\n"
+            "- Per il testo esplicativo usa Markdown standard direttamente nel messaggio: **grassetto**, *corsivo*, `codice inline`, titoli con ##, elenchi, tabelle, separatori ---.\n"
+            "- NON racchiudere l'intera risposta in un unico blocco ```markdown: scrivi il Markdown nel testo normale.\n"
+            "- Quando proponi contenuto da incollare in un campo Anki, scrivi il NOME DEL CAMPO sulla riga immediatamente sopra il blocco code, seguito da due punti. Poi apri un blocco code con tre backtick.\n"
+            "- Esempio (ripeti per ogni campo):\n\n"
+            "Front:\n"
+            "```\n"
+            "(contenuto HTML/MathJax grezzo, pronto per essere incollato nel campo Front)\n"
+            "```\n\n"
+            "Back:\n"
+            "```\n"
+            "(contenuto HTML/MathJax grezzo)\n"
+            "```\n\n"
+            "- Il nome del campo va FUORI dal blocco code, mai dentro.\n"
+            "- Dentro ogni blocco code metti SOLO ciò che va incollato nel campo: niente spiegazioni, niente Markdown (usa tag HTML <b>, <i> per grassetto/corsivo nei campi).\n"
+            "- Nei campi Anki, usa \\(...\\) per matematica inline e \\[...\\] per display; non usare $...$ o $$...$$.\n"
+            "- Ogni blocco code avrà un pulsante Copia: l'utente decide cosa incollare in Anki.\n"
+            "- I blocchi code possono anche servire per esempi non legati a un campo; in quel caso non mettere un nome campo sulla riga sopra."
+        ),
+        "en": (
+            "\nCHAT REPLY FORMATTING RULES:\n"
+            "- For explanatory text use standard Markdown in the message: **bold**, *italic*, `inline code`, ## headings, lists, tables, --- separators.\n"
+            "- Do NOT wrap the entire reply in one ```markdown block; write Markdown as normal text.\n"
+            "- When suggesting content for an Anki field, write the FIELD NAME on the line immediately above the code block, followed by a colon. Then open a three-backtick code block.\n"
+            "- Example (repeat for each field):\n\n"
+            "Front:\n"
+            "```\n"
+            "(raw HTML/MathJax ready to paste into the Front field)\n"
+            "```\n\n"
+            "Back:\n"
+            "```\n"
+            "(raw HTML/MathJax)\n"
+            "```\n\n"
+            "- The field name goes OUTSIDE the code block, never inside.\n"
+            "- Inside each code block put ONLY field content: no explanations, no Markdown (use HTML <b>, <i> for bold/italic in fields).\n"
+            "- In Anki fields use \\(...\\) for inline math and \\[...\\] for display; never $...$ or $$...$$.\n"
+            "- Each code block gets a Copy button; the user chooses what to paste into Anki.\n"
+            "- Code blocks may also show examples not tied to a field; then omit the field name line above."
+        ),
+    },
+    "instructions.meta_rule_dynamic": {
+        "it": (
+            "\n\n[META-REGOLA DI SISTEMA]: Se l'utente ti chiede esplicitamente di memorizzare, ricordare, "
+            "salvare o aggiungere una nuova regola globalmente o per il futuro, accetta la richiesta e includi "
+            "TASSATIVAMENTE in fondo alla tua risposta l'elenco completo e aggiornato di TUTTE le regole dinamiche "
+            "all'interno dei tag <UPDATE_DYNAMIC_RULES> e </UPDATE_DYNAMIC_RULES>. Includi sia le vecchie regole che la nuova."
+        ),
+        "en": (
+            "\n\n[META-SYSTEM RULE]: If the user explicitly asks you to memorize, remember, save, or add a new "
+            "rule globally or for the future, accept the request and MUST include at the end of your reply the "
+            "complete updated list of ALL dynamic rules inside <UPDATE_DYNAMIC_RULES> and </UPDATE_DYNAMIC_RULES> "
+            "tags. Include both previous rules and the new one."
+        ),
+    },
+    "settings.restore.api_key.title": {
+        "it": "Ripristinare la chiave API?",
+        "en": "Restore API key default?",
+    },
+    "settings.restore.api_key.message": {
+        "it": (
+            "Stai per ripristinare la chiave API al valore predefinito (vuoto). "
+            "Dovrai incollare di nuovo la chiave per usare Gemini."
+        ),
+        "en": (
+            "You are about to restore the API key to its default (empty). "
+            "You will need to paste your key again to use Gemini."
+        ),
+    },
+    "settings.restore.api_key.detail": {
+        "it": "Continuare con il ripristino della chiave API?",
+        "en": "Continue restoring the API key?",
+    },
+    "warnings.api_key_restore": {
+        "it": "Avviso: ripristino chiave API",
+        "en": "API key restore warning",
+    },
     # Chat formatter
     "formatter.copy": {
         "it": "Copia",

@@ -368,7 +368,7 @@ class TestGeminiClient(unittest.TestCase):
         )
         system_text = payload["systemInstruction"]["parts"][0]["text"]
         self.assertNotIn("FIELD OPTIMIZATION", system_text)
-        self.assertIn("REGOLE DI FORMATTAZIONE PER LE RISPOSTE IN CHAT", system_text)
+        self.assertIn("CHAT REPLY FORMATTING RULES", system_text)
 
     def test_build_request_payload_uses_split_instructions(self):
         config = {
@@ -793,7 +793,10 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(
             set(self.config.RESTORABLE_SETTING_KEYS),
             set(self.config.DEFAULT_CONFIG.keys())
-            - {"suppress_default_system_instruction_warning"},
+            - {
+                "suppress_default_system_instruction_warning",
+                "suppress_api_key_restore_warning",
+            },
         )
 
     def test_setting_help_keys_cover_all_settings(self):

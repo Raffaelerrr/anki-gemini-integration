@@ -9,6 +9,7 @@ from aqt.qt import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -451,7 +452,7 @@ class SettingsDialog(QDialog):
         for key in RESTORABLE_SETTING_KEYS:
             label_key = RESTORABLE_SETTING_LABELS.get(key, key)
             checkbox = QCheckBox(tr(label_key, config=config), host)
-            checkbox.setChecked(True)
+            checkbox.setChecked(key != "api_key")
             layout.addWidget(checkbox)
             self._restore_checkboxes[key] = checkbox
 
@@ -692,11 +693,55 @@ class SettingsDialog(QDialog):
             checkbox.setChecked(is_warning_dismissed(self.config, key))
 
     def _enter_restore_mode(self) -> None:
-        self._all_restore_checked = True
-        for checkbox in self._restore_checkboxes.values():
-            checkbox.setChecked(True)
+        self._all_restore_checked = False
+        for key, checkbox in self._restore_checkboxes.items():
+            checkbox.setChecked(key != "api_key")
         self.stack.setCurrentIndex(1)
         self._set_subpage_mode("defaults")
+
+    def _confirm_dismissible_warning(
+        self,
+        *,
+        title_key: str,
+        message_key: str,
+        detail_key: str,
+        dismiss_config_key: str,
+    ) -> bool:
+        config = self._ui_config()
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr(title_key, config=config))
+        box.setText(tr(message_key, config=config))
+        box.setInformativeText(tr(detail_key, config=config))
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+
+        dismiss = QCheckBox(tr("optimize.warning.dismiss", config=config), box)
+        box.setCheckBox(dismiss)
+
+        if box.exec() != QMessageBox.StandardButton.Ok:
+            return False
+
+        if dismiss.isChecked():
+            updated = load_config()
+            updated[dismiss_config_key] = True
+            save_config(updated)
+
+        return True
+
+    def _confirm_api_key_restore(self) -> bool:
+        if not self._saved_api_key:
+            return True
+        if is_warning_dismissed(load_config(), "suppress_api_key_restore_warning"):
+            return True
+        return self._confirm_dismissible_warning(
+            title_key="settings.restore.api_key.title",
+            message_key="settings.restore.api_key.message",
+            detail_key="settings.restore.api_key.detail",
+            dismiss_config_key="suppress_api_key_restore_warning",
+        )
 
     def _leave_restore_mode(self) -> None:
         self.stack.setCurrentIndex(0)
@@ -827,6 +872,11 @@ class SettingsDialog(QDialog):
         if not selected:
             showInfo(tr("settings.restore.none_selected", config=self._ui_config()))
             return
+
+        if "api_key" in selected and not self._confirm_api_key_restore():
+            selected = [key for key in selected if key != "api_key"]
+            if not selected:
+                return
 
         for key in selected:
             self._apply_default_for_key(key)
