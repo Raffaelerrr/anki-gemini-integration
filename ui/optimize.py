@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import html
-import re
 from typing import Any
 
 from aqt import mw
-from aqt.qt import QDialog
+from aqt.qt import QCheckBox, QDialog, QMessageBox
 from aqt.utils import showInfo, showWarning, tooltip
 
-from ..config import api_key_configured, load_config, save_config
+from ..config import api_key_configured, is_warning_dismissed, load_config, save_config, uses_default_system_instruction
 from ..gemini_client import GeminiError, call_gemini, strip_markdown_fences
 from ..i18n import tr
 from .preview_dialog import PreviewDialog
@@ -47,6 +45,57 @@ def _apply_optimized_text(editor, field_index: int, original: str, optimized: st
     tooltip(tr("optimize.applied", config=config))
 
 
+def _confirm_optimize_warning(
+    editor,
+    config: dict[str, Any],
+    *,
+    title_key: str,
+    message_key: str,
+    detail_key: str,
+    dismiss_config_key: str,
+) -> bool:
+    box = QMessageBox(editor.parentWindow)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle(tr(title_key, config=config))
+    box.setText(tr(message_key, config=config))
+    box.setInformativeText(tr(detail_key, config=config))
+    box.setStandardButtons(
+        QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+    )
+    box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+
+    dismiss = QCheckBox(tr("optimize.warning.dismiss", config=config), box)
+    box.setCheckBox(dismiss)
+
+    if box.exec() != QMessageBox.StandardButton.Ok:
+        return False
+
+    if dismiss.isChecked():
+        updated = load_config()
+        updated[dismiss_config_key] = True
+        save_config(updated)
+
+    return True
+
+
+def _passes_optimize_warnings(editor, config: dict[str, Any]) -> bool:
+    if (
+        uses_default_system_instruction(config)
+        and not is_warning_dismissed(config, "suppress_default_system_instruction_warning")
+        and not _confirm_optimize_warning(
+            editor,
+            config,
+            title_key="optimize.default_instruction.title",
+            message_key="optimize.default_instruction.message",
+            detail_key="optimize.default_instruction.detail",
+            dismiss_config_key="suppress_default_system_instruction_warning",
+        )
+    ):
+        return False
+
+    return True
+
+
 def _handle_optimize_result(future, editor, field_index: int, original: str, config: dict[str, Any]) -> None:
     try:
         result = future.result()
@@ -79,6 +128,9 @@ def optimize_field_with_gemini(editor) -> None:
 
     if not api_key_configured(config):
         showInfo(tr("optimize.api_key_missing", config=config))
+        return
+
+    if not _passes_optimize_warnings(editor, config):
         return
 
     tooltip(tr("optimize.in_progress", config=config))

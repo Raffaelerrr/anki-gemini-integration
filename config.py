@@ -7,13 +7,12 @@ from typing import Any
 from aqt import mw
 
 from .constants import (
-    DEFAULT_INSTRUCTION,
     DEFAULT_MODEL_CHAT,
     DEFAULT_MODEL_OPTIMIZE,
     DEFAULT_THINKING_BUDGET_CHAT,
     DEFAULT_THINKING_BUDGET_OPTIMIZE,
 )
-from .i18n import DEFAULT_LANGUAGE
+from .i18n import DEFAULT_LANGUAGE, is_builtin_system_instruction, system_instruction_storage_key
 
 ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 ADDON_MODULE = os.path.basename(ADDON_DIR)
@@ -23,7 +22,10 @@ META_CONFIG_PATH = os.path.join(ADDON_DIR, "meta.json")
 DEFAULT_CONFIG: dict[str, Any] = {
     "language": DEFAULT_LANGUAGE,
     "api_key": "",
-    "system_instruction": DEFAULT_INSTRUCTION,
+    "system_instruction": "",
+    "system_instruction_shared": True,
+    "system_instruction_optimize": "",
+    "system_instruction_chat": "",
     "dynamic_instructions": "",
     "model_optimize": DEFAULT_MODEL_OPTIMIZE,
     "model_chat": DEFAULT_MODEL_CHAT,
@@ -37,9 +39,30 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "confirm_before_apply": True,
     "max_retries": 2,
     "brain_import_message": "",
+    "suppress_default_system_instruction_warning": False,
 }
 
-RESTORABLE_SETTING_KEYS: tuple[str, ...] = tuple(DEFAULT_CONFIG.keys())
+RESTORABLE_SETTING_KEYS: tuple[str, ...] = (
+    "language",
+    "api_key",
+    "system_instruction",
+    "system_instruction_shared",
+    "system_instruction_optimize",
+    "system_instruction_chat",
+    "dynamic_instructions",
+    "model_optimize",
+    "model_chat",
+    "thinking_budget_optimize",
+    "thinking_budget_chat",
+    "chat_streaming",
+    "temperature_optimize",
+    "temperature_chat",
+    "timeout_seconds",
+    "max_history_turns",
+    "confirm_before_apply",
+    "max_retries",
+    "brain_import_message",
+)
 
 # Maps config keys to existing settings label i18n keys for the restore list.
 RESTORABLE_SETTING_LABELS: dict[str, str] = {
@@ -58,11 +81,22 @@ RESTORABLE_SETTING_LABELS: dict[str, str] = {
     "confirm_before_apply": "settings.confirm_preview",
     "brain_import_message": "settings.brain_message",
     "system_instruction": "settings.system_instruction",
+    "system_instruction_shared": "settings.system_instruction_shared",
+    "system_instruction_optimize": "settings.system_instruction_optimize",
+    "system_instruction_chat": "settings.system_instruction_chat",
     "dynamic_instructions": "settings.dynamic_instructions",
 }
 
 SETTING_HELP_KEYS: dict[str, str] = {
     key: f"settings.help.{key}" for key in RESTORABLE_SETTING_KEYS
+}
+
+DISMISSIBLE_WARNING_KEYS: tuple[str, ...] = (
+    "suppress_default_system_instruction_warning",
+)
+
+DISMISSIBLE_WARNING_LABELS: dict[str, str] = {
+    "suppress_default_system_instruction_warning": "warnings.default_system_instruction",
 }
 
 
@@ -126,7 +160,7 @@ def _migrate_legacy_config() -> dict[str, Any] | None:
     migrated = _merge_defaults(
         {
             "api_key": legacy.get("api_key", ""),
-            "system_instruction": legacy.get("system_instruction", DEFAULT_INSTRUCTION),
+            "system_instruction": legacy.get("system_instruction", ""),
             "dynamic_instructions": legacy.get("dynamic_instructions", ""),
         }
     )
@@ -169,3 +203,19 @@ def save_config(config: dict[str, Any]) -> None:
 def api_key_configured(config: dict[str, Any]) -> bool:
     key = (config.get("api_key") or "").strip()
     return bool(key) and "INSERISCI_QUI" not in key
+
+
+def uses_default_system_instruction(config: dict[str, Any]) -> bool:
+    key = system_instruction_storage_key("optimize", config)
+    stored = (config.get(key) or "").strip()
+    return is_builtin_system_instruction(stored)
+
+
+def is_warning_dismissed(config: dict[str, Any], key: str) -> bool:
+    if key not in DISMISSIBLE_WARNING_KEYS:
+        return False
+    return bool(config.get(key, False))
+
+
+def dismissed_warning_keys(config: dict[str, Any]) -> list[str]:
+    return [key for key in DISMISSIBLE_WARNING_KEYS if is_warning_dismissed(config, key)]

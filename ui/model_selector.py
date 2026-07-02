@@ -6,6 +6,7 @@ from aqt.qt import QComboBox, QCompleter, QStringListModel, Qt, QWidget
 
 from ..constants import GEMINI_MODEL_CHOICES
 from ..i18n import tr
+from .widgets import NoWheelComboBox
 
 MAX_VISIBLE_MODELS = 12
 _ALL_MODELS_PROP = "_gemini_all_models"
@@ -78,7 +79,7 @@ def create_model_selector(
     default: str,
     config: dict[str, Any],
 ) -> QComboBox:
-    combo = QComboBox(parent)
+    combo = NoWheelComboBox(parent)
     combo.setEditable(True)
     combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
     combo.setMaxVisibleItems(MAX_VISIBLE_MODELS)

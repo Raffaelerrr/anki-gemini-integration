@@ -21,7 +21,7 @@ from .constants import (
     GEMINI_STREAM_API_PATH,
     META_RULE_DYNAMIC,
 )
-from .i18n import tr
+from .i18n import effective_system_instruction, tr
 
 Purpose = Literal["optimize", "chat"]
 
@@ -53,8 +53,9 @@ def merge_system_instructions(
     config: dict[str, Any],
     *,
     include_meta_rule: bool = False,
+    purpose: Purpose = "chat",
 ) -> str:
-    instruction = config.get("system_instruction", "")
+    instruction = effective_system_instruction(config, purpose=purpose)
     dynamic = (config.get("dynamic_instructions") or "").strip()
     if dynamic:
         instruction += (
@@ -62,6 +63,8 @@ def merge_system_instructions(
             "(Priorità inferiore rispetto alle regole sopra):\n"
             f"{dynamic}"
         )
+    if purpose == "optimize":
+        instruction += tr("instructions.optimize_output", config=config)
     if include_meta_rule:
         instruction += CHAT_FORMAT_INSTRUCTION
         instruction += META_RULE_DYNAMIC
@@ -116,7 +119,15 @@ def build_request_payload(
     return {
         "contents": contents,
         "systemInstruction": {
-            "parts": [{"text": merge_system_instructions(config, include_meta_rule=include_meta_rule)}]
+            "parts": [
+                {
+                    "text": merge_system_instructions(
+                        config,
+                        include_meta_rule=include_meta_rule,
+                        purpose=purpose,
+                    )
+                }
+            ]
         },
         "generationConfig": build_generation_config(config, temperature, purpose),
     }

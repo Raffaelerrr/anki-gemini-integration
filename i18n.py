@@ -149,8 +149,20 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Text inserted automatically in chat when you import a note with the 🧠 button.",
     },
     "settings.system_instruction": {
-        "it": "System Instruction Globali (Alta Priorità - Statiche):",
+        "it": "Istruzioni di sistema globali (alta priorità — statiche):",
         "en": "Global system instructions (high priority — static):",
+    },
+    "settings.system_instruction_shared": {
+        "it": "Usa le stesse istruzioni di sistema per ottimizzazione e chat",
+        "en": "Use the same system instructions for optimize and chat",
+    },
+    "settings.system_instruction_optimize": {
+        "it": "Istruzioni di sistema per l'ottimizzazione (alta priorità — statiche):",
+        "en": "System instructions for optimize (high priority — static):",
+    },
+    "settings.system_instruction_chat": {
+        "it": "Istruzioni di sistema per la chat (alta priorità — statiche):",
+        "en": "System instructions for chat (high priority — static):",
     },
     "settings.dynamic_instructions": {
         "it": "Direttive Dinamiche Apprese (Bassa Priorità - Aggiornabili via Chat):",
@@ -183,8 +195,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Cancel",
     },
     "settings.restore_defaults": {
-        "it": "Ripristina predefiniti…",
-        "en": "Restore defaults…",
+        "it": "Ripristina predefiniti",
+        "en": "Restore defaults",
     },
     "settings.restore.title": {
         "it": "Ripristina impostazioni predefinite",
@@ -209,6 +221,40 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.restore.none_selected": {
         "it": "Seleziona almeno un'impostazione da ripristinare.",
         "en": "Select at least one setting to restore.",
+    },
+    "settings.restore_warnings": {
+        "it": "Ripristina avvisi",
+        "en": "Restore warnings",
+    },
+    "settings.restore_warnings.title": {
+        "it": "Ripristina avvisi ignorati",
+        "en": "Restore dismissed warnings",
+    },
+    "settings.restore_warnings.hint": {
+        "it": (
+            "Seleziona gli avvisi da mostrare di nuovo. Gli avvisi attualmente ignorati "
+            "sono già selezionati."
+        ),
+        "en": (
+            "Select the warnings to show again. Currently dismissed warnings are "
+            "pre-selected."
+        ),
+    },
+    "settings.restore_warnings.apply": {
+        "it": "Ripristina selezionati",
+        "en": "Restore selected",
+    },
+    "settings.restore_warnings.none_selected": {
+        "it": "Seleziona almeno un avviso da ripristinare.",
+        "en": "Select at least one warning to restore.",
+    },
+    "settings.restore_warnings.none_dismissed": {
+        "it": "Nessun avviso è attualmente ignorato.",
+        "en": "No warnings are currently dismissed.",
+    },
+    "warnings.default_system_instruction": {
+        "it": "Avviso: istruzioni di sistema predefinite non personalizzate",
+        "en": "Default system instructions not customized warning",
     },
     "settings.info": {
         "it": "Guida impostazioni",
@@ -404,14 +450,44 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
     "settings.help.system_instruction": {
         "it": (
-            "Istruzioni di sistema <b>statiche</b> inviate a Gemini in ogni richiesta "
-            "(ottimizzazione e chat). Definiscono stile HTML, MathJax, macro e regole "
-            "metodologiche. Hanno priorità alta rispetto alle regole dinamiche."
+            "Istruzioni di sistema <b>statiche</b> inviate a Gemini. Con l'opzione condivisa attiva, "
+            "valgono sia per l'ottimizzazione del campo sia per la chat. Definiscono stile HTML, "
+            "MathJax e regole metodologiche. Hanno priorità alta rispetto alle regole dinamiche."
         ),
         "en": (
-            "<b>Static</b> system instructions sent to Gemini on every request "
-            "(optimize and chat). They define HTML style, MathJax, macros, and methodology rules. "
+            "<b>Static</b> system instructions sent to Gemini. When shared is enabled, they apply "
+            "to both field optimization and chat. They define HTML, MathJax, and methodology rules. "
             "They take priority over dynamic rules."
+        ),
+    },
+    "settings.help.system_instruction_shared": {
+        "it": (
+            "Se attivo, un'unica casella di istruzioni vale per ottimizzazione e chat. "
+            "Se disattivo, puoi definire istruzioni separate per ciascuna modalità."
+        ),
+        "en": (
+            "When enabled, one instruction box applies to both optimize and chat. "
+            "When disabled, you can define separate instructions for each mode."
+        ),
+    },
+    "settings.help.system_instruction_optimize": {
+        "it": (
+            "Istruzioni statiche usate solo quando ottimizzi un campo con Gemini. "
+            "Ideali per regole rigide su HTML, MathJax e output pronto da incollare nel campo."
+        ),
+        "en": (
+            "Static instructions used only when optimizing a field with Gemini. "
+            "Best for strict HTML, MathJax, and field-ready output rules."
+        ),
+    },
+    "settings.help.system_instruction_chat": {
+        "it": (
+            "Istruzioni statiche usate solo nella chat con Gemini. "
+            "Puoi includere preferenze su tono, spiegazioni e formattazione delle risposte."
+        ),
+        "en": (
+            "Static instructions used only in the Gemini chat. "
+            "You can include preferences for tone, explanations, and reply formatting."
         ),
     },
     "settings.help.dynamic_instructions": {
@@ -462,6 +538,30 @@ _STRINGS: dict[str, dict[str, str]] = {
     "optimize.in_progress": {
         "it": "Ottimizzazione in corso…",
         "en": "Optimization in progress…",
+    },
+    "optimize.warning.dismiss": {
+        "it": "Non mostrare più questo avviso",
+        "en": "Do not show this again",
+    },
+    "optimize.default_instruction.title": {
+        "it": "Istruzioni di sistema predefinite",
+        "en": "Default system instructions",
+    },
+    "optimize.default_instruction.message": {
+        "it": (
+            "Le istruzioni di sistema statiche sono ancora quelle predefinite del componente "
+            "aggiuntivo (regole generiche per HTML, MathJax e stile). Personalizzale nelle "
+            "impostazioni per adattarle ai tuoi tipi di nota e alle tue preferenze."
+        ),
+        "en": (
+            "Global system instructions are still the add-on's built-in default (generic rules "
+            "for HTML, MathJax, and formatting). Customize them in Settings to match your note "
+            "types and preferences."
+        ),
+    },
+    "optimize.default_instruction.detail": {
+        "it": "Continuare comunque con l'ottimizzazione?",
+        "en": "Continue with optimization anyway?",
     },
     # Preview dialog
     "preview.title": {
@@ -589,6 +689,44 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "La nota qui sopra andrebbe scomposta in più note secondo il principio di atomicità? Se sì, come?",
         "en": "Should the note above be split into multiple notes following the atomicity principle? If so, how?",
     },
+    "defaults.system_instruction": {
+        "it": (
+            "Sei un assistente esperto di Anki integrato nell'editor di uno studente.\n"
+            "Il tuo compito è ottimizzare, ripulire e formattare il codice HTML e MathJax fornito nel campo, "
+            "applicando RIGOROSAMENTE le preferenze metodologiche, di stile e di notazione dell'utente.\n\n"
+            "FORMATTAZIONE ANKI (obbligatoria):\n"
+            "- I campi nota contengono solo HTML, non Markdown.\n"
+            "- Matematica inline: usa solo \\(...\\).\n"
+            "- Matematica display: usa solo \\[...\\].\n"
+            "- Non usare mai delimitatori $...$ o $$...$$.\n"
+            "- Converti matematica non formattata o in plain text in MathJax con i delimitatori sopra indicati.\n"
+            "- Usa tag HTML (<b>, <i>, <ul>, <ol>, <p>, <div>) per struttura ed enfasi."
+        ),
+        "en": (
+            "You are an expert Anki assistant integrated into a student's editor.\n"
+            "Your task is to optimize, clean, and format the HTML and MathJax code provided in the field, "
+            "STRICTLY applying the user's methodological, style, and notation preferences.\n\n"
+            "ANKI FORMATTING (mandatory):\n"
+            "- Note fields contain HTML only, not Markdown.\n"
+            "- Inline math: use \\(...\\) only.\n"
+            "- Display math: use \\[...\\] only.\n"
+            "- Never use $...$ or $$...$$ delimiters.\n"
+            "- Convert unformatted or plain-text math to MathJax using the delimiters above.\n"
+            "- Use HTML tags (<b>, <i>, <ul>, <ol>, <p>, <div>) for structure and emphasis."
+        ),
+    },
+    "instructions.optimize_output": {
+        "it": (
+            "\n\nOTTIMIZZAZIONE CAMPO (obbligatorio):\n"
+            "- Restituisci SOLO HTML/MathJax pronto da incollare nel campo.\n"
+            "- Non aggiungere spiegazioni, commenti o testo introduttivo."
+        ),
+        "en": (
+            "\n\nFIELD OPTIMIZATION (mandatory):\n"
+            "- Return ONLY HTML/MathJax ready to paste into the field.\n"
+            "- Do not add explanations, comments, or introductory text."
+        ),
+    },
     # Chat formatter
     "formatter.copy": {
         "it": "Copia",
@@ -680,6 +818,23 @@ def default_brain_import_message(config: dict[str, Any] | None = None) -> str:
     return tr("defaults.brain_import_message", config=config)
 
 
+def default_system_instruction(config: dict[str, Any] | None = None) -> str:
+    return tr("defaults.system_instruction", config=config)
+
+
+def system_instruction_shared(config: dict[str, Any] | None = None) -> bool:
+    return bool((config or {}).get("system_instruction_shared", True))
+
+
+def system_instruction_storage_key(purpose: str, config: dict[str, Any] | None = None) -> str:
+    cfg = config or {}
+    if system_instruction_shared(cfg):
+        return "system_instruction"
+    if purpose == "chat":
+        return "system_instruction_chat"
+    return "system_instruction_optimize"
+
+
 def _builtin_brain_import_messages() -> frozenset[str]:
     return frozenset(
         message.strip()
@@ -711,3 +866,70 @@ def normalize_brain_import_message_for_save(text: str, config: dict[str, Any]) -
     if is_builtin_brain_import_message(stripped):
         return ""
     return stripped
+
+
+def _builtin_system_instructions() -> frozenset[str]:
+    return frozenset(
+        message.strip()
+        for message in (
+            _STRINGS["defaults.system_instruction"][LANG_IT],
+            _STRINGS["defaults.system_instruction"][LANG_EN],
+        )
+        if message.strip()
+    )
+
+
+def is_builtin_system_instruction(text: str | None) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    return stripped in _builtin_system_instructions()
+
+
+def effective_system_instruction(
+    config: dict[str, Any] | None = None,
+    *,
+    purpose: str = "optimize",
+) -> str:
+    cfg = config or {}
+    key = system_instruction_storage_key(purpose, cfg)
+    stored = (cfg.get(key) or "").strip()
+    if is_builtin_system_instruction(stored):
+        return default_system_instruction(cfg)
+    return stored
+
+
+def normalize_system_instruction_for_save(text: str, config: dict[str, Any], field_key: str) -> str:
+    stripped = (text or "").strip()
+    if is_builtin_system_instruction(stripped):
+        return ""
+    return stripped
+
+
+def normalize_system_instruction_fields_for_save(
+    *,
+    shared: bool,
+    shared_text: str,
+    optimize_text: str,
+    chat_text: str,
+    config: dict[str, Any],
+) -> dict[str, str | bool]:
+    if shared:
+        return {
+            "system_instruction_shared": True,
+            "system_instruction": normalize_system_instruction_for_save(
+                shared_text, config, "system_instruction"
+            ),
+            "system_instruction_optimize": "",
+            "system_instruction_chat": "",
+        }
+    return {
+        "system_instruction_shared": False,
+        "system_instruction": "",
+        "system_instruction_optimize": normalize_system_instruction_for_save(
+            optimize_text, config, "system_instruction_optimize"
+        ),
+        "system_instruction_chat": normalize_system_instruction_for_save(
+            chat_text, config, "system_instruction_chat"
+        ),
+    }

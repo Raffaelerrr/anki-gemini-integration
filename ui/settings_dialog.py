@@ -4,18 +4,15 @@ from typing import Any
 
 from aqt.qt import (
     QCheckBox,
-    QComboBox,
     QDialog,
-    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
-    QSpinBox,
+    QSizePolicy,
     QStackedWidget,
-    QTextEdit,
     Qt,
     QVBoxLayout,
     QWidget,
@@ -25,10 +22,14 @@ from aqt.utils import showInfo, showWarning
 
 from ..constants import DEFAULT_MODEL_CHAT, DEFAULT_MODEL_OPTIMIZE, DEFAULT_THINKING_BUDGET_CHAT, DEFAULT_THINKING_BUDGET_OPTIMIZE
 from ..config import (
+    DISMISSIBLE_WARNING_KEYS,
+    DISMISSIBLE_WARNING_LABELS,
     RESTORABLE_SETTING_KEYS,
     RESTORABLE_SETTING_LABELS,
     api_key_configured,
     default_config_value,
+    dismissed_warning_keys,
+    is_warning_dismissed,
     load_config,
     save_config,
 )
@@ -39,7 +40,10 @@ from ..i18n import (
     DEFAULT_LANGUAGE,
     effective_brain_import_message,
     is_builtin_brain_import_message,
+    is_builtin_system_instruction,
     normalize_brain_import_message_for_save,
+    normalize_system_instruction_fields_for_save,
+    effective_system_instruction,
     tr,
 )
 from .chat_dialog import refresh_chat_language
@@ -49,6 +53,12 @@ from .model_selector import (
     model_selector_value,
     set_model_selector_value,
     update_model_selector_choices,
+)
+from .widgets import (
+    NoWheelComboBox,
+    NoWheelDoubleSpinBox,
+    NoWheelSpinBox,
+    ScrollAwareTextEdit,
 )
 from .theme import (
     muted_hint_html,
@@ -60,6 +70,20 @@ from .theme import (
 
 _settings_dialog: SettingsDialog | None = None
 
+_FOOTER_BUTTON_STYLE = """
+QPushButton {
+    text-align: left;
+    padding: 6px 12px;
+    min-height: 28px;
+}
+"""
+
+
+def _setup_footer_button(button: QPushButton, *, tooltip: str) -> None:
+    button.setToolTip(tooltip)
+    button.setStyleSheet(_FOOTER_BUTTON_STYLE)
+    button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+
 
 class SettingsDialog(QDialog):
     def __init__(self, parent, config: dict[str, Any]):
@@ -67,7 +91,9 @@ class SettingsDialog(QDialog):
         self._config = config
         self.config = dict(config)
         self._restore_checkboxes: dict[str, QCheckBox] = {}
+        self._warning_restore_checkboxes: dict[str, QCheckBox] = {}
         self._all_restore_checked = True
+        self._all_warnings_checked = True
         self._model_refresh_busy = False
         self._settings_help_dialog = None
 
@@ -77,8 +103,8 @@ class SettingsDialog(QDialog):
             | Qt.WindowType.WindowMinimizeButtonHint
             | Qt.WindowType.WindowCloseButtonHint
         )
-        self.setMinimumSize(520, 420)
-        self.resize(650, 720)
+        self.setMinimumSize(680, 420)
+        self.resize(780, 760)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -86,37 +112,112 @@ class SettingsDialog(QDialog):
         self.stack = QStackedWidget(self)
         self.stack.addWidget(self._build_form_page())
         self.stack.addWidget(self._build_restore_page())
+        self.stack.addWidget(self._build_restore_warnings_page())
         root.addWidget(self.stack, 1)
 
-        self._form_btn_layout = QHBoxLayout()
+        self._form_btn_layout = QVBoxLayout()
+        self._form_btn_layout.setSpacing(6)
+
+        utility_row = QHBoxLayout()
+        utility_row.setSpacing(8)
         self.btn_restore_mode = QPushButton(tr("settings.restore_defaults", config=config), self)
         self.btn_restore_mode.clicked.connect(self._enter_restore_mode)
+        _setup_footer_button(
+            self.btn_restore_mode,
+            tooltip=tr("settings.restore_defaults", config=config),
+        )
+        self.btn_restore_warnings = QPushButton(tr("settings.restore_warnings", config=config), self)
+        self.btn_restore_warnings.clicked.connect(self._enter_restore_warnings_mode)
+        _setup_footer_button(
+            self.btn_restore_warnings,
+            tooltip=tr("settings.restore_warnings", config=config),
+        )
         self.btn_settings_help = QPushButton(tr("settings.info", config=config), self)
         self.btn_settings_help.clicked.connect(self._open_settings_help)
+        _setup_footer_button(
+            self.btn_settings_help,
+            tooltip=tr("settings.info", config=config),
+        )
+        utility_row.addWidget(self.btn_restore_mode)
+        utility_row.addWidget(self.btn_restore_warnings)
+        utility_row.addWidget(self.btn_settings_help)
+        utility_row.addStretch(1)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
         self.btn_save = QPushButton(tr("settings.save", config=config), self)
         self.btn_save.clicked.connect(self._save_and_accept)
+        _setup_footer_button(
+            self.btn_save,
+            tooltip=tr("settings.save", config=config),
+        )
         self.btn_cancel = QPushButton(tr("settings.cancel", config=config), self)
         self.btn_cancel.clicked.connect(self.reject)
-        self._form_btn_layout.addWidget(self.btn_restore_mode)
-        self._form_btn_layout.addWidget(self.btn_settings_help)
-        self._form_btn_layout.addStretch(1)
-        self._form_btn_layout.addWidget(self.btn_save)
-        self._form_btn_layout.addWidget(self.btn_cancel)
+        _setup_footer_button(
+            self.btn_cancel,
+            tooltip=tr("settings.cancel", config=config),
+        )
+        action_row.addStretch(1)
+        action_row.addWidget(self.btn_save)
+        action_row.addWidget(self.btn_cancel)
+
+        self._form_btn_layout.addLayout(utility_row)
+        self._form_btn_layout.addLayout(action_row)
         root.addLayout(self._form_btn_layout)
 
         self._restore_btn_layout = QHBoxLayout()
+        self._restore_btn_layout.setSpacing(8)
         self.btn_toggle_all = QPushButton(tr("settings.restore.toggle_all", config=config), self)
         self.btn_toggle_all.clicked.connect(self._toggle_all_restore_checks)
+        _setup_footer_button(
+            self.btn_toggle_all,
+            tooltip=tr("settings.restore.toggle_all", config=config),
+        )
         self.btn_apply_restore = QPushButton(tr("settings.restore.apply", config=config), self)
         self.btn_apply_restore.clicked.connect(self._apply_selected_defaults)
+        _setup_footer_button(
+            self.btn_apply_restore,
+            tooltip=tr("settings.restore.apply", config=config),
+        )
         self.btn_restore_back = QPushButton(tr("settings.restore.back", config=config), self)
         self.btn_restore_back.clicked.connect(self._leave_restore_mode)
+        _setup_footer_button(
+            self.btn_restore_back,
+            tooltip=tr("settings.restore.back", config=config),
+        )
         self._restore_btn_layout.addWidget(self.btn_toggle_all)
         self._restore_btn_layout.addStretch(1)
         self._restore_btn_layout.addWidget(self.btn_apply_restore)
         self._restore_btn_layout.addWidget(self.btn_restore_back)
         root.addLayout(self._restore_btn_layout)
-        self._set_restore_buttons_visible(False)
+
+        self._warnings_btn_layout = QHBoxLayout()
+        self._warnings_btn_layout.setSpacing(8)
+        self.btn_warnings_toggle_all = QPushButton(tr("settings.restore.toggle_all", config=config), self)
+        self.btn_warnings_toggle_all.clicked.connect(self._toggle_all_warning_restore_checks)
+        _setup_footer_button(
+            self.btn_warnings_toggle_all,
+            tooltip=tr("settings.restore.toggle_all", config=config),
+        )
+        self.btn_apply_warning_restore = QPushButton(tr("settings.restore_warnings.apply", config=config), self)
+        self.btn_apply_warning_restore.clicked.connect(self._apply_selected_warning_restores)
+        _setup_footer_button(
+            self.btn_apply_warning_restore,
+            tooltip=tr("settings.restore_warnings.apply", config=config),
+        )
+        self.btn_warnings_back = QPushButton(tr("settings.restore.back", config=config), self)
+        self.btn_warnings_back.clicked.connect(self._leave_restore_warnings_mode)
+        _setup_footer_button(
+            self.btn_warnings_back,
+            tooltip=tr("settings.restore.back", config=config),
+        )
+        self._warnings_btn_layout.addWidget(self.btn_warnings_toggle_all)
+        self._warnings_btn_layout.addStretch(1)
+        self._warnings_btn_layout.addWidget(self.btn_apply_warning_restore)
+        self._warnings_btn_layout.addWidget(self.btn_warnings_back)
+        root.addLayout(self._warnings_btn_layout)
+
+        self._set_subpage_mode(None)
 
     def _build_form_page(self) -> QWidget:
         config = self.config
@@ -131,7 +232,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(4, 4, 4, 4)
 
         layout.addWidget(QLabel(f"<b>{tr('settings.language', config=config)}</b>"))
-        self.language_combo = QComboBox(form_host)
+        self.language_combo = NoWheelComboBox(form_host)
         self.language_combo.addItem(tr("settings.language.it", config=config), LANG_IT)
         self.language_combo.addItem(tr("settings.language.en", config=config), LANG_EN)
         current_lang = (self.config.get("language") or DEFAULT_LANGUAGE).lower()
@@ -190,7 +291,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.thinking_budget_hint)
         thinking_row = QHBoxLayout()
         thinking_row.addWidget(QLabel(tr("settings.thinking_budget_optimize", config=config)))
-        self.thinking_budget_optimize_input = QSpinBox(form_host)
+        self.thinking_budget_optimize_input = NoWheelSpinBox(form_host)
         self.thinking_budget_optimize_input.setRange(-1, 24576)
         self.thinking_budget_optimize_input.setValue(
             int(self.config.get("thinking_budget_optimize", DEFAULT_THINKING_BUDGET_OPTIMIZE))
@@ -198,7 +299,7 @@ class SettingsDialog(QDialog):
         thinking_row.addWidget(self.thinking_budget_optimize_input)
 
         thinking_row.addWidget(QLabel(tr("settings.thinking_budget_chat", config=config)))
-        self.thinking_budget_chat_input = QSpinBox(form_host)
+        self.thinking_budget_chat_input = NoWheelSpinBox(form_host)
         self.thinking_budget_chat_input.setRange(-1, 24576)
         self.thinking_budget_chat_input.setValue(
             int(self.config.get("thinking_budget_chat", DEFAULT_THINKING_BUDGET_CHAT))
@@ -212,19 +313,19 @@ class SettingsDialog(QDialog):
 
         params_row = QHBoxLayout()
         params_row.addWidget(QLabel(tr("settings.timeout", config=config)))
-        self.timeout_input = QSpinBox(form_host)
+        self.timeout_input = NoWheelSpinBox(form_host)
         self.timeout_input.setRange(5, 120)
         self.timeout_input.setValue(int(self.config.get("timeout_seconds", 30)))
         params_row.addWidget(self.timeout_input)
 
         params_row.addWidget(QLabel(tr("settings.max_retry", config=config)))
-        self.retries_input = QSpinBox(form_host)
+        self.retries_input = NoWheelSpinBox(form_host)
         self.retries_input.setRange(0, 5)
         self.retries_input.setValue(int(self.config.get("max_retries", 2)))
         params_row.addWidget(self.retries_input)
 
         params_row.addWidget(QLabel(tr("settings.chat_history", config=config)))
-        self.history_input = QSpinBox(form_host)
+        self.history_input = NoWheelSpinBox(form_host)
         self.history_input.setRange(0, 100)
         self.history_input.setValue(int(self.config.get("max_history_turns", 20)))
         params_row.addWidget(self.history_input)
@@ -232,14 +333,14 @@ class SettingsDialog(QDialog):
 
         temp_row = QHBoxLayout()
         temp_row.addWidget(QLabel(tr("settings.temp_optimize", config=config)))
-        self.temp_optimize_input = QDoubleSpinBox(form_host)
+        self.temp_optimize_input = NoWheelDoubleSpinBox(form_host)
         self.temp_optimize_input.setRange(0.0, 2.0)
         self.temp_optimize_input.setSingleStep(0.1)
         self.temp_optimize_input.setValue(float(self.config.get("temperature_optimize", 0.1)))
         temp_row.addWidget(self.temp_optimize_input)
 
         temp_row.addWidget(QLabel(tr("settings.temp_chat", config=config)))
-        self.temp_chat_input = QDoubleSpinBox(form_host)
+        self.temp_chat_input = NoWheelDoubleSpinBox(form_host)
         self.temp_chat_input.setRange(0.0, 2.0)
         self.temp_chat_input.setSingleStep(0.1)
         self.temp_chat_input.setValue(float(self.config.get("temperature_chat", 0.2)))
@@ -256,22 +357,57 @@ class SettingsDialog(QDialog):
             form_host,
         )
         layout.addWidget(self.brain_message_hint)
-        self.brain_message_input = QTextEdit(form_host)
+        self.brain_message_input = ScrollAwareTextEdit(form_host)
         self.brain_message_input.setMinimumHeight(70)
         self.brain_message_input.setMaximumHeight(120)
         self.brain_message_input.setPlainText(effective_brain_import_message(self.config))
         layout.addWidget(self.brain_message_input)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.system_instruction', config=config)}</b>"))
-        self.instruction_input = QTextEdit(form_host)
+        self.instruction_shared_checkbox = QCheckBox(
+            tr("settings.system_instruction_shared", config=config),
+            form_host,
+        )
+        self.instruction_shared_checkbox.setChecked(bool(self.config.get("system_instruction_shared", True)))
+        self.instruction_shared_checkbox.toggled.connect(self._on_instruction_shared_toggled)
+        layout.addWidget(self.instruction_shared_checkbox)
+
+        self.instruction_shared_host = QWidget(form_host)
+        shared_instruction_layout = QVBoxLayout(self.instruction_shared_host)
+        shared_instruction_layout.setContentsMargins(0, 0, 0, 0)
+        self.instruction_input = ScrollAwareTextEdit(self.instruction_shared_host)
         self.instruction_input.setMinimumHeight(140)
-        self.instruction_input.setPlainText(self.config.get("system_instruction", ""))
-        layout.addWidget(self.instruction_input)
+        shared_instruction_layout.addWidget(self.instruction_input)
+
+        self.instruction_split_host = QWidget(form_host)
+        split_instruction_layout = QVBoxLayout(self.instruction_split_host)
+        split_instruction_layout.setContentsMargins(0, 0, 0, 0)
+        self.instruction_optimize_label = QLabel(
+            f"<b>{tr('settings.system_instruction_optimize', config=config)}</b>",
+            self.instruction_split_host,
+        )
+        split_instruction_layout.addWidget(self.instruction_optimize_label)
+        self.instruction_optimize_input = ScrollAwareTextEdit(self.instruction_split_host)
+        self.instruction_optimize_input.setMinimumHeight(120)
+        split_instruction_layout.addWidget(self.instruction_optimize_input)
+        self.instruction_chat_label = QLabel(
+            f"<b>{tr('settings.system_instruction_chat', config=config)}</b>",
+            self.instruction_split_host,
+        )
+        split_instruction_layout.addWidget(self.instruction_chat_label)
+        self.instruction_chat_input = ScrollAwareTextEdit(self.instruction_split_host)
+        self.instruction_chat_input.setMinimumHeight(120)
+        split_instruction_layout.addWidget(self.instruction_chat_input)
+
+        layout.addWidget(self.instruction_shared_host)
+        layout.addWidget(self.instruction_split_host)
+        self._load_instruction_fields_from_config()
+        self._sync_instruction_widgets_visibility()
 
         layout.addWidget(
             QLabel(f"<br><b>{tr('settings.dynamic_instructions', config=config)}</b>")
         )
-        self.dynamic_input = QTextEdit(form_host)
+        self.dynamic_input = ScrollAwareTextEdit(form_host)
         self.dynamic_input.setMinimumHeight(100)
         self.dynamic_input.setPlaceholderText(tr("settings.dynamic_placeholder", config=config))
         self.dynamic_input.setPlainText(self.config.get("dynamic_instructions", ""))
@@ -318,6 +454,41 @@ class SettingsDialog(QDialog):
             checkbox.setChecked(True)
             layout.addWidget(checkbox)
             self._restore_checkboxes[key] = checkbox
+
+        layout.addStretch(1)
+        scroll.setWidget(host)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.addWidget(scroll)
+        return page
+
+    def _build_restore_warnings_page(self) -> QWidget:
+        config = self.config
+        page = QWidget(self)
+        scroll = QScrollArea(page)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        host = QWidget(scroll)
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(4, 4, 4, 4)
+
+        layout.addWidget(QLabel(f"<b>{tr('settings.restore_warnings.title', config=config)}</b>"))
+        self.restore_warnings_hint_label = QLabel(
+            muted_hint_html(tr("settings.restore_warnings.hint", config=config)),
+            host,
+        )
+        layout.addWidget(self.restore_warnings_hint_label)
+        layout.addWidget(QLabel("<br>"))
+
+        self._warning_restore_checkboxes.clear()
+        for key in DISMISSIBLE_WARNING_KEYS:
+            label_key = DISMISSIBLE_WARNING_LABELS.get(key, key)
+            checkbox = QCheckBox(tr(label_key, config=config), host)
+            checkbox.setChecked(is_warning_dismissed(self.config, key))
+            layout.addWidget(checkbox)
+            self._warning_restore_checkboxes[key] = checkbox
 
         layout.addStretch(1)
         scroll.setWidget(host)
@@ -419,29 +590,135 @@ class SettingsDialog(QDialog):
         self.restore_hint_label.setText(
             muted_hint_html(tr("settings.restore.hint", config=config))
         )
+        self.restore_warnings_hint_label.setText(
+            muted_hint_html(tr("settings.restore_warnings.hint", config=config))
+        )
         self._update_api_key_status()
         if self._settings_help_dialog is not None:
             self._settings_help_dialog.apply_theme()
 
-    def _set_restore_buttons_visible(self, visible: bool) -> None:
-        self.btn_restore_mode.setVisible(not visible)
-        self.btn_settings_help.setVisible(not visible)
-        self.btn_save.setVisible(not visible)
-        self.btn_cancel.setVisible(not visible)
-        self.btn_toggle_all.setVisible(visible)
-        self.btn_apply_restore.setVisible(visible)
-        self.btn_restore_back.setVisible(visible)
+    def _default_system_instruction_text(self) -> str:
+        lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
+        return tr("defaults.system_instruction", lang=lang)
+
+    def _set_instruction_field_text(self, editor: ScrollAwareTextEdit, text: str) -> None:
+        editor.setPlainText(text)
+        editor.clear_text_selection()
+
+    def _set_all_instruction_fields(self, text: str) -> None:
+        for editor in (
+            self.instruction_input,
+            self.instruction_optimize_input,
+            self.instruction_chat_input,
+        ):
+            self._set_instruction_field_text(editor, text)
+
+    def _load_instruction_fields_from_config(self) -> None:
+        self._set_instruction_field_text(
+            self.instruction_input,
+            effective_system_instruction(self.config, purpose="optimize"),
+        )
+        self._set_instruction_field_text(
+            self.instruction_optimize_input,
+            effective_system_instruction(self.config, purpose="optimize"),
+        )
+        self._set_instruction_field_text(
+            self.instruction_chat_input,
+            effective_system_instruction(self.config, purpose="chat"),
+        )
+
+    def _sync_instruction_widgets_visibility(self) -> None:
+        shared = self.instruction_shared_checkbox.isChecked()
+        self.instruction_shared_host.setVisible(shared)
+        self.instruction_split_host.setVisible(not shared)
+
+    def _on_instruction_shared_toggled(self, shared: bool) -> None:
+        if shared:
+            source = self.instruction_optimize_input.toPlainText().strip()
+            if not source:
+                source = self.instruction_chat_input.toPlainText()
+            self.instruction_input.setPlainText(source)
+        else:
+            shared_text = self.instruction_input.toPlainText()
+            self.instruction_optimize_input.setPlainText(shared_text)
+            self.instruction_chat_input.setPlainText(shared_text)
+        self._sync_instruction_widgets_visibility()
+
+    def _refresh_builtin_instruction_fields_for_language(self, lang: str) -> None:
+        if self.instruction_shared_checkbox.isChecked():
+            current = self.instruction_input.toPlainText().strip()
+            if is_builtin_system_instruction(current):
+                self._set_instruction_field_text(
+                    self.instruction_input,
+                    tr("defaults.system_instruction", lang=lang),
+                )
+            return
+
+        current_optimize = self.instruction_optimize_input.toPlainText().strip()
+        if is_builtin_system_instruction(current_optimize):
+            self._set_instruction_field_text(
+                self.instruction_optimize_input,
+                tr("defaults.system_instruction", lang=lang),
+            )
+
+        current_chat = self.instruction_chat_input.toPlainText().strip()
+        if is_builtin_system_instruction(current_chat):
+            self._set_instruction_field_text(
+                self.instruction_chat_input,
+                tr("defaults.system_instruction", lang=lang),
+            )
+
+    def _set_subpage_mode(self, mode: str | None) -> None:
+        on_form = mode is None
+        on_defaults = mode == "defaults"
+        on_warnings = mode == "warnings"
+
+        self.btn_restore_mode.setVisible(on_form)
+        self.btn_restore_warnings.setVisible(on_form)
+        self.btn_settings_help.setVisible(on_form)
+        self.btn_save.setVisible(on_form)
+        self.btn_cancel.setVisible(on_form)
+
+        self.btn_toggle_all.setVisible(on_defaults)
+        self.btn_apply_restore.setVisible(on_defaults)
+        self.btn_restore_back.setVisible(on_defaults)
+
+        self.btn_warnings_toggle_all.setVisible(on_warnings)
+        self.btn_apply_warning_restore.setVisible(on_warnings)
+        self.btn_warnings_back.setVisible(on_warnings)
+
+    def _refresh_warning_restore_checkboxes(self) -> None:
+        for key, checkbox in self._warning_restore_checkboxes.items():
+            checkbox.setChecked(is_warning_dismissed(self.config, key))
 
     def _enter_restore_mode(self) -> None:
         self._all_restore_checked = True
         for checkbox in self._restore_checkboxes.values():
             checkbox.setChecked(True)
         self.stack.setCurrentIndex(1)
-        self._set_restore_buttons_visible(True)
+        self._set_subpage_mode("defaults")
 
     def _leave_restore_mode(self) -> None:
         self.stack.setCurrentIndex(0)
-        self._set_restore_buttons_visible(False)
+        self._set_subpage_mode(None)
+
+    def _enter_restore_warnings_mode(self) -> None:
+        self._refresh_warning_restore_checkboxes()
+        dismissed = dismissed_warning_keys(self.config)
+        self._all_warnings_checked = bool(dismissed) and len(dismissed) == len(DISMISSIBLE_WARNING_KEYS)
+        for key, checkbox in self._warning_restore_checkboxes.items():
+            checkbox.setChecked(key in dismissed)
+        self.stack.setCurrentIndex(2)
+        self._set_subpage_mode("warnings")
+
+    def _leave_restore_warnings_mode(self) -> None:
+        self.stack.setCurrentIndex(0)
+        self._set_subpage_mode(None)
+
+    def _toggle_all_warning_restore_checks(self) -> None:
+        self._all_warnings_checked = not self._all_warnings_checked
+        for checkbox in self._warning_restore_checkboxes.values():
+            checkbox.setChecked(self._all_warnings_checked)
 
     def _toggle_all_restore_checks(self) -> None:
         self._all_restore_checked = not self._all_restore_checked
@@ -519,7 +796,26 @@ class SettingsDialog(QDialog):
             return
 
         if key == "system_instruction":
-            self.instruction_input.setPlainText(str(default_value))
+            self._set_all_instruction_fields(self._default_system_instruction_text())
+            return
+
+        if key == "system_instruction_shared":
+            self.instruction_shared_checkbox.setChecked(bool(default_value))
+            self._sync_instruction_widgets_visibility()
+            return
+
+        if key == "system_instruction_optimize":
+            default_text = self._default_system_instruction_text()
+            self._set_instruction_field_text(self.instruction_optimize_input, default_text)
+            if self.instruction_shared_checkbox.isChecked():
+                self._set_instruction_field_text(self.instruction_input, default_text)
+            return
+
+        if key == "system_instruction_chat":
+            default_text = self._default_system_instruction_text()
+            self._set_instruction_field_text(self.instruction_chat_input, default_text)
+            if self.instruction_shared_checkbox.isChecked():
+                self._set_instruction_field_text(self.instruction_input, default_text)
             return
 
         if key == "dynamic_instructions":
@@ -537,12 +833,27 @@ class SettingsDialog(QDialog):
 
         self._leave_restore_mode()
 
-    def _on_language_changed(self) -> None:
-        current = self.brain_message_input.toPlainText().strip()
-        if not is_builtin_brain_import_message(current):
+    def _selected_warning_restore_keys(self) -> list[str]:
+        return [key for key, checkbox in self._warning_restore_checkboxes.items() if checkbox.isChecked()]
+
+    def _apply_selected_warning_restores(self) -> None:
+        selected = self._selected_warning_restore_keys()
+        if not selected:
+            showInfo(tr("settings.restore_warnings.none_selected", config=self._ui_config()))
             return
+
+        for key in selected:
+            self.config[key] = False
+
+        self._refresh_warning_restore_checkboxes()
+        self._leave_restore_warnings_mode()
+
+    def _on_language_changed(self) -> None:
         lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
-        self.brain_message_input.setPlainText(tr("defaults.brain_import_message", lang=lang))
+        current_brain = self.brain_message_input.toPlainText().strip()
+        if is_builtin_brain_import_message(current_brain):
+            self.brain_message_input.setPlainText(tr("defaults.brain_import_message", lang=lang))
+        self._refresh_builtin_instruction_fields_for_language(lang)
 
     def _save_and_accept(self) -> None:
         new_key = self.api_key_input.text().strip()
@@ -565,8 +876,17 @@ class SettingsDialog(QDialog):
         self.config["brain_import_message"] = normalize_brain_import_message_for_save(
             brain_message, self.config
         )
-        self.config["system_instruction"] = self.instruction_input.toPlainText()
+        instruction_fields = normalize_system_instruction_fields_for_save(
+            shared=self.instruction_shared_checkbox.isChecked(),
+            shared_text=self.instruction_input.toPlainText(),
+            optimize_text=self.instruction_optimize_input.toPlainText(),
+            chat_text=self.instruction_chat_input.toPlainText(),
+            config=self.config,
+        )
+        self.config.update(instruction_fields)
         self.config["dynamic_instructions"] = self.dynamic_input.toPlainText()
+        for key in DISMISSIBLE_WARNING_KEYS:
+            self.config[key] = bool(self.config.get(key, False))
         save_config(self.config)
         refresh_chat_language()
         self.accept()

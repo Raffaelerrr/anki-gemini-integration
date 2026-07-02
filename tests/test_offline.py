@@ -58,6 +58,7 @@ def _install_anki_mocks() -> None:
         WidgetAttribute = _Enum(WA_QuitOnClose=1)
         WindowModality = _Enum(NonModal=0)
         ScrollBarPolicy = _Enum(ScrollBarAlwaysOff=0, ScrollBarAsNeeded=1)
+        FocusPolicy = _Enum(StrongFocus=1)
         Key = _Enum(Key_Return=16777220, Key_Enter=16777221)
         KeyboardModifier = _Enum(ShiftModifier=1)
         MatchFlag = _Enum(MatchContains=1)
@@ -77,6 +78,15 @@ def _install_anki_mocks() -> None:
         def installEventFilter(*args, **kwargs):
             return None
 
+        def setFocusPolicy(self, *args, **kwargs):
+            return None
+
+        def parentWidget(self):
+            return None
+
+        def eventFilter(self, obj, event):
+            return False
+
     for name in (
         "QApplication",
         "QCheckBox",
@@ -87,6 +97,7 @@ def _install_anki_mocks() -> None:
         "QHBoxLayout",
         "QLabel",
         "QLineEdit",
+        "QObject",
         "QPushButton",
         "QScrollArea",
         "QSpinBox",
@@ -94,7 +105,6 @@ def _install_anki_mocks() -> None:
         "QTextBrowser",
         "QTextCursor",
         "QTextEdit",
-        "QTimer",
         "QUrl",
         "QVBoxLayout",
         "QWidget",
@@ -102,13 +112,26 @@ def _install_anki_mocks() -> None:
     ):
         setattr(aqt_qt, name, _Stub)
 
-    class _Frame(_Stub):
-        class Shape:
-            NoFrame = 0
-
     class _Signal:
         def connect(self, *args, **kwargs):
             return None
+
+    class _TimerStub(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.timeout = _Signal()
+
+        def setSingleShot(self, *args, **kwargs):
+            return None
+
+        def start(self, *args, **kwargs):
+            return None
+
+    aqt_qt.QTimer = _TimerStub
+
+    class _Frame(_Stub):
+        class Shape:
+            NoFrame = 0
 
     class _LineEditStub(_Stub):
         def __init__(self):
@@ -330,6 +353,53 @@ class TestGeminiClient(unittest.TestCase):
         )
         self.assertEqual(payload["contents"][-1]["parts"][0]["text"], "Hello")
         self.assertEqual(payload["generationConfig"]["thinkingConfig"]["thinkingBudget"], 0)
+        system_text = payload["systemInstruction"]["parts"][0]["text"]
+        self.assertIn("FIELD OPTIMIZATION", system_text)
+
+    def test_build_request_payload_chat_allows_explanations(self):
+        config = {"system_instruction": "Rules", "language": "en", "thinking_budget_chat": -1}
+        payload = self.gc.build_request_payload(
+            config=config,
+            user_text="Hello",
+            history=None,
+            temperature=0.2,
+            include_meta_rule=True,
+            purpose="chat",
+        )
+        system_text = payload["systemInstruction"]["parts"][0]["text"]
+        self.assertNotIn("FIELD OPTIMIZATION", system_text)
+        self.assertIn("REGOLE DI FORMATTAZIONE PER LE RISPOSTE IN CHAT", system_text)
+
+    def test_build_request_payload_uses_split_instructions(self):
+        config = {
+            "system_instruction_shared": False,
+            "system_instruction_optimize": "Optimize rules",
+            "system_instruction_chat": "Chat rules",
+            "thinking_budget_optimize": 0,
+            "thinking_budget_chat": -1,
+        }
+        optimize_payload = self.gc.build_request_payload(
+            config=config,
+            user_text="Hello",
+            history=None,
+            temperature=0.1,
+            include_meta_rule=False,
+            purpose="optimize",
+        )
+        chat_payload = self.gc.build_request_payload(
+            config=config,
+            user_text="Hello",
+            history=None,
+            temperature=0.2,
+            include_meta_rule=True,
+            purpose="chat",
+        )
+        optimize_text = optimize_payload["systemInstruction"]["parts"][0]["text"]
+        chat_text = chat_payload["systemInstruction"]["parts"][0]["text"]
+        self.assertIn("Optimize rules", optimize_text)
+        self.assertNotIn("Chat rules", optimize_text)
+        self.assertIn("Chat rules", chat_text)
+        self.assertNotIn("Optimize rules", chat_text)
 
     def test_parse_response_success(self):
         config = {"language": "en"}
@@ -480,6 +550,80 @@ class TestI18n(unittest.TestCase):
     def test_effective_brain_import_message_keeps_custom_text(self):
         config = {"language": "en", "brain_import_message": "My custom prompt"}
         self.assertEqual(self.i18n.effective_brain_import_message(config), "My custom prompt")
+
+    def test_default_system_instruction_per_language(self):
+        en = self.i18n.default_system_instruction({"language": "en"})
+        it = self.i18n.default_system_instruction({"language": "it"})
+        self.assertNotEqual(en, it)
+        self.assertIn("student", en.lower())
+        self.assertIn("studente", it.lower())
+        self.assertIn(r"\(...\)", en)
+        self.assertIn(r"\[...\]", en)
+        self.assertIn("$$", en)
+        self.assertIn("never use", en.lower())
+        self.assertIn("unformatted", en.lower())
+        self.assertNotIn("field optimization", en.lower())
+
+    def test_effective_system_instruction_uses_language_default(self):
+        english_default = self.i18n.default_system_instruction({"language": "en"})
+        config = {"language": "it", "system_instruction": english_default}
+        effective = self.i18n.effective_system_instruction(config)
+        self.assertIn("studente", effective.lower())
+        self.assertNotEqual(effective, english_default)
+
+    def test_effective_system_instruction_split_by_purpose(self):
+        config = {
+            "system_instruction_shared": False,
+            "system_instruction_optimize": "Optimize rules",
+            "system_instruction_chat": "Chat rules",
+        }
+        self.assertEqual(
+            self.i18n.effective_system_instruction(config, purpose="optimize"),
+            "Optimize rules",
+        )
+        self.assertEqual(
+            self.i18n.effective_system_instruction(config, purpose="chat"),
+            "Chat rules",
+        )
+
+    def test_normalize_system_instruction_fields_for_save(self):
+        default_en = self.i18n.default_system_instruction({"language": "en"})
+        config = {"language": "en"}
+        shared_saved = self.i18n.normalize_system_instruction_fields_for_save(
+            shared=True,
+            shared_text=default_en,
+            optimize_text="ignored",
+            chat_text="ignored",
+            config=config,
+        )
+        self.assertTrue(shared_saved["system_instruction_shared"])
+        self.assertEqual(shared_saved["system_instruction"], "")
+        self.assertEqual(shared_saved["system_instruction_optimize"], "")
+        self.assertEqual(shared_saved["system_instruction_chat"], "")
+
+        split_saved = self.i18n.normalize_system_instruction_fields_for_save(
+            shared=False,
+            shared_text="ignored",
+            optimize_text="Optimize only",
+            chat_text=default_en,
+            config=config,
+        )
+        self.assertFalse(split_saved["system_instruction_shared"])
+        self.assertEqual(split_saved["system_instruction"], "")
+        self.assertEqual(split_saved["system_instruction_optimize"], "Optimize only")
+        self.assertEqual(split_saved["system_instruction_chat"], "")
+
+    def test_normalize_system_instruction_for_save(self):
+        default_en = self.i18n.default_system_instruction({"language": "en"})
+        config = {"language": "en"}
+        self.assertEqual(
+            self.i18n.normalize_system_instruction_for_save(default_en, config, "system_instruction"),
+            "",
+        )
+        self.assertEqual(
+            self.i18n.normalize_system_instruction_for_save("Custom rules", config, "system_instruction"),
+            "Custom rules",
+        )
 
 
 class TestChatFormatter(unittest.TestCase):
@@ -642,7 +786,15 @@ class TestConfig(unittest.TestCase):
         self.assertNotIn("thinking_budget", migrated)
 
     def test_restorable_settings_cover_defaults(self):
-        self.assertEqual(set(self.config.RESTORABLE_SETTING_KEYS), set(self.config.DEFAULT_CONFIG.keys()))
+        self.assertLessEqual(
+            set(self.config.RESTORABLE_SETTING_KEYS),
+            set(self.config.DEFAULT_CONFIG.keys()),
+        )
+        self.assertEqual(
+            set(self.config.RESTORABLE_SETTING_KEYS),
+            set(self.config.DEFAULT_CONFIG.keys())
+            - {"suppress_default_system_instruction_warning"},
+        )
 
     def test_setting_help_keys_cover_all_settings(self):
         self.assertEqual(set(self.config.SETTING_HELP_KEYS.keys()), set(self.config.RESTORABLE_SETTING_KEYS))
@@ -656,6 +808,58 @@ class TestConfig(unittest.TestCase):
         self.assertFalse(fn({"api_key": ""}))
         self.assertFalse(fn({"api_key": "INSERISCI_QUI_LA_TUA_API_KEY"}))
         self.assertTrue(fn({"api_key": "real-key"}))
+
+    def test_uses_default_system_instruction(self):
+        fn = self.config.uses_default_system_instruction
+        self.assertTrue(fn({"system_instruction": ""}))
+        self.assertFalse(fn({"system_instruction": "My custom rules"}))
+        self.assertTrue(
+            fn(
+                {
+                    "system_instruction_shared": False,
+                    "system_instruction_optimize": "",
+                    "system_instruction_chat": "Chat only custom",
+                }
+            )
+        )
+        self.assertFalse(
+            fn(
+                {
+                    "system_instruction_shared": False,
+                    "system_instruction_optimize": "Optimize custom",
+                    "system_instruction_chat": "",
+                }
+            )
+        )
+
+    def test_restorable_settings_exclude_warning_preference(self):
+        self.assertNotIn(
+            "suppress_default_system_instruction_warning",
+            self.config.RESTORABLE_SETTING_KEYS,
+        )
+
+    def test_dismissed_warning_keys(self):
+        self.assertEqual(
+            self.config.dismissed_warning_keys(
+                {"suppress_default_system_instruction_warning": True}
+            ),
+            ["suppress_default_system_instruction_warning"],
+        )
+        self.assertEqual(
+            self.config.dismissed_warning_keys(
+                {"suppress_default_system_instruction_warning": False}
+            ),
+            [],
+        )
+
+    def test_is_warning_dismissed(self):
+        fn = self.config.is_warning_dismissed
+        self.assertTrue(
+            fn({"suppress_default_system_instruction_warning": True}, "suppress_default_system_instruction_warning")
+        )
+        self.assertFalse(
+            fn({"suppress_default_system_instruction_warning": False}, "suppress_default_system_instruction_warning")
+        )
 
 
 if __name__ == "__main__":
