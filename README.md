@@ -14,8 +14,6 @@ An Anki add-on that integrates **Google Gemini** into the note editor: optimize 
 
 ## Screenshots
 
-UI mockups for documentation (replace with real Anki screenshots anytime):
-
 | Editor buttons | Settings dialog |
 |----------------|-----------------|
 | ![Editor toolbar buttons](docs/screenshots/editor-buttons.png) | ![Settings dialog](docs/screenshots/settings-dialog.png) |

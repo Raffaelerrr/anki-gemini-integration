@@ -3,6 +3,9 @@
         "language": "en",
         "api_key": "",
         "system_instruction": "",
+        "system_instruction_shared": true,
+        "system_instruction_optimize": "",
+        "system_instruction_chat": "",
         "dynamic_instructions": "",
         "model_optimize": "gemini-2.5-flash-lite",
         "model_chat": "gemini-2.5-flash",
@@ -15,6 +18,8 @@
         "max_history_turns": 20,
         "confirm_before_apply": true,
         "max_retries": 2,
-        "brain_import_message": ""
+        "brain_import_message": "",
+        "suppress_default_system_instruction_warning": false,
+        "suppress_api_key_restore_warning": false
     }
 }

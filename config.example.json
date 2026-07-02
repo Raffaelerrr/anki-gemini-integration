@@ -17,5 +17,7 @@
     "max_history_turns": 20,
     "confirm_before_apply": true,
     "max_retries": 2,
-    "brain_import_message": ""
+    "brain_import_message": "",
+    "suppress_default_system_instruction_warning": false,
+    "suppress_api_key_restore_warning": false
 }
