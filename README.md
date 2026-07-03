@@ -149,6 +149,14 @@ Git ignores secrets and generated files (`meta.json`, `config_gemini.json`, `__p
 py -3 tests/test_offline.py
 ```
 
+See **[TESTING.md](TESTING.md)** for CI, live API tests, and how to keep secrets safe.
+
+Optional live API check (real key, before releases):
+
+```bash
+py -3 tests/test_live_api.py
+```
+
 ### Update vendored Markdown
 
 ```bash

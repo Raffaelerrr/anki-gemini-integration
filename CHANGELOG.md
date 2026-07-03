@@ -22,7 +22,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 - **Built-in defaults** — generic HTML/MathJax system instructions (EN/IT); language-aware.
 - **Dismissible warnings** — default-instructions warning on optimize; API key restore warning.
 - **Scroll-aware settings UI** — wheel/trackpad no longer changes spinboxes accidentally; text areas scroll by focus.
-- **Offline tests** — `tests/test_offline.py` (63 tests).
+- **Offline tests** — `tests/test_offline.py` (automated logic tests).
+- **CI** — GitHub Actions runs offline tests on push/PR.
+- **Optional live API tests** — `tests/test_live_api.py` (see [TESTING.md](TESTING.md)).
 - **Documentation** — README, CHANGELOG, example configs, screenshots.
 
 ### Changed

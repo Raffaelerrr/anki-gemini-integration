@@ -6,279 +6,15 @@ Run from the addon folder:
 
 from __future__ import annotations
 
-import importlib.util
 import sys
-import types
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-ADDON_DIR = Path(__file__).resolve().parent.parent
-ADDONS21_DIR = ADDON_DIR.parent
-PACKAGE = "Anki_AI_Addon"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from support import load_addon_module
 
-
-def _install_anki_mocks() -> None:
-    if "requests" not in sys.modules:
-        requests_mod = types.ModuleType("requests")
-        requests_mod.post = MagicMock()
-        requests_mod.get = MagicMock()
-        requests_mod.Timeout = type("Timeout", (Exception,), {})
-        requests_mod.ConnectionError = type("ConnectionError", (Exception,), {})
-        sys.modules["requests"] = requests_mod
-
-    if "aqt" in sys.modules:
-        return
-
-    aqt = types.ModuleType("aqt")
-    aqt.mw = MagicMock()
-    aqt.mw.addonManager.getConfig.return_value = None
-    aqt.mw.addonManager.writeConfig = MagicMock()
-    aqt.mw.taskman = MagicMock()
-    aqt.mw.taskman.run_in_background = MagicMock(
-        side_effect=lambda fn, cb: cb(MagicMock(result=fn))
-    )
-    aqt.mw.taskman.run_on_main = MagicMock(side_effect=lambda fn: fn())
-    aqt.gui_hooks = MagicMock()
-
-    aqt_qt = types.ModuleType("aqt.qt")
-
-    class _Enum:
-        def __init__(self, **members):
-            for key, value in members.items():
-                setattr(self, key, value)
-
-    class Qt:
-        WindowType = _Enum(
-            Window=1,
-            WindowMinimizeButtonHint=2,
-            WindowMaximizeButtonHint=4,
-            WindowCloseButtonHint=8,
-        )
-        WidgetAttribute = _Enum(WA_QuitOnClose=1)
-        WindowModality = _Enum(NonModal=0)
-        ScrollBarPolicy = _Enum(ScrollBarAlwaysOff=0, ScrollBarAsNeeded=1)
-        FocusPolicy = _Enum(StrongFocus=1)
-        Key = _Enum(Key_Return=16777220, Key_Enter=16777221)
-        KeyboardModifier = _Enum(ShiftModifier=1)
-        MatchFlag = _Enum(MatchContains=1)
-        CaseSensitivity = _Enum(CaseInsensitive=0)
-
-    class _Stub:
-        EchoMode = _Enum(Password=1)
-        DialogCode = _Enum(Accepted=1)
-        LineWrapMode = _Enum(NoWrap=0)
-        MoveOperation = _Enum(End=0)
-        MoveMode = _Enum(KeepAnchor=1)
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-        @staticmethod
-        def installEventFilter(*args, **kwargs):
-            return None
-
-        def setFocusPolicy(self, *args, **kwargs):
-            return None
-
-        def parentWidget(self):
-            return None
-
-        def eventFilter(self, obj, event):
-            return False
-
-    for name in (
-        "QApplication",
-        "QCheckBox",
-        "QCloseEvent",
-        "QDialog",
-        "QDoubleSpinBox",
-        "QFrame",
-        "QHBoxLayout",
-        "QLabel",
-        "QLineEdit",
-        "QObject",
-        "QPushButton",
-        "QScrollArea",
-        "QSpinBox",
-        "QStackedWidget",
-        "QTextBrowser",
-        "QTextCursor",
-        "QTextEdit",
-        "QUrl",
-        "QVBoxLayout",
-        "QWidget",
-        "QAction",
-    ):
-        setattr(aqt_qt, name, _Stub)
-
-    class _Signal:
-        def connect(self, *args, **kwargs):
-            return None
-
-    class _TimerStub(_Stub):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.timeout = _Signal()
-
-        def setSingleShot(self, *args, **kwargs):
-            return None
-
-        def start(self, *args, **kwargs):
-            return None
-
-    aqt_qt.QTimer = _TimerStub
-
-    class _Frame(_Stub):
-        class Shape:
-            NoFrame = 0
-
-    class _LineEditStub(_Stub):
-        def __init__(self):
-            super().__init__()
-            self.textEdited = _Signal()
-
-        def setPlaceholderText(self, *args, **kwargs):
-            return None
-
-        def hasFocus(self):
-            return False
-
-    class _PopupStub(_Stub):
-        def setMaxVisibleItems(self, *args, **kwargs):
-            return None
-
-    class QCompleter(_Stub):
-        CompletionMode = _Enum(PopupCompletion=0)
-
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self._model = None
-
-        def setFilterMode(self, *args, **kwargs):
-            return None
-
-        def setCaseSensitivity(self, *args, **kwargs):
-            return None
-
-        def setCompletionMode(self, *args, **kwargs):
-            return None
-
-        def setMaxVisibleItems(self, *args, **kwargs):
-            return None
-
-        def popup(self):
-            return _PopupStub()
-
-        def setModel(self, model):
-            self._model = model
-
-    class QStringListModel(_Stub):
-        def __init__(self, items=None):
-            super().__init__()
-            self.items = list(items or [])
-
-    class QComboBox(_Stub):
-        InsertPolicy = _Enum(NoInsert=0)
-
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self._items: list[str] = []
-            self._text = ""
-            self._completer = None
-            self._properties: dict[str, object] = {}
-
-        def setEditable(self, *args, **kwargs):
-            return None
-
-        def setInsertPolicy(self, *args, **kwargs):
-            return None
-
-        def setMaxVisibleItems(self, *args, **kwargs):
-            return None
-
-        def setProperty(self, key, value):
-            self._properties[key] = value
-            return True
-
-        def property(self, key):
-            return self._properties.get(key)
-
-        def addItems(self, items):
-            self._items = list(items)
-
-        def clear(self):
-            self._items = []
-
-        def setCurrentText(self, text):
-            self._text = text
-
-        def currentText(self):
-            return self._text
-
-        def setEditText(self, text):
-            self._text = text
-
-        def lineEdit(self):
-            return _LineEditStub()
-
-        def setCompleter(self, completer):
-            self._completer = completer
-
-        def completer(self):
-            return self._completer
-
-        def showPopup(self):
-            return None
-
-        def blockSignals(self, blocked):
-            return True
-
-    aqt_qt.QFrame = _Frame
-    aqt_qt.QComboBox = QComboBox
-    aqt_qt.QCompleter = QCompleter
-    aqt_qt.QStringListModel = QStringListModel
-    aqt_qt.Qt = Qt
-
-    aqt_utils = types.ModuleType("aqt.utils")
-    aqt_utils.showInfo = MagicMock()
-    aqt_utils.showWarning = MagicMock()
-    aqt_utils.tooltip = MagicMock()
-
-    sys.modules["aqt"] = aqt
-    sys.modules["aqt.qt"] = aqt_qt
-    sys.modules["aqt.utils"] = aqt_utils
-
-
-def _ensure_package(name: str, path: Path) -> None:
-    if name in sys.modules:
-        return
-    module = types.ModuleType(name)
-    module.__path__ = [str(path)]
-    sys.modules[name] = module
-
-
-def _load_addon_module(relative: str):
-    """Load an addon submodule without executing __init__.py."""
-    _install_anki_mocks()
-    _ensure_package(PACKAGE, ADDON_DIR)
-    if relative.startswith("ui."):
-        _ensure_package(f"{PACKAGE}.ui", ADDON_DIR / "ui")
-
-    module_name = relative.split(".")[-1]
-    file_path = ADDON_DIR / relative.replace(".", "/").replace(f"ui/", "ui/") 
-    if not str(file_path).endswith(".py"):
-        file_path = ADDON_DIR / Path(relative.replace(".", "/") + ".py")
-
-    full_name = f"{PACKAGE}.{relative}"
-    spec = importlib.util.spec_from_file_location(full_name, file_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(full_name)
-    module = importlib.util.module_from_spec(spec)
-    module.__package__ = full_name.rpartition(".")[0]
-    sys.modules[full_name] = module
-    spec.loader.exec_module(module)
-    return module
+_load_addon_module = load_addon_module
 
 
 class TestGeminiClient(unittest.TestCase):
@@ -863,6 +599,221 @@ class TestConfig(unittest.TestCase):
         self.assertFalse(
             fn({"suppress_default_system_instruction_warning": False}, "suppress_default_system_instruction_warning")
         )
+
+
+class TestOptimizeFlow(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.opt = _load_addon_module("ui.optimize")
+        cls.aqt_utils = sys.modules["aqt.utils"]
+        cls.qdialog = sys.modules["aqt.qt"].QDialog
+
+    def setUp(self):
+        self.opt._last_undo.clear()
+        self.aqt_utils.showInfo.reset_mock()
+        self.aqt_utils.showWarning.reset_mock()
+        self.aqt_utils.tooltip.reset_mock()
+
+    def _base_config(self) -> dict:
+        return {
+            "language": "en",
+            "api_key": "test-key",
+            "model_optimize": "gemini-2.5-flash-lite",
+            "thinking_budget_optimize": 0,
+            "temperature_optimize": 0.1,
+            "confirm_before_apply": False,
+            "suppress_default_system_instruction_warning": True,
+            "system_instruction": "Custom rules",
+            "system_instruction_shared": True,
+        }
+
+    def _make_editor(self, *, fields=None, field_index=0):
+        editor = MagicMock()
+        editor.currentField = field_index
+        editor.note.fields = list(fields or ["<p>Original</p>"])
+        editor.loadNoteKeepingFocus = MagicMock()
+        editor.parentWindow = MagicMock()
+        return editor
+
+    def test_optimize_requires_focused_field(self):
+        editor = self._make_editor()
+        editor.currentField = None
+        with patch.object(self.opt, "load_config", return_value=self._base_config()):
+            self.opt.optimize_field_with_gemini(editor)
+        self.aqt_utils.showInfo.assert_called_once()
+
+    def test_optimize_requires_non_empty_field(self):
+        editor = self._make_editor(fields=[""])
+        with patch.object(self.opt, "load_config", return_value=self._base_config()):
+            self.opt.optimize_field_with_gemini(editor)
+        self.aqt_utils.showInfo.assert_called_once()
+
+    def test_optimize_requires_api_key(self):
+        editor = self._make_editor()
+        config = self._base_config()
+        config["api_key"] = ""
+        with patch.object(self.opt, "load_config", return_value=config):
+            self.opt.optimize_field_with_gemini(editor)
+        self.aqt_utils.showInfo.assert_called_once()
+
+    def test_optimize_applies_result_without_preview(self):
+        editor = self._make_editor()
+        with patch.object(self.opt, "load_config", return_value=self._base_config()):
+            with patch.object(self.opt, "call_gemini", return_value="<p>Optimized</p>"):
+                self.opt.optimize_field_with_gemini(editor)
+        self.assertEqual(editor.note.fields[0], "<p>Optimized</p>")
+        self.assertTrue(self.aqt_utils.tooltip.called)
+
+    def test_optimize_preview_cancelled_keeps_original(self):
+        editor = self._make_editor()
+        config = self._base_config()
+        config["confirm_before_apply"] = True
+        future = MagicMock(result=MagicMock(return_value="<p>Optimized</p>"))
+        with patch.object(self.opt, "PreviewDialog") as preview_cls:
+            preview_cls.return_value.exec.return_value = self.qdialog.DialogCode.Rejected
+            self.opt._handle_optimize_result(future, editor, 0, "<p>Original</p>", config)
+        self.assertEqual(editor.note.fields[0], "<p>Original</p>")
+
+    def test_optimize_preview_accepted_applies_result(self):
+        editor = self._make_editor()
+        config = self._base_config()
+        config["confirm_before_apply"] = True
+        future = MagicMock(result=MagicMock(return_value="<p>Optimized</p>"))
+        with patch.object(self.opt, "PreviewDialog") as preview_cls:
+            preview_cls.return_value.exec.return_value = self.qdialog.DialogCode.Accepted
+            self.opt._handle_optimize_result(future, editor, 0, "<p>Original</p>", config)
+        self.assertEqual(editor.note.fields[0], "<p>Optimized</p>")
+
+    def test_undo_restores_previous_field_content(self):
+        editor = self._make_editor()
+        self.opt.store_undo(editor, 0, "<p>Before</p>")
+        editor.note.fields[0] = "<p>After</p>"
+        with patch.object(self.opt, "load_config", return_value=self._base_config()):
+            self.opt.undo_last_optimization(editor)
+        self.assertEqual(editor.note.fields[0], "<p>Before</p>")
+        editor.loadNoteKeepingFocus.assert_called_once()
+
+    def test_undo_without_history_shows_info(self):
+        editor = self._make_editor()
+        with patch.object(self.opt, "load_config", return_value=self._base_config()):
+            self.opt.undo_last_optimization(editor)
+        self.aqt_utils.showInfo.assert_called_once()
+
+
+class TestSettingsLogic(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.settings = _load_addon_module("ui.settings_dialog")
+        cls.config_mod = _load_addon_module("config")
+
+    def _dialog_shell(self):
+        dialog = MagicMock()
+        dialog._saved_api_key = "stored-key"
+        dialog.config = {"language": "en", "api_key": "stored-key"}
+        dialog._ui_config = lambda: {"language": "en"}
+        dialog.api_key_input = MagicMock()
+        dialog.api_key_input.text.return_value = ""
+        dialog.timeout_input = MagicMock()
+        dialog.timeout_input.value.return_value = 30
+        return dialog
+
+    def test_config_for_api_keeps_saved_key_when_input_empty(self):
+        dialog = self._dialog_shell()
+        config = self.settings.SettingsDialog._config_for_api(dialog)
+        self.assertEqual(config["api_key"], "stored-key")
+
+    def test_config_for_api_uses_typed_key_when_present(self):
+        dialog = self._dialog_shell()
+        dialog.api_key_input.text.return_value = "new-key"
+        config = self.settings.SettingsDialog._config_for_api(dialog)
+        self.assertEqual(config["api_key"], "new-key")
+
+    def test_enter_restore_mode_leaves_api_key_unchecked(self):
+        dialog = MagicMock()
+        dialog._all_restore_checked = True
+        dialog._restore_checkboxes = {
+            key: MagicMock() for key in self.config_mod.RESTORABLE_SETTING_KEYS
+        }
+        dialog.stack = MagicMock()
+        dialog._set_subpage_mode = MagicMock()
+
+        self.settings.SettingsDialog._enter_restore_mode(dialog)
+
+        api_checkbox = dialog._restore_checkboxes["api_key"]
+        api_checkbox.setChecked.assert_called_once_with(False)
+        for key, checkbox in dialog._restore_checkboxes.items():
+            if key != "api_key":
+                checkbox.setChecked.assert_called_with(True)
+
+    def test_selected_restore_keys_returns_checked_only(self):
+        dialog = MagicMock()
+        checked = MagicMock()
+        checked.isChecked.return_value = True
+        unchecked = MagicMock()
+        unchecked.isChecked.return_value = False
+        dialog._restore_checkboxes = {
+            "temperature_optimize": checked,
+            "temperature_chat": unchecked,
+        }
+        selected = self.settings.SettingsDialog._selected_restore_keys(dialog)
+        self.assertEqual(selected, ["temperature_optimize"])
+
+
+class TestGeminiHttpIntegration(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.gc = _load_addon_module("gemini_client")
+
+    def _base_config(self) -> dict:
+        return {
+            "language": "en",
+            "api_key": "test-key",
+            "model_chat": "gemini-2.5-flash",
+            "model_optimize": "gemini-2.5-flash-lite",
+            "timeout_seconds": 5,
+            "max_retries": 2,
+            "thinking_budget_chat": -1,
+            "thinking_budget_optimize": 0,
+        }
+
+    def test_call_gemini_success(self):
+        response = MagicMock(ok=True, status_code=200, text="")
+        response.json.return_value = {
+            "candidates": [
+                {
+                    "finishReason": "STOP",
+                    "content": {"parts": [{"text": "OK"}]},
+                }
+            ]
+        }
+        with patch.object(self.gc.requests, "post", return_value=response) as post:
+            result = self.gc.call_gemini(config=self._base_config(), user_text="ping")
+        self.assertEqual(result, "OK")
+        self.assertEqual(post.call_count, 1)
+
+    def test_call_gemini_rate_limit_not_retried(self):
+        response = MagicMock(ok=False, status_code=429, text="Too Many Requests")
+        with patch.object(self.gc.requests, "post", return_value=response) as post:
+            with self.assertRaises(self.gc.GeminiRateLimitError):
+                self.gc.call_gemini(config=self._base_config(), user_text="ping")
+        self.assertEqual(post.call_count, 1)
+
+    def test_call_gemini_server_error_retried(self):
+        bad = MagicMock(ok=False, status_code=500, text="Server error")
+        good = MagicMock(ok=True, status_code=200, text="")
+        good.json.return_value = {
+            "candidates": [
+                {
+                    "finishReason": "STOP",
+                    "content": {"parts": [{"text": "Recovered"}]},
+                }
+            ]
+        }
+        with patch.object(self.gc.requests, "post", side_effect=[bad, bad, good]) as post:
+            with patch.object(self.gc.time, "sleep"):
+                result = self.gc.call_gemini(config=self._base_config(), user_text="ping")
+        self.assertEqual(result, "Recovered")
+        self.assertEqual(post.call_count, 3)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@ meta.json
 config_gemini.json
 *.local.json
 .env
-.env.*
+.env.local
+.env.*.local
 .envrc
 secrets.json
 credentials.json
