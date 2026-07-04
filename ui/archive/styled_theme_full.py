@@ -1,17 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-import html
 from dataclasses import dataclass
-
-from aqt.qt import (
-    QColor,
-    QFrame,
-    QPalette,
-    QScrollArea,
-    Qt,
-    QTextEdit,
-    QWidget,
-)
 
 try:
     from aqt.theme import theme_manager
@@ -111,15 +100,6 @@ def muted_hint_html(text: str, *, colors: ThemeColors | None = None) -> str:
     return f"<span style='font-size: 11px; color: {palette.text_muted};'>{text}</span>"
 
 
-def strong_label_html(text: str, *, colors: ThemeColors | None = None) -> str:
-    palette = colors or get_theme_colors()
-    return f"<b style='color: {palette.text_strong};'>{text}</b>"
-
-
-def field_name_label_html(name: str, *, colors: ThemeColors | None = None) -> str:
-    return strong_label_html(html.escape(name), colors=colors)
-
-
 def panel_widget_stylesheet(*, colors: ThemeColors | None = None) -> str:
     palette = colors or get_theme_colors()
     return (
@@ -149,155 +129,6 @@ def loading_label_stylesheet(*, colors: ThemeColors | None = None) -> str:
     return f"color: {palette.msg_loading}; font-weight: bold; padding: 4px;"
 
 
-def wrapper_warning_stylesheet(*, colors: ThemeColors | None = None) -> str:
-    palette = colors or get_theme_colors()
-    return (
-        f"background-color: {palette.msg_loading}; "
-        f"color: {palette.chat_surface_bg}; "
-        "font-size: 11px; font-weight: bold; "
-        "padding: 4px 10px; border-radius: 4px;"
-    )
-
-
-PANEL_BORDER_RADIUS = 4
-
-
-def scrollbar_stylesheet(
-    *,
-    track_bg: str,
-    colors: ThemeColors | None = None,
-    include_corner: bool = True,
-) -> str:
-    palette = colors or get_theme_colors()
-    rules = (
-        f"QScrollBar:vertical {{"
-        f" background: {track_bg};"
-        " width: 12px;"
-        " margin: 0px;"
-        " border: none;"
-        "}"
-        f"QScrollBar::handle:vertical {{"
-        f" background: {palette.border};"
-        " min-height: 24px;"
-        " border-radius: 4px;"
-        " margin: 2px;"
-        "}"
-        f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{"
-        " height: 0px;"
-        " border: none;"
-        " background: transparent;"
-        "}"
-        f"QScrollBar:horizontal {{"
-        f" background: {track_bg};"
-        " height: 12px;"
-        " margin: 0px;"
-        " border: none;"
-        "}"
-        f"QScrollBar::handle:horizontal {{"
-        f" background: {palette.border};"
-        " min-width: 24px;"
-        " border-radius: 4px;"
-        " margin: 2px;"
-        "}"
-        f"QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{"
-        " width: 0px;"
-        " border: none;"
-        " background: transparent;"
-        "}"
-    )
-    if include_corner:
-        rules += (
-            "QAbstractScrollArea::corner {"
-            " background: transparent; border: none;"
-            "}"
-        )
-    return rules
-
-
-def apply_native_text_edit_surface_theme(editor: QTextEdit) -> None:
-    palette = get_theme_colors()
-    surface = palette.chat_surface_bg
-    surface_color = QColor(surface)
-    text_color = QColor(palette.text)
-    editor.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-    editor.setAutoFillBackground(True)
-    editor.setFrameShape(QFrame.Shape.NoFrame)
-    epal = editor.palette()
-    epal.setColor(QPalette.ColorRole.Base, surface_color)
-    epal.setColor(QPalette.ColorRole.Window, surface_color)
-    epal.setColor(QPalette.ColorRole.Text, text_color)
-    editor.setPalette(epal)
-    editor.setStyleSheet(
-        "QTextEdit {"
-        f" background-color: {surface};"
-        f" color: {palette.text};"
-        " border: none;"
-        " padding: 4px;"
-        "}"
-    )
-    viewport = editor.viewport()
-    if viewport is not None:
-        viewport.setAutoFillBackground(True)
-        vpal = viewport.palette()
-        vpal.setColor(QPalette.ColorRole.Base, surface_color)
-        viewport.setPalette(vpal)
-        viewport.setStyleSheet(f"background-color: {surface};")
-
-
-def apply_native_fields_scroll_theme(panel: QWidget, scroll: QScrollArea) -> None:
-    """Rounded border scroll area for imported note preview field lists."""
-    from aqt.qt import QFrame
-
-    palette = get_theme_colors()
-    border = "#000000" if not is_night_mode() else palette.border
-    radius = PANEL_BORDER_RADIUS
-    panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-    panel.setAutoFillBackground(False)
-    panel.setStyleSheet(
-        "QWidget#nativeFieldsPanel {"
-        " background: transparent;"
-        " border: none;"
-        "}"
-    )
-    scroll.setFrameShape(QFrame.Shape.NoFrame)
-    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-    scroll.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-    viewport = scroll.viewport()
-    if viewport is not None:
-        viewport.setAutoFillBackground(False)
-        viewport.setStyleSheet("background: transparent;")
-    scroll.setStyleSheet(
-        _fields_scroll_inner_stylesheet(border=border, radius=radius, palette=palette)
-    )
-
-
-# Backward-compatible alias used by chat context panel.
-apply_context_fields_panel_theme = apply_native_fields_scroll_theme
-
-
-def _fields_scroll_inner_stylesheet(*, border: str | None, radius: int, palette) -> str:
-    border_rule = ""
-    if border is not None:
-        border_rule = f" border: 1px solid {border}; border-radius: {radius}px;"
-    return (
-        "QScrollArea {"
-        " background: transparent;"
-        f"{border_rule}"
-        "}"
-        + scrollbar_stylesheet(track_bg="transparent", colors=palette)
-        + (
-            "QScrollBar:horizontal {"
-            " height: 0px; min-height: 0px; max-height: 0px;"
-            " margin: 0px; padding: 0px; border: none; background: transparent;"
-            "}"
-            "QAbstractScrollArea::corner {"
-            " width: 0px; height: 0px;"
-            "}"
-        )
-    )
-
-
 def info_button_stylesheet() -> str:
     return """
 QPushButton {
@@ -315,26 +146,10 @@ QPushButton {
 """
 
 
-def visibility_toggle_button_stylesheet(*, size: int = 24) -> str:
-    radius = size // 2
-    return f"""
-QPushButton {{
-    padding: 0px;
-    margin: 0px;
-    min-width: {size}px;
-    max-width: {size}px;
-    min-height: {size}px;
-    max-height: {size}px;
-    border: 1px solid palette(mid);
-    border-radius: {radius}px;
-}}
-"""
-
-
 def chat_document_stylesheet(*, colors: ThemeColors | None = None) -> str:
     palette = colors or get_theme_colors()
     return (
-        f"body {{ color: {palette.text}; background: {palette.chat_surface_bg}; }}"
+        f"body {{ color: {palette.text}; }}"
         f"p {{ margin: 6px 0; }}"
         f"b, strong {{ font-weight: bold; color: {palette.text_strong}; }}"
         f"i, em {{ font-style: italic; }}"
@@ -358,14 +173,14 @@ def chat_document_stylesheet(*, colors: ThemeColors | None = None) -> str:
         f".chat-code-block {{ margin: 10px 0; border: 1px solid {palette.code_block_border}; "
         f"border-radius: 6px; background-color: {palette.code_block_bg}; padding: 8px; }}"
         f".chat-code-label {{ color: {palette.code_label}; }}"
-        f".chat-code-copy {{ color: {palette.link}; text-decoration: none; font-size: 15px; }}"
+        f".chat-code-copy {{ color: {palette.link}; text-decoration: none; margin-left: 8px; }}"
         f".chat-code-pre {{ margin: 0; white-space: pre-wrap; word-wrap: break-word; "
         f"font-family: Consolas, monospace; font-size: 11px; color: {palette.text}; "
         f"background-color: {palette.code_pre_bg}; padding: 8px; border-radius: 4px; }}"
-        f".chat-message-wrap {{ border-collapse: collapse; margin: 0; padding: 0; }}"
+        f".chat-preview-panel {{ border-collapse: collapse; }}"
+        f".chat-after-preview {{ display: block; margin: 0; padding: 0; height: 0; }}"
         f".chat-code-block .chat-field-content, .chat-code-block .chat-field-content * "
         f"{{ background-color: transparent; }}"
-        f".chat-field-content {{ white-space: pre-wrap; word-wrap: break-word; }}"
         f".chat-field-content p, .chat-field-content div, "
         f".chat-field-content ol, .chat-field-content ul {{ "
         f"margin-top: 0px; margin-bottom: 4px; padding-top: 0px; }}"
@@ -377,11 +192,6 @@ def chat_document_stylesheet(*, colors: ThemeColors | None = None) -> str:
         f"padding: 1px 4px; border-radius: 3px; }}"
         f"hr {{ border: none; border-top: 1px solid {palette.border}; margin: 12px 0; }}"
     )
-
-
-def refresh_native_text_edits_in(host: QWidget) -> None:
-    for editor in host.findChildren(QTextEdit):
-        apply_native_text_edit_surface_theme(editor)
 
 
 def refresh_addon_theme() -> None:

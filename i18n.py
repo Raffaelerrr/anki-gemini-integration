@@ -297,30 +297,56 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Select at least one setting to restore.",
     },
     "settings.restore_warnings": {
-        "it": "Ripristina avvisi",
-        "en": "Restore warnings",
+        "it": "Avvisi",
+        "en": "Warnings",
+    },
+    "settings.warnings": {
+        "it": "Avvisi",
+        "en": "Warnings",
     },
     "settings.restore_warnings.title": {
-        "it": "Ripristina avvisi ignorati",
-        "en": "Restore dismissed warnings",
+        "it": "Avvisi",
+        "en": "Warnings",
+    },
+    "settings.warnings.title": {
+        "it": "Avvisi",
+        "en": "Warnings",
     },
     "settings.restore_warnings.hint": {
         "it": (
-            "Seleziona gli avvisi da mostrare di nuovo. Gli avvisi attualmente ignorati "
-            "sono già selezionati."
+            "Ripristina gli avvisi ignorati o attiva quelli nuovi. Gli avvisi attualmente "
+            "ignorati sono già selezionati."
         ),
         "en": (
-            "Select the warnings to show again. Currently dismissed warnings are "
-            "pre-selected."
+            "Restore dismissed warnings or activate new ones. Currently dismissed warnings "
+            "are pre-selected."
+        ),
+    },
+    "settings.warnings.hint": {
+        "it": (
+            "Ripristina gli avvisi ignorati o attiva quelli nuovi. Gli avvisi attualmente "
+            "ignorati sono già selezionati."
+        ),
+        "en": (
+            "Restore dismissed warnings or activate new ones. Currently dismissed warnings "
+            "are pre-selected."
         ),
     },
     "settings.restore_warnings.apply": {
-        "it": "Ripristina selezionati",
-        "en": "Restore selected",
+        "it": "Applica selezionati",
+        "en": "Apply selected",
+    },
+    "settings.warnings.apply": {
+        "it": "Applica selezionati",
+        "en": "Apply selected",
     },
     "settings.restore_warnings.none_selected": {
-        "it": "Seleziona almeno un avviso da ripristinare.",
-        "en": "Select at least one warning to restore.",
+        "it": "Seleziona almeno un avviso.",
+        "en": "Select at least one warning.",
+    },
+    "settings.warnings.none_selected": {
+        "it": "Seleziona almeno un avviso.",
+        "en": "Select at least one warning.",
     },
     "settings.restore_warnings.none_dismissed": {
         "it": "Nessun avviso è attualmente ignorato.",
@@ -374,14 +400,16 @@ _STRINGS: dict[str, dict[str, str]] = {
             "<b>Messaggi utente</b> (con storico fino a «Storico chat (turni)»):<br>"
             "• Di solito: solo ciò che scrivi nella chat<br>"
             "• Con «Includi contesto nota» dopo import 🧠: "
-            "<b>wrapper contesto nota</b> (Avanzate) con segnaposto "
+            "<b>wrapper contesto nota</b> (Avanzate, o «Modifica wrapper» nella chat) con segnaposto "
             "<code>{context}</code> (campi nota) e <code>{request}</code> (tuo messaggio). "
-            "Ogni campo in <code>{context}</code> è ancora formattato come "
+            "I campi in <code>{context}</code> provengono dall'anteprima modificabile sopra la chat; "
+            "ogni campo è formattato come "
             "<code>Campo [Nome]:</code> + HTML grezzo.<br>"
             "Se il wrapper personalizzato omette un segnaposto, si usa il modello predefinito.<br><br>"
-            "<b>Non inviato a Gemini</b>: anteprima HTML nella chat, messaggio di benvenuto, "
+            "<b>Non inviato a Gemini</b>: messaggio di benvenuto, "
             "nome del campo nel messaggio normale.<br><br>"
-            "<b>Messaggio import 🧠</b>: precompila la casella di input; viene inviato come messaggio "
+            "<b>Messaggio import 🧠</b>: precompila la casella di input; i campi nota compaiono "
+            "nell'anteprima sopra la chat (modificabile). Il messaggio viene inviato come messaggio "
             "utente normale (eventualmente avvolto dal wrapper contesto).<br><br>"
             "<b>Prefisso regole dinamiche</b>: il predefinito inizia con due a capo (<code>\\n\\n</code>) "
             "e termina con uno. In un prefisso personalizzato, includi tu stesso gli a capo "
@@ -410,14 +438,16 @@ _STRINGS: dict[str, dict[str, str]] = {
             "<b>User messages</b> (with history up to “Chat history (turns)”):<br>"
             "• Usually: only what you type in chat<br>"
             "• With “include note context” after 🧠 import: "
-            "<b>note context wrapper</b> (Advanced) with placeholders "
+            "<b>note context wrapper</b> (Advanced, or <b>Edit wrapper</b> in chat) with placeholders "
             "<code>{context}</code> (note fields) and <code>{request}</code> (your message). "
-            "Each field inside <code>{context}</code> is still formatted as "
+            "Fields in <code>{context}</code> come from the editable preview above the chat; "
+            "each field is formatted as "
             "<code>Field [Name]:</code> + raw HTML.<br>"
             "If a custom wrapper omits a placeholder, the default template is used.<br><br>"
-            "<b>Not sent to Gemini</b>: HTML preview in chat, welcome message, "
+            "<b>Not sent to Gemini</b>: welcome message, "
             "field name in a normal message.<br><br>"
-            "<b>🧠 import message</b>: pre-fills the input box; it is sent as a normal user message "
+            "<b>🧠 import message</b>: pre-fills the input box; note fields appear in the "
+            "editable preview above the chat. The message is sent as a normal user message "
             "(optionally wrapped by the note context wrapper).<br><br>"
             "<b>Dynamic rules prefix</b>: the default starts with two line breaks (<code>\\n\\n</code>) "
             "and ends with one. In a custom prefix, include line breaks before/after your text yourself, "
@@ -599,11 +629,15 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.help.prompt_chat_context": {
         "it": (
             "Modello del messaggio utente quando invii in chat con «Includi contesto nota» dopo import 🧠. "
-            "Segnaposto: <code>{context}</code>, <code>{request}</code>. Modificabile in <b>Avanzate…</b>."
+            "Segnaposto: <code>{context}</code>, <code>{request}</code>. "
+            "Modificabile in <b>Avanzate…</b> o temporaneamente con «Modifica wrapper» nella chat "
+            "(i campi nota si modificano nell'anteprima sopra la chat)."
         ),
         "en": (
             "User message template when you send chat with “include note context” after 🧠 import. "
-            "Placeholders: <code>{context}</code>, <code>{request}</code>. Editable under <b>Advanced…</b>."
+            "Placeholders: <code>{context}</code>, <code>{request}</code>. "
+            "Editable under <b>Advanced…</b> or temporarily via <b>Edit wrapper</b> in chat "
+            "(note fields are edited in the preview above the chat)."
         ),
     },
     "settings.help.temperature_optimize": {
@@ -640,14 +674,16 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
     "settings.help.brain_import_message": {
         "it": (
-            "Testo inserito automaticamente nella chat quando importi una nota con il bottone 🧠. "
-            "Puoi personalizzarlo per chiedere sempre la stessa analisi (es. atomicità, "
+            "Testo inserito automaticamente nella casella di input quando importi una nota con il bottone 🧠. "
+            "I campi nota compaiono nell'anteprima modificabile sopra la chat. "
+            "Puoi personalizzare il messaggio per chiedere sempre la stessa analisi (es. atomicità, "
             "semplificazione, ecc.). Lascia il testo predefinito per usare il messaggio "
             "standard nella lingua scelta."
         ),
         "en": (
-            "Text automatically inserted in chat when you import a note with the 🧠 button. "
-            "Customize it to always ask the same kind of analysis (e.g. atomicity, "
+            "Text automatically inserted in the input box when you import a note with the 🧠 button. "
+            "Note fields appear in the editable preview above the chat. "
+            "Customize the message to always ask the same kind of analysis (e.g. atomicity, "
             "simplification). Keep the default text to use the standard message "
             "in your selected language."
         ),
@@ -807,6 +843,46 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Includi contesto nota nel prossimo messaggio",
         "en": "Include note context in the next message",
     },
+    "chat.edit_context": {
+        "it": "Modifica wrapper",
+        "en": "Edit wrapper",
+    },
+    "chat.edit_wrapper": {
+        "it": "Modifica wrapper",
+        "en": "Edit wrapper",
+    },
+    "chat.edit_wrapper.wrapper_label": {
+        "it": "Testo wrapper ({context}, {request}):",
+        "en": "Wrapper text ({context}, {request}):",
+    },
+    "chat.edit_wrapper.wrapper_hint": {
+        "it": "Il tuo messaggio in basso sostituisce {request}.",
+        "en": "Your message below replaces {request}.",
+    },
+    "chat.edit_wrapper.wrapper_invalid": {
+        "it": "Formato wrapper errato. Ripristino predefiniti.",
+        "en": "The wrapper format is wrong. Reverting to defaults.",
+    },
+    "chat.edit_context.fields_label": {
+        "it": "Campi nota (modificabili nell'anteprima sopra la chat):",
+        "en": "Note fields (editable in the preview above the chat):",
+    },
+    "chat.edit_context.note_label": {
+        "it": "Contenuto nota inviato come {context} (modificabile nell'anteprima):",
+        "en": "Note content sent as {context} (editable in the preview):",
+    },
+    "chat.edit_context.wrapper_label": {
+        "it": "Testo wrapper ({context}, {request}):",
+        "en": "Wrapper text ({context}, {request}):",
+    },
+    "chat.edit_context.wrapper_hint": {
+        "it": "Il tuo messaggio in basso sostituisce {request}.",
+        "en": "Your message below replaces {request}.",
+    },
+    "chat.edit_context.wrapper_invalid": {
+        "it": "Formato wrapper errato. Ripristino predefiniti.",
+        "en": "The wrapper format is wrong. Reverting to defaults.",
+    },
     "chat.new_conversation": {
         "it": "Nuova conversazione",
         "en": "New conversation",
@@ -844,6 +920,14 @@ _STRINGS: dict[str, dict[str, str]] = {
     "chat.note_imported": {
         "it": "Contenuto della nota importato con successo!",
         "en": "Note content imported successfully!",
+    },
+    "chat.preview.hide_imported_note": {
+        "it": "Nascondi nota importata",
+        "en": "Hide imported note",
+    },
+    "chat.preview.show_imported_note": {
+        "it": "Mostra nota importata",
+        "en": "Show imported note",
     },
     "chat.api_key_missing": {
         "it": "Errore: API Key mancante (⚙️).",
@@ -1022,6 +1106,54 @@ _STRINGS: dict[str, dict[str, str]] = {
     "warnings.api_key_restore": {
         "it": "Avviso: ripristino chiave API",
         "en": "API key restore warning",
+    },
+    "warnings.settings_unsaved_close": {
+        "it": "Avviso: modifiche non salvate alla chiusura delle impostazioni",
+        "en": "Unsaved settings warning when closing",
+    },
+    "warnings.settings_save_confirm": {
+        "it": "Avviso: conferma salvataggio impostazioni",
+        "en": "Confirm save settings warning",
+    },
+    "warnings.settings_cancel_confirm": {
+        "it": "Avviso: conferma annullamento modifiche impostazioni",
+        "en": "Confirm cancel settings changes warning",
+    },
+    "settings.unsaved_close.title": {
+        "it": "Modifiche non salvate",
+        "en": "Unsaved changes",
+    },
+    "settings.unsaved_close.message": {
+        "it": "Hai modifiche non salvate nelle impostazioni.",
+        "en": "You have unsaved changes in Settings.",
+    },
+    "settings.unsaved_close.detail": {
+        "it": "Chiudere senza salvare?",
+        "en": "Close without saving?",
+    },
+    "settings.save_confirm.title": {
+        "it": "Salvare le modifiche?",
+        "en": "Save changes?",
+    },
+    "settings.save_confirm.message": {
+        "it": "Hai modificato le impostazioni.",
+        "en": "You made changes to the settings.",
+    },
+    "settings.save_confirm.detail": {
+        "it": "Salvare le modifiche?",
+        "en": "Save your changes?",
+    },
+    "settings.cancel_confirm.title": {
+        "it": "Annullare le modifiche?",
+        "en": "Cancel changes?",
+    },
+    "settings.cancel_confirm.message": {
+        "it": "Hai modifiche non salvate.",
+        "en": "You have unsaved changes.",
+    },
+    "settings.cancel_confirm.detail": {
+        "it": "Annullare senza salvare?",
+        "en": "Discard your changes?",
     },
     # Chat formatter
     "formatter.copy": {
@@ -1258,16 +1390,24 @@ def normalize_chat_context_wrapper_for_save(text: str) -> str:
     return _normalize_prompt_for_save(text, "instructions.chat_context_wrapper")
 
 
+def chat_context_wrapper_missing_placeholders(text: str | None) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    return "{context}" not in stripped or "{request}" not in stripped
+
+
 def format_chat_context_message(
     config: dict[str, Any] | None,
     *,
     context: str,
     request: str,
+    template: str | None = None,
 ) -> str:
-    template = effective_chat_context_wrapper(config)
-    if "{context}" not in template or "{request}" not in template:
-        template = default_chat_context_wrapper(config)
-    return template.format(context=context, request=request)
+    resolved = (template or "").strip() or effective_chat_context_wrapper(config)
+    if "{context}" not in resolved or "{request}" not in resolved:
+        resolved = default_chat_context_wrapper(config)
+    return resolved.format(context=context, request=request)
 
 
 def _builtin_system_instructions() -> frozenset[str]:

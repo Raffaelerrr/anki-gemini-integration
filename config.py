@@ -45,6 +45,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "prompt_chat_context": "",
     "suppress_default_system_instruction_warning": False,
     "suppress_api_key_restore_warning": False,
+    "suppress_settings_unsaved_close_warning": False,
+    "suppress_settings_save_confirm_warning": True,
+    "suppress_settings_cancel_confirm_warning": True,
 }
 
 RESTORABLE_SETTING_KEYS: tuple[str, ...] = (
@@ -107,11 +110,17 @@ SETTING_HELP_KEYS: dict[str, str] = {
 DISMISSIBLE_WARNING_KEYS: tuple[str, ...] = (
     "suppress_default_system_instruction_warning",
     "suppress_api_key_restore_warning",
+    "suppress_settings_unsaved_close_warning",
+    "suppress_settings_save_confirm_warning",
+    "suppress_settings_cancel_confirm_warning",
 )
 
 DISMISSIBLE_WARNING_LABELS: dict[str, str] = {
     "suppress_default_system_instruction_warning": "warnings.default_system_instruction",
     "suppress_api_key_restore_warning": "warnings.api_key_restore",
+    "suppress_settings_unsaved_close_warning": "warnings.settings_unsaved_close",
+    "suppress_settings_save_confirm_warning": "warnings.settings_save_confirm",
+    "suppress_settings_cancel_confirm_warning": "warnings.settings_cancel_confirm",
 }
 
 

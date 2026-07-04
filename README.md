@@ -34,6 +34,8 @@ Imports **all fields** of the current note into chat and asks Gemini whether the
 
 Streaming chat with Markdown replies. When Gemini suggests Anki field content, **copy buttons** appear on code blocks. Also in **Tools → Chat with Gemini**.
 
+After **🧠 note import**, imported fields appear in an **editable preview** above the chat log (eye icon to show/hide). Check **Include note context in the next message** to wrap your next send with the note fields; use **Edit wrapper** to adjust the `{context}` / `{request}` template for that session. Field edits in the preview are included when context is sent.
+
 ### Settings (`⚙️`)
 
 - **API key**, models, thinking budgets, temperatures, timeouts

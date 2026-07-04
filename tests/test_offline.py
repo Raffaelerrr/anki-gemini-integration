@@ -307,6 +307,18 @@ class TestI18n(unittest.TestCase):
         msg = self.i18n.tr("chat.error", config=config, error="timeout")
         self.assertEqual(msg, "Error: timeout")
 
+    def test_edit_wrapper_strings(self):
+        en = {"language": "en"}
+        it = {"language": "it"}
+        self.assertEqual(self.i18n.tr("chat.edit_wrapper", config=en), "Edit wrapper")
+        self.assertEqual(self.i18n.tr("chat.edit_wrapper", config=it), "Modifica wrapper")
+        self.assertEqual(
+            self.i18n.tr("chat.edit_context", config=en),
+            self.i18n.tr("chat.edit_wrapper", config=en),
+        )
+        self.assertIn("{context}", self.i18n.tr("chat.edit_wrapper.wrapper_label", config=en))
+        self.assertIn("{request}", self.i18n.tr("chat.edit_wrapper.wrapper_hint", config=en))
+
     def test_normalize_language(self):
         self.assertEqual(self.i18n.normalize_language("en"), "en")
         self.assertEqual(self.i18n.normalize_language("EN"), "en")
@@ -375,6 +387,16 @@ class TestI18n(unittest.TestCase):
             "Note:\nField [Front]:\nHi\nAsk: Split this?",
         )
 
+    def test_format_chat_context_message_accepts_explicit_template(self):
+        config = {"language": "en", "prompt_chat_context": "ignored"}
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="Field [Front]:\nHi",
+            request="Split this?",
+            template="Note:\n{context}\nAsk: {request}",
+        )
+        self.assertEqual(result, "Note:\nField [Front]:\nHi\nAsk: Split this?")
+
     def test_format_chat_context_message_falls_back_without_placeholders(self):
         config = {"language": "en", "prompt_chat_context": "Missing placeholders"}
         result = self.i18n.format_chat_context_message(
@@ -385,6 +407,16 @@ class TestI18n(unittest.TestCase):
         self.assertIn("ctx", result)
         self.assertIn("req", result)
         self.assertIn("[FULL NOTE CONTEXT TO ANALYZE]", result)
+
+    def test_chat_context_wrapper_missing_placeholders(self):
+        fn = self.i18n.chat_context_wrapper_missing_placeholders
+        self.assertFalse(fn(""))
+        self.assertFalse(fn("   "))
+        self.assertFalse(fn("Note:\n{context}\nAsk: {request}"))
+        self.assertTrue(fn("Note:\n{context}"))
+        self.assertTrue(fn("Ask: {request}"))
+        self.assertTrue(fn("{contex} and {request}"))
+        self.assertTrue(fn("{context} and {reques}"))
 
     def test_effective_system_instruction_uses_language_default(self):
         english_default = self.i18n.default_system_instruction({"language": "en"})
@@ -475,10 +507,22 @@ class TestChatFormatter(unittest.TestCase):
             text, store, "t1", config={"language": "en"}
         )
         self.assertIn("copy:t1-0", html_out)
-        self.assertIn("Copy", html_out)
-        self.assertIn("chat-html-endcap", html_out)
+        self.assertIn("chat-code-copy", html_out)
+        self.assertIn("⧉", html_out)
+        self.assertNotIn(">Copy<", html_out)
+        self.assertNotIn("chat-html-endcap", html_out)
         self.assertIn("<table class='chat-code-block'", html_out)
         self.assertEqual(store["t1-0"], "<b>Hi</b>")
+
+    def test_format_reply_legacy_endcap(self):
+        html_out = self.fmt.format_gemini_reply_html(
+            "Hello",
+            {},
+            "t1",
+            config={"language": "en"},
+            endcap=True,
+        )
+        self.assertIn("chat-html-endcap", html_out)
 
     def test_format_reply_empty(self):
         self.assertEqual(
@@ -495,6 +539,21 @@ class TestChatFormatter(unittest.TestCase):
         )
         self.assertIn("chat-prose", html_out)
         self.assertNotIn("#e0e0e0", html_out)
+
+    def test_short_reply_and_user_message_html_for_chat_lines(self):
+        """Full-document chat omits per-reply endcaps; user lines never include them."""
+        reply = self.fmt.format_gemini_reply_html(
+            "You're welcome! I'm glad I could help.",
+            {},
+            "r1",
+            config={"language": "en"},
+        )
+        user = "<br><b class='chat-label-you'>You:</b> Thank you"
+        self.assertNotIn("chat-hr", user)
+        self.assertNotIn("chat-html-endcap", user)
+        self.assertNotIn("<hr", user.lower())
+        self.assertNotIn("chat-html-endcap", reply)
+        self.assertNotIn("chat-hr", reply)
 
 
 class TestTheme(unittest.TestCase):
@@ -516,6 +575,16 @@ class TestTheme(unittest.TestCase):
         html_out = self.theme.muted_hint_html("Hint text")
         self.assertIn("Hint text", html_out)
         self.assertIn(self.theme._LIGHT.text_muted, html_out)
+
+    def test_strong_label_html(self):
+        html_out = self.theme.strong_label_html("Wrapper text")
+        self.assertIn("Wrapper text", html_out)
+        self.assertIn(self.theme._LIGHT.text_strong, html_out)
+
+    def test_field_name_label_html_escapes_name(self):
+        html_out = self.theme.field_name_label_html("Text <field>")
+        self.assertIn("Text &lt;field&gt;", html_out)
+        self.assertIn(self.theme._LIGHT.text_strong, html_out)
 
 
 class TestModelSelector(unittest.TestCase):
@@ -540,7 +609,7 @@ class TestModelSelector(unittest.TestCase):
         self.assertEqual(self.ms.filter_model_choices(all_models, ""), all_models)
 
     def test_create_model_selector_keeps_custom_value(self):
-        combo = self.ms.create_model_selector(
+        _, combo = self.ms.create_model_selector(
             None,
             current="gemini-custom-preview",
             default="gemini-2.5-flash-lite",
@@ -549,7 +618,7 @@ class TestModelSelector(unittest.TestCase):
         self.assertEqual(self.ms.model_selector_value(combo), "gemini-custom-preview")
 
     def test_update_model_selector_choices_merges_api_models(self):
-        combo = self.ms.create_model_selector(
+        _, combo = self.ms.create_model_selector(
             None,
             current="gemini-2.5-flash",
             default="gemini-2.5-flash-lite",
@@ -570,56 +639,82 @@ class TestChatDialogHelpers(unittest.TestCase):
     def setUpClass(cls):
         cls.chat = _load_addon_module("ui.chat_dialog")
 
+    def test_format_note_context(self):
+        fn = self.chat._format_note_context
+        config = {"language": "en"}
+        text = fn([("Front", "Hello"), ("Back", "World")], config)
+        self.assertIn("Field [Front]:\nHello", text)
+        self.assertIn("Field [Back]:\nWorld", text)
+        self.assertEqual(fn([("Front", "  ")], config), "")
+
+
+class TestNoteFields(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.note_fields = _load_addon_module("ui.note_fields")
+
     def test_strip_field_html_edges(self):
-        fn = self.chat._strip_field_html_edges
+        fn = self.note_fields.strip_field_html_edges
         self.assertEqual(fn("<p>Hi</p><br>"), "<p>Hi</p>")
         self.assertEqual(fn("  <div>Text</div>  "), "<div>Text</div>")
 
     def test_field_inner_html_renders_inline_tags(self):
-        fn = self.chat._field_inner_html
+        fn = self.note_fields.field_inner_html
         self.assertEqual(
             fn("Definisci la struttura algebrica di <b>gruppo</b>."),
             "Definisci la struttura algebrica di <b>gruppo</b>.",
         )
         self.assertEqual(fn("plain text only"), "plain text only")
         self.assertEqual(fn("x < 5"), "x &lt; 5")
+        self.assertEqual(fn("line one\nline two"), "line one<br>line two")
+
+    def test_field_inner_html_closes_unclosed_markup(self):
+        fn = self.note_fields.field_inner_html
+        self.assertTrue(fn("<div><p>Hello").endswith("</p></div>"))
+
+
+class TestChatLogRenderer(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.renderer = _load_addon_module("ui.chat_log_renderer")
+        cls.messages = _load_addon_module("ui.chat_messages")
+
+    def test_render_chat_document_wraps_messages(self):
+        html = self.renderer.render_chat_document(
+            [
+                self.messages.ChatMessage(
+                    label_class="chat-label-you",
+                    label="You",
+                    body_html="Hi",
+                ),
+                self.messages.ChatMessage(
+                    label_class="chat-label-gemini",
+                    label="Gemini",
+                    body_html="Hello",
+                ),
+            ]
+        )
+        self.assertIn("chat-message-wrap", html)
+        self.assertIn("chat-label-you", html)
+        self.assertIn("chat-label-gemini", html)
+        self.assertNotIn("chat-html-endcap", html)
+
+
+class TestHtmlUtils(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.html_utils = _load_addon_module("ui.html_utils")
 
     def test_closing_tags_suffix_balances_tables_and_divs(self):
-        html_utils = _load_addon_module("ui.html_utils")
-        fn = html_utils.closing_tags_suffix
+        fn = self.html_utils.closing_tags_suffix
         self.assertEqual(fn("<div><table><tr><td>x"), "</td></tr></table></div>")
         self.assertEqual(fn("<p>Hi"), "</p>")
         self.assertEqual(fn("<div><p>Hi</p>"), "</div>")
 
-    def test_field_inner_html_closes_unclosed_markup(self):
-        fn = self.chat._field_inner_html
-        self.assertTrue(fn("<div><p>Hello").endswith("</p></div>"))
-
-    def test_build_field_preview_block_uses_table_bgcolor(self):
-        fn = self.chat._build_field_preview_block
-        block = fn("Front", "Hello", first=True)
-        self.assertIn("<table class='chat-code-block'", block)
-        self.assertIn("bgcolor='#e8eaf6'", block)
-        self.assertIn("bgcolor='#f3f4f6'", block)
-        self.assertIn("<b class='chat-code-label'>Front:</b>", block)
-        self.assertNotIn("<br>", block)
-        spaced = fn("Back", "World", first=False)
-        self.assertTrue(spaced.startswith("<br>"))
-
-    def test_build_note_preview_html_closes_unclosed_divs(self):
-        blocks = [
-            (
-                "<table class='chat-code-block'><tr><td class='chat-field-content'>"
-                "<div><p>x</p>"
-            ),
-        ]
-        html = self.chat._build_note_preview_html(blocks)
-        self.assertTrue(html.startswith("<br><table class='chat-preview-panel'"))
-        self.assertIn("bgcolor='#7b1fa2'", html)
-        self.assertIn("<table class='chat-html-endcap'", html)
-        self.assertIn("bgcolor='#ffffff'", html)
-        self.assertEqual(html.count("<div"), html.count("</div>"))
-        self.assertEqual(html.count("<table"), html.count("</table>"))
+    def test_html_endcap_uses_taller_spacer(self):
+        endcap = self.html_utils.html_endcap()
+        self.assertIn("line-height:4px", endcap)
+        self.assertIn("chat-html-endcap", endcap)
 
 
 class TestConfig(unittest.TestCase):
@@ -666,6 +761,9 @@ class TestConfig(unittest.TestCase):
             - {
                 "suppress_default_system_instruction_warning",
                 "suppress_api_key_restore_warning",
+                "suppress_settings_unsaved_close_warning",
+                "suppress_settings_save_confirm_warning",
+                "suppress_settings_cancel_confirm_warning",
             },
         )
 
@@ -715,6 +813,12 @@ class TestConfig(unittest.TestCase):
             "suppress_default_system_instruction_warning",
             self.config.RESTORABLE_SETTING_KEYS,
         )
+
+    def test_default_config_warning_preferences(self):
+        defaults = self.config.DEFAULT_CONFIG
+        self.assertFalse(defaults["suppress_settings_unsaved_close_warning"])
+        self.assertTrue(defaults["suppress_settings_save_confirm_warning"])
+        self.assertTrue(defaults["suppress_settings_cancel_confirm_warning"])
 
     def test_dismissed_warning_keys(self):
         self.assertEqual(

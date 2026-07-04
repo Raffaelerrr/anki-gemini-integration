@@ -6,7 +6,7 @@ from aqt.qt import QComboBox, QCompleter, QStringListModel, Qt, QWidget
 
 from ..constants import GEMINI_MODEL_CHOICES
 from ..i18n import tr
-from .widgets import NoWheelComboBox
+from .settings_compact_controls import create_settings_model_selector_shell
 
 MAX_VISIBLE_MODELS = 12
 _ALL_MODELS_PROP = "_gemini_all_models"
@@ -78,8 +78,8 @@ def create_model_selector(
     current: str,
     default: str,
     config: dict[str, Any],
-) -> QComboBox:
-    combo = NoWheelComboBox(parent)
+) -> tuple[QWidget, QComboBox]:
+    shell, combo = create_settings_model_selector_shell(parent)
     combo.setEditable(True)
     combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
     combo.setMaxVisibleItems(MAX_VISIBLE_MODELS)
@@ -102,7 +102,7 @@ def create_model_selector(
         completer.setMaxVisibleItems(MAX_VISIBLE_MODELS)
         combo.setCompleter(completer)
 
-    return combo
+    return shell, combo
 
 
 def _update_completer_models(combo: QComboBox, items: list[str]) -> None:

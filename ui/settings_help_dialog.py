@@ -25,7 +25,14 @@ def _make_info_button(parent: QWidget, config: dict[str, Any]) -> QPushButton:
     button = QPushButton("i", parent)
     button.setToolTip(tr("settings.help.info_tooltip", config=config))
     button.setStyleSheet(info_button_stylesheet())
+    button.setAutoDefault(False)
+    button.setDefault(False)
     return button
+
+
+def _set_dialog_default_button(button: QPushButton) -> None:
+    button.setAutoDefault(True)
+    button.setDefault(True)
 
 
 class SettingsHelpDialog(QDialog):
@@ -33,6 +40,7 @@ class SettingsHelpDialog(QDialog):
         super().__init__(parent)
         self.config = config
         self._info_buttons: list[QPushButton] = []
+        self.silentlyClose = True
         self.setWindowTitle(tr("settings.help.title", config=config))
         self.setWindowFlags(
             Qt.WindowType.Window
@@ -52,10 +60,13 @@ class SettingsHelpDialog(QDialog):
 
         close_row = QHBoxLayout()
         close_row.addStretch(1)
-        btn_close = QPushButton(tr("settings.help.close", config=config), self)
-        btn_close.clicked.connect(self.accept)
-        close_row.addWidget(btn_close)
+        self.btn_close = QPushButton(tr("settings.help.close", config=config), self)
+        self.btn_close.clicked.connect(self.accept)
+        close_row.addWidget(self.btn_close)
         root.addLayout(close_row)
+
+        self._default_buttons = (self.btn_overview, self.btn_back, self.btn_close)
+        self._set_help_page("list")
 
     def _build_list_page(self) -> QWidget:
         page = QWidget(self)
@@ -65,9 +76,11 @@ class SettingsHelpDialog(QDialog):
         self.intro_label = QLabel(muted_hint_html(tr("settings.help.intro", config=self.config)))
         outer.addWidget(self.intro_label)
 
-        btn_overview = QPushButton(tr("settings.help.prompts_overview.link", config=self.config), page)
-        btn_overview.clicked.connect(self._show_prompts_overview)
-        outer.addWidget(btn_overview)
+        self.btn_overview = QPushButton(tr("settings.help.prompts_overview.link", config=self.config), page)
+        self.btn_overview.setAutoDefault(False)
+        self.btn_overview.setDefault(False)
+        self.btn_overview.clicked.connect(self._show_prompts_overview)
+        outer.addWidget(self.btn_overview)
 
         outer.addWidget(QLabel("<br>"))
 
@@ -112,13 +125,28 @@ class SettingsHelpDialog(QDialog):
         self.detail_body.setFrameShape(QFrame.Shape.NoFrame)
         layout.addWidget(self.detail_body, 1)
 
-        btn_back = QPushButton(tr("settings.help.back", config=self.config), page)
-        btn_back.clicked.connect(self._show_list)
-        layout.addWidget(btn_back)
+        self.btn_back = QPushButton(tr("settings.help.back", config=self.config), page)
+        self.btn_back.setAutoDefault(False)
+        self.btn_back.setDefault(False)
+        self.btn_back.clicked.connect(self._show_list)
+        layout.addWidget(self.btn_back)
         return page
+
+    def _clear_default_buttons(self) -> None:
+        for button in self._default_buttons:
+            button.setAutoDefault(False)
+            button.setDefault(False)
+
+    def _set_help_page(self, page: str) -> None:
+        self._clear_default_buttons()
+        if page == "list":
+            _set_dialog_default_button(self.btn_close)
+        else:
+            _set_dialog_default_button(self.btn_back)
 
     def _show_list(self) -> None:
         self.stack.setCurrentIndex(0)
+        self._set_help_page("list")
 
     def _show_prompts_overview(self) -> None:
         self.detail_title.setText(
@@ -126,6 +154,7 @@ class SettingsHelpDialog(QDialog):
         )
         self.detail_body.setHtml(tr("settings.help.prompts_overview", config=self.config))
         self.stack.setCurrentIndex(1)
+        self._set_help_page("detail")
 
     def _show_detail(self, setting_key: str) -> None:
         label_key = RESTORABLE_SETTING_LABELS.get(setting_key, setting_key)
@@ -133,6 +162,7 @@ class SettingsHelpDialog(QDialog):
         self.detail_title.setText(f"<b>{tr(label_key, config=self.config)}</b>")
         self.detail_body.setHtml(tr(help_key, config=self.config))
         self.stack.setCurrentIndex(1)
+        self._set_help_page("detail")
 
     def apply_theme(self) -> None:
         self.intro_label.setText(muted_hint_html(tr("settings.help.intro", config=self.config)))

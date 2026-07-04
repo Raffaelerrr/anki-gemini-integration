@@ -97,6 +97,10 @@ def _passes_optimize_warnings(editor, config: dict[str, Any]) -> bool:
 
 
 def _handle_optimize_result(future, editor, field_index: int, original: str, config: dict[str, Any]) -> None:
+    from .window_lifecycle import is_shutting_down
+
+    if is_shutting_down():
+        return
     try:
         result = future.result()
         optimized = strip_markdown_fences(result)

@@ -108,6 +108,14 @@ Without a key, tests are **skipped** (exit code 0) — that is expected in CI.
 
 Automated tests cannot click editor buttons or verify scroll behavior. After UI work, do a short manual pass in Anki (optimize, chat, settings save, restore defaults).
 
+### Chat (after import / preview changes)
+
+1. Open a note → **🧠** — fields appear in the preview above the chat; edit a field and send with **Include note context** checked.
+2. **Edit wrapper** — wrapper editor appears; invalid placeholders show a warning; uncheck saves the template for the session.
+3. Eye icon — hides/shows the preview without losing edits.
+4. Switch Anki **light/dark** theme — preview labels, text areas, and eye icon remain readable.
+5. Switch add-on language **EN/IT** — checkbox labels, tooltips, and wrapper hints update.
+
 ---
 
 ## Troubleshooting

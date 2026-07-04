@@ -4,6 +4,7 @@ from typing import Any
 
 from aqt.qt import (
     QCheckBox,
+    QCloseEvent,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -71,16 +72,19 @@ from .model_selector import (
     set_model_selector_value,
     update_model_selector_choices,
 )
-from .widgets import (
-    NoWheelComboBox,
-    NoWheelDoubleSpinBox,
-    NoWheelSpinBox,
-    ScrollAwareTextEdit,
+from .settings_compact_controls import (
+    create_settings_combo,
+    create_settings_double_spinbox,
+    create_settings_line_edit,
+    create_settings_spinbox,
+    create_settings_text_edit,
 )
+from .widgets import ScrollAwareTextEdit
 from .theme import (
     muted_hint_html,
     panel_content_html,
     panel_widget_stylesheet,
+    refresh_native_text_edits_in,
     status_color_stylesheet,
 )
 
@@ -100,6 +104,15 @@ def _setup_footer_button(button: QPushButton, *, tooltip: str) -> None:
     button.setToolTip(tooltip)
     button.setStyleSheet(_FOOTER_BUTTON_STYLE)
     button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+    button.setAutoDefault(False)
+    button.setDefault(False)
+
+
+def _set_dialog_default_button(button: QPushButton | None) -> None:
+    """Assign dialog default (Enter) to one visible footer button."""
+    if button is not None:
+        button.setAutoDefault(True)
+        button.setDefault(True)
 
 
 class SettingsDialog(QDialog):
@@ -113,6 +126,9 @@ class SettingsDialog(QDialog):
         self._all_warnings_checked = True
         self._model_refresh_busy = False
         self._settings_help_dialog = None
+        self._force_shutdown = False
+        self.silentlyClose = True
+        self.setWindowModality(Qt.WindowModality.NonModal)
 
         self.setWindowTitle(tr("settings.title", config=config))
         self.setWindowFlags(
@@ -144,11 +160,11 @@ class SettingsDialog(QDialog):
             self.btn_restore_mode,
             tooltip=tr("settings.restore_defaults", config=config),
         )
-        self.btn_restore_warnings = QPushButton(tr("settings.restore_warnings", config=config), self)
+        self.btn_restore_warnings = QPushButton(tr("settings.warnings", config=config), self)
         self.btn_restore_warnings.clicked.connect(self._enter_restore_warnings_mode)
         _setup_footer_button(
             self.btn_restore_warnings,
-            tooltip=tr("settings.restore_warnings", config=config),
+            tooltip=tr("settings.warnings", config=config),
         )
         self.btn_settings_help = QPushButton(tr("settings.info", config=config), self)
         self.btn_settings_help.clicked.connect(self._open_settings_help)
@@ -177,7 +193,7 @@ class SettingsDialog(QDialog):
             tooltip=tr("settings.save", config=config),
         )
         self.btn_cancel = QPushButton(tr("settings.cancel", config=config), self)
-        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_cancel.clicked.connect(self._cancel_and_reject)
         _setup_footer_button(
             self.btn_cancel,
             tooltip=tr("settings.cancel", config=config),
@@ -224,11 +240,11 @@ class SettingsDialog(QDialog):
             self.btn_warnings_toggle_all,
             tooltip=tr("settings.restore.toggle_all", config=config),
         )
-        self.btn_apply_warning_restore = QPushButton(tr("settings.restore_warnings.apply", config=config), self)
+        self.btn_apply_warning_restore = QPushButton(tr("settings.warnings.apply", config=config), self)
         self.btn_apply_warning_restore.clicked.connect(self._apply_selected_warning_restores)
         _setup_footer_button(
             self.btn_apply_warning_restore,
-            tooltip=tr("settings.restore_warnings.apply", config=config),
+            tooltip=tr("settings.warnings.apply", config=config),
         )
         self.btn_warnings_back = QPushButton(tr("settings.restore.back", config=config), self)
         self.btn_warnings_back.clicked.connect(self._leave_restore_warnings_mode)
@@ -254,7 +270,39 @@ class SettingsDialog(QDialog):
         self._advanced_btn_layout.addWidget(self.btn_advanced_back)
         root.addLayout(self._advanced_btn_layout)
 
+        self._default_footer_buttons = (
+            self.btn_save,
+            self.btn_apply_restore,
+            self.btn_apply_warning_restore,
+            self.btn_advanced_back,
+        )
+
         self._set_subpage_mode(None)
+        self._baseline_config = self._collect_pending_config()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._force_shutdown:
+            super().closeEvent(event)
+            return
+        if not self._confirm_close_if_needed():
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+    def reject(self) -> None:
+        if self._force_shutdown:
+            super().reject()
+            return
+        if not self._confirm_cancel_if_needed():
+            return
+        super().reject()
+
+    def force_shutdown(self) -> None:
+        self._force_shutdown = True
+        if self._settings_help_dialog is not None:
+            self._settings_help_dialog.close()
+            self._settings_help_dialog = None
+        self.reject()
 
     def _build_form_page(self) -> QWidget:
         config = self.config
@@ -269,7 +317,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(4, 4, 4, 4)
 
         layout.addWidget(QLabel(f"<b>{tr('settings.language', config=config)}</b>"))
-        self.language_combo = NoWheelComboBox(form_host)
+        language_shell, self.language_combo = create_settings_combo(form_host)
         self.language_combo.addItem(tr("settings.language.it", config=config), LANG_IT)
         self.language_combo.addItem(tr("settings.language.en", config=config), LANG_EN)
         current_lang = (self.config.get("language") or DEFAULT_LANGUAGE).lower()
@@ -277,7 +325,7 @@ class SettingsDialog(QDialog):
         if index >= 0:
             self.language_combo.setCurrentIndex(index)
         self.language_combo.currentIndexChanged.connect(self._on_language_changed)
-        layout.addWidget(self.language_combo)
+        layout.addWidget(language_shell)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.api_key', config=config)}</b>"))
         saved_key = (self.config.get("api_key") or "").strip()
@@ -285,38 +333,42 @@ class SettingsDialog(QDialog):
         self.api_key_status = QLabel(form_host)
         self._update_api_key_status()
         layout.addWidget(self.api_key_status)
-        self.api_key_input = QLineEdit(form_host)
+        api_key_shell, self.api_key_input = create_settings_line_edit(form_host)
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         if saved_key:
             self.api_key_input.setPlaceholderText(tr("settings.api_key.placeholder.saved", config=config))
         else:
             self.api_key_input.setPlaceholderText(tr("settings.api_key.placeholder.empty", config=config))
-        layout.addWidget(self.api_key_input)
+        layout.addWidget(api_key_shell)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.model_optimize', config=config)}</b>"))
         optimize_row = QHBoxLayout()
-        self.model_optimize_input = create_model_selector(
+        model_optimize_shell, self.model_optimize_input = create_model_selector(
             form_host,
             current=self.config.get("model_optimize", DEFAULT_MODEL_OPTIMIZE),
             default=DEFAULT_MODEL_OPTIMIZE,
             config=config,
         )
-        optimize_row.addWidget(self.model_optimize_input, stretch=1)
+        optimize_row.addWidget(model_optimize_shell, stretch=1)
         self.btn_refresh_optimize_models = QPushButton(tr("settings.model.refresh", config=config), form_host)
+        self.btn_refresh_optimize_models.setAutoDefault(False)
+        self.btn_refresh_optimize_models.setDefault(False)
         self.btn_refresh_optimize_models.clicked.connect(self._refresh_models_from_api)
         optimize_row.addWidget(self.btn_refresh_optimize_models)
         layout.addLayout(optimize_row)
 
         layout.addWidget(QLabel(f"<b>{tr('settings.model_chat', config=config)}</b>"))
         chat_row = QHBoxLayout()
-        self.model_chat_input = create_model_selector(
+        model_chat_shell, self.model_chat_input = create_model_selector(
             form_host,
             current=self.config.get("model_chat", DEFAULT_MODEL_CHAT),
             default=DEFAULT_MODEL_CHAT,
             config=config,
         )
-        chat_row.addWidget(self.model_chat_input, stretch=1)
+        chat_row.addWidget(model_chat_shell, stretch=1)
         self.btn_refresh_chat_models = QPushButton(tr("settings.model.refresh", config=config), form_host)
+        self.btn_refresh_chat_models.setAutoDefault(False)
+        self.btn_refresh_chat_models.setDefault(False)
         self.btn_refresh_chat_models.clicked.connect(self._refresh_models_from_api)
         chat_row.addWidget(self.btn_refresh_chat_models)
         layout.addLayout(chat_row)
@@ -328,20 +380,20 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.thinking_budget_hint)
         thinking_row = QHBoxLayout()
         thinking_row.addWidget(QLabel(tr("settings.thinking_budget_optimize", config=config)))
-        self.thinking_budget_optimize_input = NoWheelSpinBox(form_host)
+        thinking_optimize_shell, self.thinking_budget_optimize_input = create_settings_spinbox(form_host)
         self.thinking_budget_optimize_input.setRange(-1, 24576)
         self.thinking_budget_optimize_input.setValue(
             int(self.config.get("thinking_budget_optimize", DEFAULT_THINKING_BUDGET_OPTIMIZE))
         )
-        thinking_row.addWidget(self.thinking_budget_optimize_input)
+        thinking_row.addWidget(thinking_optimize_shell)
 
         thinking_row.addWidget(QLabel(tr("settings.thinking_budget_chat", config=config)))
-        self.thinking_budget_chat_input = NoWheelSpinBox(form_host)
+        thinking_chat_shell, self.thinking_budget_chat_input = create_settings_spinbox(form_host)
         self.thinking_budget_chat_input.setRange(-1, 24576)
         self.thinking_budget_chat_input.setValue(
             int(self.config.get("thinking_budget_chat", DEFAULT_THINKING_BUDGET_CHAT))
         )
-        thinking_row.addWidget(self.thinking_budget_chat_input)
+        thinking_row.addWidget(thinking_chat_shell)
         layout.addLayout(thinking_row)
 
         self.chat_streaming_checkbox = QCheckBox(tr("settings.chat_streaming", config=config), form_host)
@@ -350,38 +402,38 @@ class SettingsDialog(QDialog):
 
         params_row = QHBoxLayout()
         params_row.addWidget(QLabel(tr("settings.timeout", config=config)))
-        self.timeout_input = NoWheelSpinBox(form_host)
+        timeout_shell, self.timeout_input = create_settings_spinbox(form_host)
         self.timeout_input.setRange(5, 120)
         self.timeout_input.setValue(int(self.config.get("timeout_seconds", 30)))
-        params_row.addWidget(self.timeout_input)
+        params_row.addWidget(timeout_shell)
 
         params_row.addWidget(QLabel(tr("settings.max_retry", config=config)))
-        self.retries_input = NoWheelSpinBox(form_host)
+        retries_shell, self.retries_input = create_settings_spinbox(form_host)
         self.retries_input.setRange(0, 5)
         self.retries_input.setValue(int(self.config.get("max_retries", 2)))
-        params_row.addWidget(self.retries_input)
+        params_row.addWidget(retries_shell)
 
         params_row.addWidget(QLabel(tr("settings.chat_history", config=config)))
-        self.history_input = NoWheelSpinBox(form_host)
+        history_shell, self.history_input = create_settings_spinbox(form_host)
         self.history_input.setRange(0, 100)
         self.history_input.setValue(int(self.config.get("max_history_turns", 10)))
-        params_row.addWidget(self.history_input)
+        params_row.addWidget(history_shell)
         layout.addLayout(params_row)
 
         temp_row = QHBoxLayout()
         temp_row.addWidget(QLabel(tr("settings.temp_optimize", config=config)))
-        self.temp_optimize_input = NoWheelDoubleSpinBox(form_host)
+        temp_optimize_shell, self.temp_optimize_input = create_settings_double_spinbox(form_host)
         self.temp_optimize_input.setRange(0.0, 2.0)
         self.temp_optimize_input.setSingleStep(0.1)
         self.temp_optimize_input.setValue(float(self.config.get("temperature_optimize", 0.1)))
-        temp_row.addWidget(self.temp_optimize_input)
+        temp_row.addWidget(temp_optimize_shell)
 
         temp_row.addWidget(QLabel(tr("settings.temp_chat", config=config)))
-        self.temp_chat_input = NoWheelDoubleSpinBox(form_host)
+        temp_chat_shell, self.temp_chat_input = create_settings_double_spinbox(form_host)
         self.temp_chat_input.setRange(0.0, 2.0)
         self.temp_chat_input.setSingleStep(0.1)
         self.temp_chat_input.setValue(float(self.config.get("temperature_chat", 0.2)))
-        temp_row.addWidget(self.temp_chat_input)
+        temp_row.addWidget(temp_chat_shell)
         layout.addLayout(temp_row)
 
         self.confirm_checkbox = QCheckBox(tr("settings.confirm_preview", config=config), form_host)
@@ -394,11 +446,11 @@ class SettingsDialog(QDialog):
             form_host,
         )
         layout.addWidget(self.brain_message_hint)
-        self.brain_message_input = ScrollAwareTextEdit(form_host)
+        brain_shell, self.brain_message_input = create_settings_text_edit(form_host)
         self.brain_message_input.setMinimumHeight(70)
         self.brain_message_input.setMaximumHeight(120)
         self.brain_message_input.setPlainText(effective_brain_import_message(self.config))
-        layout.addWidget(self.brain_message_input)
+        layout.addWidget(brain_shell)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.system_instruction', config=config)}</b>"))
         self.instruction_shared_checkbox = QCheckBox(
@@ -412,9 +464,9 @@ class SettingsDialog(QDialog):
         self.instruction_shared_host = QWidget(form_host)
         shared_instruction_layout = QVBoxLayout(self.instruction_shared_host)
         shared_instruction_layout.setContentsMargins(0, 0, 0, 0)
-        self.instruction_input = ScrollAwareTextEdit(self.instruction_shared_host)
+        instruction_shell, self.instruction_input = create_settings_text_edit(self.instruction_shared_host)
         self.instruction_input.setMinimumHeight(140)
-        shared_instruction_layout.addWidget(self.instruction_input)
+        shared_instruction_layout.addWidget(instruction_shell)
 
         self.instruction_split_host = QWidget(form_host)
         split_instruction_layout = QVBoxLayout(self.instruction_split_host)
@@ -424,17 +476,21 @@ class SettingsDialog(QDialog):
             self.instruction_split_host,
         )
         split_instruction_layout.addWidget(self.instruction_optimize_label)
-        self.instruction_optimize_input = ScrollAwareTextEdit(self.instruction_split_host)
+        optimize_shell, self.instruction_optimize_input = create_settings_text_edit(
+            self.instruction_split_host,
+        )
         self.instruction_optimize_input.setMinimumHeight(120)
-        split_instruction_layout.addWidget(self.instruction_optimize_input)
+        split_instruction_layout.addWidget(optimize_shell)
         self.instruction_chat_label = QLabel(
             f"<b>{tr('settings.system_instruction_chat', config=config)}</b>",
             self.instruction_split_host,
         )
         split_instruction_layout.addWidget(self.instruction_chat_label)
-        self.instruction_chat_input = ScrollAwareTextEdit(self.instruction_split_host)
+        chat_instr_shell, self.instruction_chat_input = create_settings_text_edit(
+            self.instruction_split_host,
+        )
         self.instruction_chat_input.setMinimumHeight(120)
-        split_instruction_layout.addWidget(self.instruction_chat_input)
+        split_instruction_layout.addWidget(chat_instr_shell)
 
         layout.addWidget(self.instruction_shared_host)
         layout.addWidget(self.instruction_split_host)
@@ -444,11 +500,11 @@ class SettingsDialog(QDialog):
         layout.addWidget(
             QLabel(f"<br><b>{tr('settings.dynamic_instructions', config=config)}</b>")
         )
-        self.dynamic_input = ScrollAwareTextEdit(form_host)
+        dynamic_shell, self.dynamic_input = create_settings_text_edit(form_host)
         self.dynamic_input.setMinimumHeight(100)
         self.dynamic_input.setPlaceholderText(tr("settings.dynamic_placeholder", config=config))
         self.dynamic_input.setPlainText(self.config.get("dynamic_instructions", ""))
-        layout.addWidget(self.dynamic_input)
+        layout.addWidget(dynamic_shell)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.shortcuts', config=config)}</b>"))
         self.shortcuts_panel = QLabel(
@@ -511,9 +567,9 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(host)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        layout.addWidget(QLabel(f"<b>{tr('settings.restore_warnings.title', config=config)}</b>"))
+        layout.addWidget(QLabel(f"<b>{tr('settings.warnings.title', config=config)}</b>"))
         self.restore_warnings_hint_label = QLabel(
-            muted_hint_html(tr("settings.restore_warnings.hint", config=config)),
+            muted_hint_html(tr("settings.warnings.hint", config=config)),
             host,
         )
         layout.addWidget(self.restore_warnings_hint_label)
@@ -556,19 +612,19 @@ class SettingsDialog(QDialog):
         layout.addWidget(
             QLabel(muted_hint_html(tr("settings.prompt_optimize_user.hint", config=config)), host)
         )
-        self.prompt_optimize_user_input = ScrollAwareTextEdit(host)
+        optimize_prompt_shell, self.prompt_optimize_user_input = create_settings_text_edit(host)
         self.prompt_optimize_user_input.setMinimumHeight(100)
         self.prompt_optimize_user_input.setPlainText(effective_optimize_user_prompt(config))
-        layout.addWidget(self.prompt_optimize_user_input)
+        layout.addWidget(optimize_prompt_shell)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.prompt_chat_addon', config=config)}</b>"))
         layout.addWidget(
             QLabel(muted_hint_html(tr("settings.prompt_chat_addon.hint", config=config)), host)
         )
-        self.prompt_chat_addon_input = ScrollAwareTextEdit(host)
+        chat_addon_shell, self.prompt_chat_addon_input = create_settings_text_edit(host)
         self.prompt_chat_addon_input.setMinimumHeight(180)
         self.prompt_chat_addon_input.setPlainText(effective_chat_system_addon(config))
-        layout.addWidget(self.prompt_chat_addon_input)
+        layout.addWidget(chat_addon_shell)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.prompt_dynamic_rules_prefix', config=config)}</b>"))
         layout.addWidget(
@@ -577,19 +633,19 @@ class SettingsDialog(QDialog):
                 host,
             )
         )
-        self.prompt_dynamic_rules_prefix_input = ScrollAwareTextEdit(host)
+        dynamic_prefix_shell, self.prompt_dynamic_rules_prefix_input = create_settings_text_edit(host)
         self.prompt_dynamic_rules_prefix_input.setMinimumHeight(70)
         self.prompt_dynamic_rules_prefix_input.setPlainText(effective_dynamic_rules_prefix(config))
-        layout.addWidget(self.prompt_dynamic_rules_prefix_input)
+        layout.addWidget(dynamic_prefix_shell)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.prompt_chat_context', config=config)}</b>"))
         layout.addWidget(
             QLabel(muted_hint_html(tr("settings.prompt_chat_context.hint", config=config)), host)
         )
-        self.prompt_chat_context_input = ScrollAwareTextEdit(host)
+        context_prompt_shell, self.prompt_chat_context_input = create_settings_text_edit(host)
         self.prompt_chat_context_input.setMinimumHeight(100)
         self.prompt_chat_context_input.setPlainText(effective_chat_context_wrapper(config))
-        layout.addWidget(self.prompt_chat_context_input)
+        layout.addWidget(context_prompt_shell)
 
         layout.addStretch(1)
         scroll.setWidget(host)
@@ -692,8 +748,9 @@ class SettingsDialog(QDialog):
             muted_hint_html(tr("settings.restore.hint", config=config))
         )
         self.restore_warnings_hint_label.setText(
-            muted_hint_html(tr("settings.restore_warnings.hint", config=config))
+            muted_hint_html(tr("settings.warnings.hint", config=config))
         )
+        refresh_native_text_edits_in(self)
         self._update_api_key_status()
         if self._settings_help_dialog is not None:
             self._settings_help_dialog.apply_theme()
@@ -792,6 +849,19 @@ class SettingsDialog(QDialog):
 
         self.btn_advanced_back.setVisible(on_advanced)
 
+        for button in self._default_footer_buttons:
+            button.setAutoDefault(False)
+            button.setDefault(False)
+
+        if on_form:
+            _set_dialog_default_button(self.btn_save)
+        elif on_defaults:
+            _set_dialog_default_button(self.btn_apply_restore)
+        elif on_warnings:
+            _set_dialog_default_button(self.btn_apply_warning_restore)
+        elif on_advanced:
+            _set_dialog_default_button(self.btn_advanced_back)
+
     def _refresh_warning_restore_checkboxes(self) -> None:
         for key, checkbox in self._warning_restore_checkboxes.items():
             checkbox.setChecked(is_warning_dismissed(self.config, key))
@@ -832,8 +902,98 @@ class SettingsDialog(QDialog):
             updated = load_config()
             updated[dismiss_config_key] = True
             save_config(updated)
+            self.config[dismiss_config_key] = True
 
         return True
+
+    def _collect_pending_config(self) -> dict[str, Any]:
+        config = dict(self.config)
+        new_key = self.api_key_input.text().strip()
+        config["language"] = self.language_combo.currentData() or DEFAULT_LANGUAGE
+        config["api_key"] = new_key if new_key else self._saved_api_key
+        config["model_optimize"] = model_selector_value(self.model_optimize_input) or DEFAULT_MODEL_OPTIMIZE
+        config["model_chat"] = model_selector_value(self.model_chat_input) or DEFAULT_MODEL_CHAT
+        config["thinking_budget_optimize"] = self.thinking_budget_optimize_input.value()
+        config["thinking_budget_chat"] = self.thinking_budget_chat_input.value()
+        config["chat_streaming"] = self.chat_streaming_checkbox.isChecked()
+        config.pop("model", None)
+        config.pop("thinking_budget", None)
+        config["timeout_seconds"] = self.timeout_input.value()
+        config["max_retries"] = self.retries_input.value()
+        config["max_history_turns"] = self.history_input.value()
+        config["temperature_optimize"] = self.temp_optimize_input.value()
+        config["temperature_chat"] = self.temp_chat_input.value()
+        config["confirm_before_apply"] = self.confirm_checkbox.isChecked()
+        brain_message = self.brain_message_input.toPlainText().strip()
+        config["brain_import_message"] = normalize_brain_import_message_for_save(
+            brain_message, config
+        )
+        instruction_fields = normalize_system_instruction_fields_for_save(
+            shared=self.instruction_shared_checkbox.isChecked(),
+            shared_text=self.instruction_input.toPlainText(),
+            optimize_text=self.instruction_optimize_input.toPlainText(),
+            chat_text=self.instruction_chat_input.toPlainText(),
+            config=config,
+        )
+        config.update(instruction_fields)
+        config["dynamic_instructions"] = self.dynamic_input.toPlainText()
+        config["prompt_optimize_user"] = normalize_optimize_user_prompt_for_save(
+            self.prompt_optimize_user_input.toPlainText()
+        )
+        config["prompt_chat_addon"] = normalize_chat_system_addon_for_save(
+            self.prompt_chat_addon_input.toPlainText()
+        )
+        config["prompt_dynamic_rules_prefix"] = normalize_dynamic_rules_prefix_for_save(
+            self.prompt_dynamic_rules_prefix_input.toPlainText()
+        )
+        config["prompt_chat_context"] = normalize_chat_context_wrapper_for_save(
+            self.prompt_chat_context_input.toPlainText()
+        )
+        for key in DISMISSIBLE_WARNING_KEYS:
+            config[key] = bool(config.get(key, False))
+        return config
+
+    def _has_unsaved_changes(self) -> bool:
+        return self._collect_pending_config() != self._baseline_config
+
+    def _confirm_close_if_needed(self) -> bool:
+        if not self._has_unsaved_changes():
+            return True
+        if is_warning_dismissed(self.config, "suppress_settings_unsaved_close_warning"):
+            return True
+        return self._confirm_dismissible_warning(
+            title_key="settings.unsaved_close.title",
+            message_key="settings.unsaved_close.message",
+            detail_key="settings.unsaved_close.detail",
+            dismiss_config_key="suppress_settings_unsaved_close_warning",
+        )
+
+    def _confirm_cancel_if_needed(self) -> bool:
+        if not self._has_unsaved_changes():
+            return True
+        if is_warning_dismissed(self.config, "suppress_settings_cancel_confirm_warning"):
+            return True
+        return self._confirm_dismissible_warning(
+            title_key="settings.cancel_confirm.title",
+            message_key="settings.cancel_confirm.message",
+            detail_key="settings.cancel_confirm.detail",
+            dismiss_config_key="suppress_settings_cancel_confirm_warning",
+        )
+
+    def _confirm_save_if_needed(self) -> bool:
+        if not self._has_unsaved_changes():
+            return True
+        if is_warning_dismissed(self.config, "suppress_settings_save_confirm_warning"):
+            return True
+        return self._confirm_dismissible_warning(
+            title_key="settings.save_confirm.title",
+            message_key="settings.save_confirm.message",
+            detail_key="settings.save_confirm.detail",
+            dismiss_config_key="suppress_settings_save_confirm_warning",
+        )
+
+    def _cancel_and_reject(self) -> None:
+        self.reject()
 
     def _confirm_api_key_restore(self) -> bool:
         if not self._saved_api_key:
@@ -1029,7 +1189,7 @@ class SettingsDialog(QDialog):
     def _apply_selected_warning_restores(self) -> None:
         selected = self._selected_warning_restore_keys()
         if not selected:
-            showInfo(tr("settings.restore_warnings.none_selected", config=self._ui_config()))
+            showInfo(tr("settings.warnings.none_selected", config=self._ui_config()))
             return
 
         for key in selected:
@@ -1066,60 +1226,40 @@ class SettingsDialog(QDialog):
             )
 
     def _save_and_accept(self) -> None:
-        new_key = self.api_key_input.text().strip()
-        self.config["language"] = self.language_combo.currentData() or DEFAULT_LANGUAGE
-        self.config["api_key"] = new_key if new_key else self._saved_api_key
-        self.config["model_optimize"] = model_selector_value(self.model_optimize_input) or DEFAULT_MODEL_OPTIMIZE
-        self.config["model_chat"] = model_selector_value(self.model_chat_input) or DEFAULT_MODEL_CHAT
-        self.config["thinking_budget_optimize"] = self.thinking_budget_optimize_input.value()
-        self.config["thinking_budget_chat"] = self.thinking_budget_chat_input.value()
-        self.config["chat_streaming"] = self.chat_streaming_checkbox.isChecked()
-        self.config.pop("model", None)
-        self.config.pop("thinking_budget", None)
-        self.config["timeout_seconds"] = self.timeout_input.value()
-        self.config["max_retries"] = self.retries_input.value()
-        self.config["max_history_turns"] = self.history_input.value()
-        self.config["temperature_optimize"] = self.temp_optimize_input.value()
-        self.config["temperature_chat"] = self.temp_chat_input.value()
-        self.config["confirm_before_apply"] = self.confirm_checkbox.isChecked()
-        brain_message = self.brain_message_input.toPlainText().strip()
-        self.config["brain_import_message"] = normalize_brain_import_message_for_save(
-            brain_message, self.config
-        )
-        instruction_fields = normalize_system_instruction_fields_for_save(
-            shared=self.instruction_shared_checkbox.isChecked(),
-            shared_text=self.instruction_input.toPlainText(),
-            optimize_text=self.instruction_optimize_input.toPlainText(),
-            chat_text=self.instruction_chat_input.toPlainText(),
-            config=self.config,
-        )
-        self.config.update(instruction_fields)
-        self.config["dynamic_instructions"] = self.dynamic_input.toPlainText()
-        self.config["prompt_optimize_user"] = normalize_optimize_user_prompt_for_save(
-            self.prompt_optimize_user_input.toPlainText()
-        )
-        self.config["prompt_chat_addon"] = normalize_chat_system_addon_for_save(
-            self.prompt_chat_addon_input.toPlainText()
-        )
-        self.config["prompt_dynamic_rules_prefix"] = normalize_dynamic_rules_prefix_for_save(
-            self.prompt_dynamic_rules_prefix_input.toPlainText()
-        )
-        self.config["prompt_chat_context"] = normalize_chat_context_wrapper_for_save(
-            self.prompt_chat_context_input.toPlainText()
-        )
-        for key in DISMISSIBLE_WARNING_KEYS:
-            self.config[key] = bool(self.config.get(key, False))
+        if not self._confirm_save_if_needed():
+            return
+
+        self.config = self._collect_pending_config()
         save_config(self.config)
         refresh_chat_language()
         self.accept()
 
 
+def _clear_settings_dialog_ref(_result: int | None = None) -> None:
+    global _settings_dialog
+    _settings_dialog = None
+
+
+def close_settings_dialog(*, force: bool = False) -> None:
+    global _settings_dialog
+    if _settings_dialog is None:
+        return
+    if force:
+        _settings_dialog.force_shutdown()
+    else:
+        _settings_dialog.close()
+
+
 def open_settings_dialog(editor) -> None:
     global _settings_dialog
+    if _settings_dialog is not None and _settings_dialog.isVisible():
+        _settings_dialog.raise_()
+        _settings_dialog.activateWindow()
+        return
     config = load_config()
     _settings_dialog = SettingsDialog(editor.parentWindow, config)
-    _settings_dialog.exec()
-    _settings_dialog = None
+    _settings_dialog.finished.connect(_clear_settings_dialog_ref)
+    _settings_dialog.show()
 
 
 def refresh_settings_theme() -> None:

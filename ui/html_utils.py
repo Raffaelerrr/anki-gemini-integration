@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import html
 import re
-
 _CLOSING_TAG_NAMES = (
     "table",
     "thead",
@@ -50,20 +50,43 @@ def html_endcap() -> str:
     return (
         f"<table class='chat-html-endcap' width='100%' border='0' cellspacing='0' "
         f"cellpadding='0' bgcolor='{reset_bg}'>"
-        f"<tr><td style='font-size:1px;line-height:1px;'>&nbsp;</td></tr>"
+        f"<tr><td style='font-size:4px;line-height:4px;'>&nbsp;</td></tr>"
         f"</table>"
     )
 
 
-def seal_appended_html(html_fragment: str) -> str:
-    """Balance tags and append an endcap so later messages do not inherit backgrounds."""
+def seal_appended_html(html_fragment: str, *, endcap: bool = True) -> str:
+    """Balance tags; optional endcap for legacy incremental HTML append."""
     if not html_fragment:
-        return html_endcap()
-    return html_fragment + closing_tags_suffix(html_fragment) + html_endcap()
+        return html_endcap() if endcap else ""
+    suffix = closing_tags_suffix(html_fragment)
+    if endcap:
+        return html_fragment + suffix + html_endcap()
+    return html_fragment + suffix
 
 
-def render_field_table(
-    header_html: str,
+def render_code_block_header(
+    label_html: str,
+    block_id: str,
+    *,
+    copy_title: str,
+    copy_icon: str = "⧉",
+) -> str:
+    """Header row: label left, copy icon link upper-right (Qt table layout)."""
+    safe_title = html.escape(copy_title, quote=True)
+    return (
+        f"<table class='chat-code-header' width='100%' border='0' cellspacing='0' cellpadding='0'>"
+        f"<tr>"
+        f"<td valign='middle' style='padding:0;'>{label_html}</td>"
+        f"<td valign='middle' align='right' style='padding:0;width:1%;white-space:nowrap;'>"
+        f"<a href='copy:{block_id}' class='chat-code-copy' title='{safe_title}'>{copy_icon}</a>"
+        f"</td>"
+        f"</tr>"
+        f"</table>"
+    )
+
+
+def render_field_table(    header_html: str,
     body_html: str,
     *,
     header_bg: str,

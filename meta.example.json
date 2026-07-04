@@ -24,6 +24,9 @@
         "prompt_dynamic_rules_prefix": "",
         "prompt_chat_context": "",
         "suppress_default_system_instruction_warning": false,
-        "suppress_api_key_restore_warning": false
+        "suppress_api_key_restore_warning": false,
+        "suppress_settings_unsaved_close_warning": false,
+        "suppress_settings_save_confirm_warning": true,
+        "suppress_settings_cancel_confirm_warning": true
     }
 }

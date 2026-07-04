@@ -49,7 +49,7 @@ def _install_anki_mocks() -> None:
             WindowMaximizeButtonHint=4,
             WindowCloseButtonHint=8,
         )
-        WidgetAttribute = _Enum(WA_QuitOnClose=1)
+        WidgetAttribute = _Enum(WA_QuitOnClose=1, WA_StyledBackground=2)
         WindowModality = _Enum(NonModal=0)
         ScrollBarPolicy = _Enum(ScrollBarAlwaysOff=0, ScrollBarAsNeeded=1)
         FocusPolicy = _Enum(StrongFocus=1)
@@ -84,7 +84,16 @@ def _install_anki_mocks() -> None:
         def accept(self):
             return None
 
-        def reject(self):
+        def setDefault(self, *args, **kwargs):
+            return None
+
+        def setIcon(self, *args, **kwargs):
+            return None
+
+        def setIconSize(self, *args, **kwargs):
+            return None
+
+        def setToolTip(self, *args, **kwargs):
             return None
 
     class _CheckBoxStub(_Stub):
@@ -171,6 +180,7 @@ def _install_anki_mocks() -> None:
         ("QObject", _Stub),
         ("QPushButton", _Stub),
         ("QScrollArea", _Stub),
+        ("QSize", _Stub),
         ("QSpinBox", _Stub),
         ("QStackedWidget", _Stub),
         ("QTextBrowser", _Stub),
@@ -205,6 +215,23 @@ def _install_anki_mocks() -> None:
     class _Frame(_Stub):
         class Shape:
             NoFrame = 0
+
+    class QColor(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+    class QPalette(_Stub):
+        class ColorRole:
+            Base = 1
+            Window = 2
+            Text = 3
+            ButtonText = 4
+
+        def setColor(self, *args, **kwargs):
+            return None
+
+        def color(self, *args, **kwargs):
+            return QColor()
 
     class _PopupStub(_Stub):
         def setMaxVisibleItems(self, *args, **kwargs):
@@ -306,6 +333,8 @@ def _install_anki_mocks() -> None:
             return None
 
     aqt_qt.QFrame = _Frame
+    aqt_qt.QColor = QColor
+    aqt_qt.QPalette = QPalette
     aqt_qt.QComboBox = QComboBox
     aqt_qt.QCompleter = QCompleter
     aqt_qt.QStringListModel = QStringListModel

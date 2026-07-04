@@ -5,7 +5,12 @@ from aqt.qt import QAction
 
 from .config import load_config
 from .i18n import tr
-from .ui.chat_dialog import close_chat_window, open_chat
+from .ui.window_lifecycle import (
+    install_main_window_close_handler,
+    reset_shutdown_state,
+    shutdown_addon_windows,
+)
+from .ui.chat_dialog import open_chat
 from .ui.optimize import optimize_field_with_gemini, undo_last_optimization
 from .ui.settings_dialog import open_settings_dialog
 from .ui.theme import refresh_addon_theme
@@ -60,6 +65,7 @@ def add_editor_buttons(buttons, editor) -> None:
 def init_tools_menu() -> None:
     from aqt import mw
 
+    install_main_window_close_handler()
     config = load_config()
     action = QAction(tr("menu.tools.chat", config=config), mw)
     action.setShortcut("Ctrl+Alt+C")
@@ -68,7 +74,11 @@ def init_tools_menu() -> None:
 
 
 def cleanup() -> None:
-    close_chat_window()
+    shutdown_addon_windows(force=True)
+
+
+def _on_profile_did_open() -> None:
+    reset_shutdown_state()
 
 
 def _on_theme_changed() -> None:
@@ -77,5 +87,6 @@ def _on_theme_changed() -> None:
 
 gui_hooks.editor_did_init_buttons.append(add_editor_buttons)
 gui_hooks.main_window_did_init.append(init_tools_menu)
+gui_hooks.profile_did_open.append(_on_profile_did_open)
 gui_hooks.profile_will_close.append(lambda *_: cleanup())
 gui_hooks.theme_did_change.append(_on_theme_changed)

@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+
+- **Chat note import UI** — imported fields are editable in the preview above the chat log; **Edit wrapper** replaces the old “Edit imported context” panel (wrapper template only). Smaller default chat window (`520×520`).
+
+### Fixed
+
+- Field name labels in the imported-note preview follow light/dark theme when Anki’s theme changes.
+
+---
+
 ## [2.0.0] — 2026-07-03
 
 ### Added

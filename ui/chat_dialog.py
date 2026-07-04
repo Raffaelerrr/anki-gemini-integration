@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import html
-import re
 from typing import Any
 
 from aqt import mw
@@ -13,7 +12,6 @@ from aqt.qt import (
     QLabel,
     QPushButton,
     QTextBrowser,
-    QTextCursor,
     QTextEdit,
     Qt,
     QTimer,
@@ -24,7 +22,13 @@ from aqt.qt import (
 from aqt.utils import tooltip
 
 from ..config import api_key_configured, load_config, save_config
-from ..i18n import effective_brain_import_message, format_chat_context_message, tr
+from ..i18n import (
+    chat_context_wrapper_missing_placeholders,
+    effective_brain_import_message,
+    effective_chat_context_wrapper,
+    format_chat_context_message,
+    tr,
+)
 from ..gemini_client import (
     GeminiError,
     call_gemini,
@@ -33,77 +37,28 @@ from ..gemini_client import (
     trim_history,
 )
 from .chat_formatter import format_gemini_reply_html
-from .html_utils import closing_tags_suffix, html_endcap, render_field_table
-from .theme import chat_document_stylesheet, get_theme_colors, loading_label_stylesheet
-
-_TRAILING_EMPTY_HTML = re.compile(
-    r"(?:"
-    r"\s|"
-    r"<br\s*/?>|"
-    r"<p>\s*(?:<br\s*/?>)?\s*</p>|"
-    r"<div>\s*(?:<br\s*/?>)?\s*</div>"
-    r")+$",
-    re.IGNORECASE,
+from .chat_log_renderer import render_chat_document
+from .chat_messages import ChatMessage
+from .note_preview_panel import NotePreviewPanel
+from .settings_compact_controls import create_ui_text_edit
+from .theme import (
+    chat_document_stylesheet,
+    loading_label_stylesheet,
+    muted_hint_html,
+    refresh_native_text_edits_in,
+    strong_label_html,
+    wrapper_warning_stylesheet,
 )
-
-_LEADING_EMPTY_HTML = re.compile(
-    r"^(?:"
-    r"\s|"
-    r"<br\s*/?>|"
-    r"<p>\s*(?:<br\s*/?>|&nbsp;|\u00a0|\s)*</p>|"
-    r"<div>\s*(?:<br\s*/?>|&nbsp;|\u00a0|\s)*</div>"
-    r")+",
-    re.IGNORECASE,
-)
-
-_HTML_TAG = re.compile(r"<\/?[a-zA-Z][^>]*>", re.IGNORECASE)
+from .widgets import bind_text_edit_auto_height
 
 
-def _strip_field_html_edges(value: str) -> str:
-    cleaned = value.strip()
-    while True:
-        new = _LEADING_EMPTY_HTML.sub("", cleaned, count=1)
-        if new == cleaned:
-            break
-        cleaned = new.strip()
-    cleaned = re.sub(r"^(<br\s*/?>|<div>\s*<br\s*/?>\s*</div>|<p>\s*</p>)+", "", cleaned)
-    cleaned = _TRAILING_EMPTY_HTML.sub("", cleaned)
-    return cleaned.strip()
-
-
-def _field_inner_html(value: str) -> str:
-    cleaned = _strip_field_html_edges(value)
-    if _HTML_TAG.search(cleaned):
-        return cleaned + closing_tags_suffix(cleaned)
-    return html.escape(cleaned)
-
-
-def _build_field_preview_block(name: str, inner: str, *, first: bool = False) -> str:
-    palette = get_theme_colors()
-    header = f"<b class='chat-code-label'>{html.escape(name)}:</b>"
-    return render_field_table(
-        header,
-        inner,
-        header_bg=palette.code_block_bg,
-        body_bg=palette.code_pre_bg,
-        body_class="chat-field-content",
-        spacer="" if first else "<br>",
-    )
-
-
-def _build_note_preview_html(field_blocks: list[str]) -> str:
-    inner = "".join(field_blocks)
-    inner += closing_tags_suffix(inner)
-    accent = get_theme_colors().preview_accent
-    return (
-        f"<br><table class='chat-preview-panel' width='100%' border='0' "
-        f"cellspacing='0' cellpadding='0'>"
-        f"<tr>"
-        f"<td bgcolor='{accent}' width='4' "
-        f"style='width:4px;padding:0;font-size:1px;line-height:1px;'>&nbsp;</td>"
-        f"<td style='padding:8px 12px;font-size:11px;'>{inner}</td>"
-        f"</tr></table>{html_endcap()}"
-    )
+def _format_note_context(fields: list[tuple[str, str]], config: dict[str, Any]) -> str:
+    lines: list[str] = []
+    for name, value in fields:
+        if not value.strip():
+            continue
+        lines.append(f"{tr('chat.context.field', config=config, name=name)}\n{value}")
+    return "\n\n".join(lines)
 
 
 class ChatWindow(QWidget):
@@ -117,15 +72,20 @@ class ChatWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self.setWindowModality(Qt.WindowModality.NonModal)
-        self.resize(520, 640)
+        self.silentlyClose = True
+        self.resize(520, 520)
 
         self.api_history: list[dict[str, Any]] = []
         self.note_context: str | None = None
+        self._imported_fields: list[tuple[str, str]] = []
+        self._context_wrapper_template: str | None = None
+        self._messages: list[ChatMessage] = []
         self._loading_phase = 0
         self._copy_blocks: dict[str, str] = {}
         self._copy_counter = 0
-        self._stream_block_start: int | None = None
+        self._streaming_message_index: int | None = None
         self._stream_visible = False
+        self._closing = False
 
         layout = QVBoxLayout(self)
 
@@ -134,23 +94,63 @@ class ChatWindow(QWidget):
         self.context_checkbox.setChecked(False)
         toolbar.addWidget(self.context_checkbox)
 
+        self.edit_wrapper_checkbox = QCheckBox(self)
+        self.edit_wrapper_checkbox.setChecked(False)
+        self.edit_wrapper_checkbox.setEnabled(False)
+        self.edit_wrapper_checkbox.toggled.connect(self._on_edit_wrapper_toggled)
+        toolbar.addWidget(self.edit_wrapper_checkbox)
+
         self.btn_clear = QPushButton(self)
         self.btn_clear.clicked.connect(self.clear_conversation)
         toolbar.addWidget(self.btn_clear)
         layout.addLayout(toolbar)
 
+        self.note_preview_panel = NotePreviewPanel(self)
+        self.note_preview_panel.on_fields_changed = self._sync_note_context_from_preview
+        layout.addWidget(self.note_preview_panel, 0)
+
         self.chat_log = QTextBrowser(self)
         self.chat_log.setOpenLinks(False)
         self.chat_log.setReadOnly(True)
         self.chat_log.anchorClicked.connect(self._on_anchor_clicked)
-        layout.addWidget(self.chat_log)
+        layout.addWidget(self.chat_log, 1)
+
+        self._wrapper_panel = QWidget(self)
+        panel_layout = QVBoxLayout(self._wrapper_panel)
+        panel_layout.setContentsMargins(0, 4, 0, 4)
+        panel_layout.setSpacing(4)
+        wrapper_header = QHBoxLayout()
+        wrapper_header.setContentsMargins(0, 0, 0, 0)
+        self.context_edit_wrapper_label = QLabel(self._wrapper_panel)
+        wrapper_header.addWidget(self.context_edit_wrapper_label)
+        wrapper_header.addStretch(1)
+        self.context_edit_wrapper_warning = QLabel(self._wrapper_panel)
+        self.context_edit_wrapper_warning.setVisible(False)
+        self.context_edit_wrapper_warning.setWordWrap(True)
+        wrapper_header.addWidget(self.context_edit_wrapper_warning)
+        panel_layout.addLayout(wrapper_header)
+        self.context_edit_wrapper_hint = QLabel(self._wrapper_panel)
+        panel_layout.addWidget(self.context_edit_wrapper_hint)
+        wrapper_shell, self.context_edit_wrapper_input = create_ui_text_edit(
+            self._wrapper_panel,
+        )
+        self.context_edit_wrapper_input.setMinimumHeight(70)
+        bind_text_edit_auto_height(self.context_edit_wrapper_input, minimum=70, maximum=110)
+        self.context_edit_wrapper_input.textChanged.connect(self._on_context_edit_wrapper_changed)
+        panel_layout.addWidget(wrapper_shell)
+        self._wrapper_panel.setVisible(False)
+        layout.addWidget(self._wrapper_panel, 0)
 
         self.loading_label = QLabel("", self)
         self.loading_label.setVisible(False)
         layout.addWidget(self.loading_label)
 
         input_layout = QHBoxLayout()
-        self.input_field = QTextEdit(self)
+        input_shell, self.input_field = create_ui_text_edit(
+            self,
+            editor_class=QTextEdit,
+        )
+        input_shell.setFixedHeight(80)
         self.input_field.setFixedHeight(80)
         self.input_field.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self.input_field.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -160,7 +160,7 @@ class ChatWindow(QWidget):
         self.send_button.clicked.connect(self.send_message)
         self.send_button.setFixedHeight(80)
 
-        input_layout.addWidget(self.input_field)
+        input_layout.addWidget(input_shell)
         input_layout.addWidget(self.send_button)
         layout.addLayout(input_layout)
 
@@ -169,7 +169,7 @@ class ChatWindow(QWidget):
 
         self._apply_chat_theme()
         self._apply_static_texts()
-        self._append_system_message(
+        self._add_system_message(
             tr("chat.welcome"),
             kind="gemini",
             label=tr("chat.label.gemini"),
@@ -178,17 +178,38 @@ class ChatWindow(QWidget):
     def _apply_chat_theme(self) -> None:
         self.chat_log.document().setDefaultStyleSheet(chat_document_stylesheet())
         self.loading_label.setStyleSheet(loading_label_stylesheet())
+        self.context_edit_wrapper_warning.setStyleSheet(wrapper_warning_stylesheet())
+        self.note_preview_panel.apply_theme()
+        refresh_native_text_edits_in(self)
+        self._render_chat_log(preserve_scroll=False)
 
     def _apply_static_texts(self) -> None:
         config = load_config()
         self.setWindowTitle(tr("chat.title", config=config))
         self.context_checkbox.setText(tr("chat.include_context", config=config))
+        self.edit_wrapper_checkbox.setText(tr("chat.edit_wrapper", config=config))
+        self.context_edit_wrapper_label.setText(
+            strong_label_html(tr("chat.edit_wrapper.wrapper_label", config=config))
+        )
+        self.context_edit_wrapper_hint.setText(
+            muted_hint_html(tr("chat.edit_wrapper.wrapper_hint", config=config))
+        )
+        self.context_edit_wrapper_warning.setText(
+            tr("chat.edit_wrapper.wrapper_invalid", config=config)
+        )
+        self._update_wrapper_format_warning()
+        self.note_preview_panel.apply_language(config)
         self.btn_clear.setText(tr("chat.new_conversation", config=config))
         self.chat_log.setPlaceholderText(tr("chat.log_placeholder", config=config))
         self.input_field.setPlaceholderText(tr("chat.input_placeholder", config=config))
         self.send_button.setText(tr("chat.send", config=config))
         if self.loading_label.isVisible():
             self._update_loading_animation()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._imported_fields:
+            QTimer.singleShot(0, self.note_preview_panel.reflow)
 
     def apply_theme(self) -> None:
         self._apply_chat_theme()
@@ -198,8 +219,56 @@ class ChatWindow(QWidget):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         global _chat_window
+        self._closing = True
+        self._stop_loading()
         _chat_window = None
         super().closeEvent(event)
+
+    def prepare_shutdown(self) -> None:
+        self._closing = True
+        self._stop_loading()
+        self._stream_visible = False
+        self._streaming_message_index = None
+
+    def _render_chat_log(self, *, preserve_scroll: bool) -> None:
+        bar = self.chat_log.verticalScrollBar()
+        previous_value = bar.value()
+        at_bottom = bar.value() >= bar.maximum() - 8
+
+        self.chat_log.setHtml(render_chat_document(self._messages))
+
+        if preserve_scroll and not at_bottom:
+            bar.setValue(min(previous_value, bar.maximum()))
+        else:
+            self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
+
+    def _add_message(self, message: ChatMessage) -> None:
+        self._messages.append(message)
+        self._render_chat_log(preserve_scroll=False)
+
+    def _add_system_message(
+        self,
+        text: str,
+        *,
+        kind: str = "system",
+        label: str | None = None,
+    ) -> None:
+        if label is None:
+            label = tr("chat.label.system")
+        label_class = {
+            "gemini": "chat-label-gemini",
+            "system": "chat-label-system",
+            "error": "chat-label-error",
+        }.get(kind, "chat-label-system")
+        safe = html.escape(text)
+        self._add_message(
+            ChatMessage(
+                label_class=label_class,
+                label=label,
+                body_html=safe,
+                trailing_spacer=True,
+            )
+        )
 
     def _on_anchor_clicked(self, url: QUrl) -> None:
         url_str = url.toString()
@@ -225,11 +294,18 @@ class ChatWindow(QWidget):
         config = load_config()
         self.api_history.clear()
         self.note_context = None
+        self._imported_fields = []
+        self._context_wrapper_template = None
+        self._messages.clear()
         self._copy_blocks.clear()
         self._stream_visible = False
+        self._streaming_message_index = None
         self.context_checkbox.setChecked(False)
-        self.chat_log.clear()
-        self._append_system_message(
+        self.edit_wrapper_checkbox.setChecked(False)
+        self.edit_wrapper_checkbox.setEnabled(False)
+        self._wrapper_panel.setVisible(False)
+        self.note_preview_panel.clear()
+        self._add_system_message(
             tr("chat.cleared", config=config),
             kind="system",
             label=tr("chat.label.system", config=config),
@@ -238,40 +314,88 @@ class ChatWindow(QWidget):
     def import_note_from_editor(self, editor) -> None:
         config = load_config()
         note = editor.note
-        field_blocks: list[str] = []
-        context_lines: list[str] = []
+        imported_fields: list[tuple[str, str]] = []
 
-        first_field = True
         for name, value in note.items():
             if not value.strip():
                 continue
-            inner = _field_inner_html(value)
-            field_blocks.append(_build_field_preview_block(name, inner, first=first_field))
-            first_field = False
-            context_lines.append(f"{tr('chat.context.field', config=config, name=name)}\n{value}")
+            imported_fields.append((name, value))
 
-        if not field_blocks:
-            self._append_system_message(
+        if not imported_fields:
+            self._add_system_message(
                 tr("chat.note_empty", config=config),
                 kind="error",
                 label=tr("chat.label.system", config=config),
             )
             return
 
-        self.note_context = "\n\n".join(context_lines)
+        self._imported_fields = imported_fields
+        self.note_context = _format_note_context(imported_fields, config)
+        self._context_wrapper_template = None
         self.context_checkbox.setChecked(True)
-        self._append_system_message(
+        self.edit_wrapper_checkbox.setEnabled(True)
+        self.edit_wrapper_checkbox.setChecked(False)
+        self._wrapper_panel.setVisible(False)
+        self._add_system_message(
             tr("chat.note_imported", config=config),
             kind="system",
             label=tr("chat.label.system", config=config),
         )
 
-        preview_html = _build_note_preview_html(field_blocks)
-        self.chat_log.append(preview_html)
-        self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
+        self.note_preview_panel.set_fields(imported_fields)
 
         self.input_field.setPlainText(effective_brain_import_message(config))
         self.input_field.setFocus()
+
+    def _sync_note_context_from_preview(self) -> None:
+        if not self._imported_fields and not self.note_preview_panel.get_fields():
+            return
+        config = load_config()
+        self._imported_fields = self.note_preview_panel.get_fields()
+        non_empty = [(name, value) for name, value in self._imported_fields if value.strip()]
+        if not non_empty:
+            self.note_context = None
+            return
+        self.note_context = _format_note_context(non_empty, config)
+
+    def _on_edit_wrapper_toggled(self, checked: bool) -> None:
+        if checked:
+            self._sync_note_context_from_preview()
+            self._populate_wrapper_editor()
+            self._wrapper_panel.setVisible(True)
+            self.context_edit_wrapper_input.setFocus()
+            return
+        wrapper_text = self.context_edit_wrapper_input.toPlainText()
+        self._context_wrapper_template = wrapper_text if wrapper_text.strip() else None
+        self._wrapper_panel.setVisible(False)
+
+    def _collapse_wrapper_panel(self) -> None:
+        if not self.edit_wrapper_checkbox.isChecked():
+            return
+        self.edit_wrapper_checkbox.setChecked(False)
+
+    def _populate_wrapper_editor(self) -> None:
+        config = load_config()
+        self.context_edit_wrapper_input.blockSignals(True)
+        wrapper = self._context_wrapper_template or effective_chat_context_wrapper(config)
+        self.context_edit_wrapper_input.setPlainText(wrapper)
+        self.context_edit_wrapper_input.blockSignals(False)
+        self._update_wrapper_format_warning()
+
+    def _update_wrapper_format_warning(self) -> None:
+        if not self.edit_wrapper_checkbox.isChecked():
+            self.context_edit_wrapper_warning.setVisible(False)
+            return
+        text = self.context_edit_wrapper_input.toPlainText()
+        self.context_edit_wrapper_warning.setVisible(
+            chat_context_wrapper_missing_placeholders(text)
+        )
+
+    def _on_context_edit_wrapper_changed(self) -> None:
+        if not self.edit_wrapper_checkbox.isChecked():
+            return
+        self._context_wrapper_template = self.context_edit_wrapper_input.toPlainText()
+        self._update_wrapper_format_warning()
 
     def send_message(self) -> None:
         user_text = self.input_field.toPlainText().strip()
@@ -281,13 +405,19 @@ class ChatWindow(QWidget):
         config = load_config()
         safe_html = html.escape(user_text).replace("\n", "<br>")
         you_label = tr("chat.label.you", config=config)
-        self.chat_log.append(f"<br><b class='chat-label-you'>{you_label}:</b> {safe_html}")
-        self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
+        self._add_message(
+            ChatMessage(
+                label_class="chat-label-you",
+                label=you_label,
+                body_html=safe_html,
+            )
+        )
         self.input_field.clear()
         self._set_input_enabled(False)
+        self._collapse_wrapper_panel()
 
         if not api_key_configured(config):
-            self._append_system_message(
+            self._add_system_message(
                 tr("chat.api_key_missing", config=config),
                 kind="error",
                 label=tr("chat.label.system", config=config),
@@ -297,11 +427,14 @@ class ChatWindow(QWidget):
 
         payload_text = user_text
         if self.context_checkbox.isChecked() and self.note_context:
+            self._sync_note_context_from_preview()
             payload_text = format_chat_context_message(
                 config,
                 context=self.note_context,
                 request=user_text,
+                template=self._context_wrapper_template,
             )
+            self.context_edit_wrapper_warning.setVisible(False)
             self.context_checkbox.setChecked(False)
 
         self.api_history.append({"role": "user", "parts": [{"text": payload_text}]})
@@ -321,7 +454,7 @@ class ChatWindow(QWidget):
                     temperature=temperature,
                     include_meta_rule=True,
                     on_chunk=lambda text: mw.taskman.run_on_main(
-                        lambda accumulated=text: self._handle_stream_chunk(accumulated)
+                        lambda accumulated=text: self._handle_stream_chunk_safe(accumulated)
                     ),
                 ),
                 self._handle_response,
@@ -342,6 +475,11 @@ class ChatWindow(QWidget):
             self._handle_response,
         )
 
+    def _handle_stream_chunk_safe(self, accumulated: str) -> None:
+        if self._closing:
+            return
+        self._handle_stream_chunk(accumulated)
+
     def _handle_stream_chunk(self, accumulated: str) -> None:
         if not accumulated:
             return
@@ -354,31 +492,34 @@ class ChatWindow(QWidget):
     def _begin_streaming_reply(self) -> None:
         config = load_config()
         gemini_label = tr("chat.label.gemini", config=config)
-        self.chat_log.append(f"<br><b class='chat-label-gemini'>{gemini_label}:</b><br>")
-        self._stream_block_start = self.chat_log.textCursor().position()
-        self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
+        self._messages.append(
+            ChatMessage(
+                label_class="chat-label-gemini",
+                label=gemini_label,
+                body_html="",
+            )
+        )
+        self._streaming_message_index = len(self._messages) - 1
+        self._render_chat_log(preserve_scroll=False)
 
     def _update_streaming_reply(self, text: str) -> None:
-        if self._stream_block_start is None:
+        if self._streaming_message_index is None:
             return
-        cursor = self.chat_log.textCursor()
-        cursor.setPosition(self._stream_block_start)
-        cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
-        cursor.removeSelectedText()
         safe = html.escape(text).replace("\n", "<br>")
-        cursor.insertHtml(f"<span class='chat-stream-text'>{safe}</span>")
-        self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
+        message = self._messages[self._streaming_message_index]
+        message.body_html = f"<br><span class='chat-stream-text'>{safe}</span>"
+        self._render_chat_log(preserve_scroll=True)
 
     def _clear_streaming_reply(self) -> None:
-        if self._stream_block_start is None:
+        if self._streaming_message_index is None:
             return
-        cursor = self.chat_log.textCursor()
-        cursor.setPosition(self._stream_block_start)
-        cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
-        cursor.removeSelectedText()
-        self._stream_block_start = None
+        self._messages.pop(self._streaming_message_index)
+        self._streaming_message_index = None
+        self._render_chat_log(preserve_scroll=False)
 
     def _finalize_successful_reply(self, raw_text: str) -> None:
+        if self._closing:
+            return
         config = load_config()
         display_text, dynamic_rules = extract_dynamic_rules(raw_text)
         rules_updated = False
@@ -396,34 +537,43 @@ class ChatWindow(QWidget):
             self._copy_blocks,
             f"r{self._copy_counter}",
             config=config,
+            endcap=False,
         )
 
-        if self._stream_block_start is not None:
-            cursor = self.chat_log.textCursor()
-            cursor.setPosition(self._stream_block_start)
-            cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
-            cursor.removeSelectedText()
-            cursor.insertHtml(reply_html)
-            self._stream_block_start = None
+        gemini_label = tr("chat.label.gemini", config=config)
+        if self._streaming_message_index is not None:
+            message = self._messages[self._streaming_message_index]
+            message.label = gemini_label
+            message.body_html = f"<br>{reply_html}" if reply_html else ""
+            self._streaming_message_index = None
         else:
-            gemini_label = tr("chat.label.gemini", config=config)
-            self.chat_log.append(f"<br><b class='chat-label-gemini'>{gemini_label}:</b><br>{reply_html}")
+            body = f"<br>{reply_html}" if reply_html else ""
+            self._messages.append(
+                ChatMessage(
+                    label_class="chat-label-gemini",
+                    label=gemini_label,
+                    body_html=body,
+                )
+            )
+
+        self._render_chat_log(preserve_scroll=False)
 
         if rules_updated:
-            self._append_system_message(
+            self._add_system_message(
                 tr("chat.rules_updated", config=config),
                 kind="system",
                 label=tr("chat.label.system", config=config),
             )
 
     def _handle_reply_error(self, exc: Exception) -> None:
+        if self._closing:
+            return
         config = load_config()
         if self.api_history and self.api_history[-1]["role"] == "user":
             self.api_history.pop()
 
-        if self._stream_block_start is not None:
+        if self._streaming_message_index is not None:
             self._clear_streaming_reply()
-            self._stream_block_start = None
         self._stream_visible = False
 
         if isinstance(exc, GeminiError):
@@ -431,13 +581,15 @@ class ChatWindow(QWidget):
         else:
             message = tr("chat.unexpected_error", config=config, error=exc)
 
-        self._append_system_message(
+        self._add_system_message(
             message,
             kind="error",
             label=tr("chat.label.system", config=config),
         )
 
     def _handle_response(self, future) -> None:
+        if self._closing:
+            return
         self._stop_loading()
         self._set_input_enabled(True)
         self.input_field.setFocus()
@@ -469,27 +621,6 @@ class ChatWindow(QWidget):
         dots = "." * self._loading_phase
         self.loading_label.setText(f"{tr('chat.loading')}{dots}")
 
-    def _append_system_message(
-        self,
-        text: str,
-        *,
-        kind: str = "system",
-        label: str | None = None,
-    ) -> None:
-        if label is None:
-            label = tr("chat.label.system")
-        label_class = {
-            "gemini": "chat-label-gemini",
-            "system": "chat-label-system",
-            "error": "chat-label-error",
-        }.get(kind, "chat-label-system")
-        safe = html.escape(text)
-        self.chat_log.append(
-            f"<br><b class='{label_class}'>{label}:</b> {safe}"
-            f"<div style='margin-bottom: 10px;'></div>"
-        )
-        self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
-
 
 _chat_window: ChatWindow | None = None
 
@@ -520,8 +651,11 @@ def open_chat(editor=None, analyze: bool = False) -> None:
         window.import_note_from_editor(editor)
 
 
-def close_chat_window() -> None:
+def close_chat_window(*, force: bool = False) -> None:
     global _chat_window
-    if _chat_window is not None:
-        _chat_window.close()
-        _chat_window = None
+    if _chat_window is None:
+        return
+    if force:
+        _chat_window.prepare_shutdown()
+    _chat_window.close()
+    _chat_window = None

@@ -6,7 +6,7 @@ from typing import Any
 
 from ..i18n import tr
 from ..markdown_loader import get_markdown_converter
-from .html_utils import render_field_table, seal_appended_html
+from .html_utils import render_code_block_header, render_field_table, seal_appended_html
 from .theme import get_theme_colors
 
 _FENCE_RE = re.compile(
@@ -163,20 +163,22 @@ def _render_code_block(
     *,
     config: dict[str, Any] | None = None,
 ) -> str:
-    copy_label = tr("formatter.copy", config=config)
+    copy_title = tr("formatter.copy", config=config)
     safe_content = html.escape(content.strip())
     palette = get_theme_colors()
     if label:
         safe_label = html.escape(label.strip())
-        header = (
-            f"<b class='chat-code-label'>{safe_label}</b> "
-            f"<a href='copy:{block_id}' class='chat-code-copy'>{copy_label}</a>"
-        )
+        label_html = f"<b class='chat-code-label'>{safe_label}</b>"
     else:
-        header = (
-            f"<span class='chat-code-label'>{tr('formatter.code_block', config=config)}</span> "
-            f"<a href='copy:{block_id}' class='chat-code-copy'>{copy_label}</a>"
+        label_html = (
+            f"<span class='chat-code-label'>{tr('formatter.code_block', config=config)}</span>"
         )
+
+    header = render_code_block_header(
+        label_html,
+        block_id,
+        copy_title=copy_title,
+    )
 
     return render_field_table(
         header,
@@ -193,6 +195,7 @@ def format_gemini_reply_html(
     id_prefix: str,
     *,
     config: dict[str, Any] | None = None,
+    endcap: bool = False,
 ) -> str:
     if not text.strip():
         return ""
@@ -233,6 +236,6 @@ def format_gemini_reply_html(
         parts.append(_render_markdown_prose(tail))
 
     if parts:
-        return seal_appended_html("".join(parts))
+        return seal_appended_html("".join(parts), endcap=endcap)
 
-    return seal_appended_html(_render_markdown_prose(text))
+    return seal_appended_html(_render_markdown_prose(text), endcap=endcap)
