@@ -148,6 +148,80 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Testo inserito automaticamente nella chat quando importi una nota con il bottone 🧠.",
         "en": "Text inserted automatically in chat when you import a note with the 🧠 button.",
     },
+    "settings.advanced": {
+        "it": "Avanzate…",
+        "en": "Advanced…",
+    },
+    "settings.advanced.title": {
+        "it": "Prompt avanzati",
+        "en": "Advanced prompts",
+    },
+    "settings.advanced.hint": {
+        "it": (
+            "Testi aggiuntivi inviati a Gemini. Modifica solo se sai cosa stai facendo. "
+            "Ripristina i valori predefiniti da Impostazioni → Ripristina predefiniti."
+        ),
+        "en": (
+            "Extra text sent to Gemini. Edit only if you know what you are doing. "
+            "Restore defaults from Settings → Restore defaults."
+        ),
+    },
+    "settings.prompt_optimize_user": {
+        "it": "Prefisso messaggio utente (ottimizzazione campo)",
+        "en": "User message prefix (field optimize)",
+    },
+    "settings.prompt_optimize_user.hint": {
+        "it": (
+            "Anteposto al contenuto del campo quando ottimizzi. "
+            "Specifica che Gemini deve restituire solo il campo aggiornato."
+        ),
+        "en": (
+            "Prepended to the field content when you optimize. "
+            "Tells Gemini to return only the updated field content."
+        ),
+    },
+    "settings.prompt_chat_addon": {
+        "it": "Istruzioni aggiuntive di sistema (chat)",
+        "en": "Extra system instructions (chat)",
+    },
+    "settings.prompt_chat_addon.hint": {
+        "it": (
+            "Appeso alle istruzioni di sistema in chat: formattazione risposte, blocchi code per i campi, "
+            "regole dinamiche (<UPDATE_DYNAMIC_RULES>), ecc."
+        ),
+        "en": (
+            "Appended to chat system instructions: reply formatting, field code blocks, "
+            "dynamic rules (<UPDATE_DYNAMIC_RULES>), etc."
+        ),
+    },
+    "settings.prompt_dynamic_rules_prefix": {
+        "it": "Prefisso regole dinamiche (sistema)",
+        "en": "Dynamic rules prefix (system)",
+    },
+    "settings.prompt_dynamic_rules_prefix.hint": {
+        "it": (
+            "Inserito prima del testo delle regole dinamiche quando non è vuoto. "
+            "Deve terminare con un a capo."
+        ),
+        "en": (
+            "Inserted before your dynamic rules text when that field is not empty. "
+            "Should end with a newline."
+        ),
+    },
+    "settings.prompt_chat_context": {
+        "it": "Wrapper contesto nota (chat)",
+        "en": "Note context wrapper (chat)",
+    },
+    "settings.prompt_chat_context.hint": {
+        "it": (
+            "Usato quando invii in chat con «Includi contesto nota» dopo l'import 🧠. "
+            "Segnaposto obbligatori: {context} (campi nota), {request} (tuo messaggio)."
+        ),
+        "en": (
+            "Used when you send chat with “include note context” after 🧠 import. "
+            "Required placeholders: {context} (note fields), {request} (your message)."
+        ),
+    },
     "settings.system_instruction": {
         "it": "Istruzioni di sistema globali (alta priorità — statiche):",
         "en": "Global system instructions (high priority — static):",
@@ -267,6 +341,88 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.help.intro": {
         "it": "Clicca il pulsante <b>i</b> accanto a un'impostazione per leggerne la spiegazione.",
         "en": "Click the <b>i</b> button next to a setting to read its explanation.",
+    },
+    "settings.help.prompts_overview.link": {
+        "it": "Come vengono costruiti i prompt…",
+        "en": "How prompts are built…",
+    },
+    "settings.help.prompts_overview.title": {
+        "it": "Come vengono costruiti i prompt",
+        "en": "How prompts are built",
+    },
+    "settings.help.prompts_overview": {
+        "it": (
+            "L'add-on invia a Gemini un <b>prompt di sistema</b> e uno o più <b>messaggi utente</b>. "
+            "Quasi tutto il testo è modificabile nelle Impostazioni (e quattro blocchi in <b>Avanzate…</b>). "
+            "I pezzi vengono concatenati nell'ordine sotto — non vengono aggiunti spazi o a capo automatici "
+            "tra un blocco e l'altro, salvo dove indicato.<br><br>"
+            "<b>Ottimizzazione campo (Ctrl+Shift+G)</b><br>"
+            "<b>Prompt di sistema</b> (in ordine):<br>"
+            "1. <b>Istruzioni di sistema</b> — Impostazioni (condivise o solo ottimizzazione)<br>"
+            "2. Se le <b>regole dinamiche</b> non sono vuote: "
+            "<b>prefisso regole dinamiche</b> (Avanzate) + testo regole dinamiche (Impostazioni)<br><br>"
+            "<b>Messaggio utente</b>:<br>"
+            "1. <b>Prefisso messaggio utente</b> (Avanzate)<br>"
+            "2. Contenuto grezzo del campo Anki attivo<br><br>"
+            "Gemini deve restituire solo il campo ottimizzato; l'add-on rimuove eventuali fence Markdown.<br><br>"
+            "<b>Chat (Ctrl+Alt+C)</b><br>"
+            "<b>Prompt di sistema</b> (in ordine):<br>"
+            "1. <b>Istruzioni di sistema</b> — Impostazioni (condivise o solo chat)<br>"
+            "2. Se le regole dinamiche non sono vuote: prefisso + testo (come sopra)<br>"
+            "3. <b>Istruzioni aggiuntive di sistema (chat)</b> — Avanzate "
+            "(formattazione risposte, blocchi code, tag &lt;UPDATE_DYNAMIC_RULES&gt;, ecc.)<br><br>"
+            "<b>Messaggi utente</b> (con storico fino a «Storico chat (turni)»):<br>"
+            "• Di solito: solo ciò che scrivi nella chat<br>"
+            "• Con «Includi contesto nota» dopo import 🧠: "
+            "<b>wrapper contesto nota</b> (Avanzate) con segnaposto "
+            "<code>{context}</code> (campi nota) e <code>{request}</code> (tuo messaggio). "
+            "Ogni campo in <code>{context}</code> è ancora formattato come "
+            "<code>Campo [Nome]:</code> + HTML grezzo.<br>"
+            "Se il wrapper personalizzato omette un segnaposto, si usa il modello predefinito.<br><br>"
+            "<b>Non inviato a Gemini</b>: anteprima HTML nella chat, messaggio di benvenuto, "
+            "nome del campo nel messaggio normale.<br><br>"
+            "<b>Messaggio import 🧠</b>: precompila la casella di input; viene inviato come messaggio "
+            "utente normale (eventualmente avvolto dal wrapper contesto).<br><br>"
+            "<b>Prefisso regole dinamiche</b>: il predefinito inizia con due a capo (<code>\\n\\n</code>) "
+            "e termina con uno. In un prefisso personalizzato, includi tu stesso gli a capo "
+            "prima/dopo il testo, altrimenti il blocco si attacca a quello precedente."
+        ),
+        "en": (
+            "The add-on sends Gemini a <b>system prompt</b> and one or more <b>user messages</b>. "
+            "Almost all text is editable in Settings (plus four blocks under <b>Advanced…</b>). "
+            "Pieces are concatenated in the order below — the add-on does not insert extra spaces "
+            "or line breaks between blocks unless noted.<br><br>"
+            "<b>Field optimize (Ctrl+Shift+G)</b><br>"
+            "<b>System prompt</b> (in order):<br>"
+            "1. <b>System instructions</b> — Settings (shared or optimize-only)<br>"
+            "2. If <b>dynamic rules</b> are not empty: "
+            "<b>dynamic rules prefix</b> (Advanced) + dynamic rules text (Settings)<br><br>"
+            "<b>User message</b>:<br>"
+            "1. <b>User message prefix</b> (Advanced)<br>"
+            "2. Raw HTML of the active Anki field<br><br>"
+            "Gemini should return only the optimized field; the add-on strips Markdown fences if present.<br><br>"
+            "<b>Chat (Ctrl+Alt+C)</b><br>"
+            "<b>System prompt</b> (in order):<br>"
+            "1. <b>System instructions</b> — Settings (shared or chat-only)<br>"
+            "2. If dynamic rules are not empty: prefix + text (as above)<br>"
+            "3. <b>Extra system instructions (chat)</b> — Advanced "
+            "(reply formatting, code blocks, &lt;UPDATE_DYNAMIC_RULES&gt; tags, etc.)<br><br>"
+            "<b>User messages</b> (with history up to “Chat history (turns)”):<br>"
+            "• Usually: only what you type in chat<br>"
+            "• With “include note context” after 🧠 import: "
+            "<b>note context wrapper</b> (Advanced) with placeholders "
+            "<code>{context}</code> (note fields) and <code>{request}</code> (your message). "
+            "Each field inside <code>{context}</code> is still formatted as "
+            "<code>Field [Name]:</code> + raw HTML.<br>"
+            "If a custom wrapper omits a placeholder, the default template is used.<br><br>"
+            "<b>Not sent to Gemini</b>: HTML preview in chat, welcome message, "
+            "field name in a normal message.<br><br>"
+            "<b>🧠 import message</b>: pre-fills the input box; it is sent as a normal user message "
+            "(optionally wrapped by the note context wrapper).<br><br>"
+            "<b>Dynamic rules prefix</b>: the default starts with two line breaks (<code>\\n\\n</code>) "
+            "and ends with one. In a custom prefix, include line breaks before/after your text yourself, "
+            "or the block will run into the text above or below."
+        ),
     },
     "settings.help.info_tooltip": {
         "it": "Mostra spiegazione",
@@ -392,14 +548,62 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
     "settings.help.max_history_turns": {
         "it": (
-            "Quanti scambi (tu + Gemini) inviare come contesto in chat. "
+            "Quanti turni di conversazione inviare come contesto in chat. "
+            "Un turno = un messaggio tuo + una risposta di Gemini (10 turni = 20 messaggi). "
             "Più storico = migliore memoria conversazionale, ma richieste più lente e costose. "
             "0 = nessuno storico (solo il messaggio corrente)."
         ),
         "en": (
-            "How many exchanges (you + Gemini) to send as chat context. "
+            "How many conversation turns to send as chat context. "
+            "One turn = one message from you plus one reply from Gemini (10 turns = 20 messages). "
             "More history = better conversational memory, but slower and costlier requests. "
             "0 = no history (current message only)."
+        ),
+    },
+    "settings.help.prompt_optimize_user": {
+        "it": (
+            "Prefisso del messaggio utente inviato quando ottimizzi un campo (Ctrl+Shift+G). "
+            "Viene anteposto al contenuto del campo. Modificabile in <b>Avanzate…</b>. "
+            "Vedi anche <b>Come vengono costruiti i prompt</b> nella guida."
+        ),
+        "en": (
+            "User message prefix sent when you optimize a field (Ctrl+Shift+G). "
+            "Prepended to the field content. Editable under <b>Advanced…</b>. "
+            "See also <b>How prompts are built</b> in this guide."
+        ),
+    },
+    "settings.help.prompt_chat_addon": {
+        "it": (
+            "Blocco aggiuntivo appeso alle istruzioni di sistema durante la chat "
+            "(formattazione risposte, blocchi code, regole dinamiche). "
+            "Modificabile in <b>Avanzate…</b>."
+        ),
+        "en": (
+            "Extra block appended to chat system instructions "
+            "(reply formatting, code blocks, dynamic rules). "
+            "Editable under <b>Advanced…</b>."
+        ),
+    },
+    "settings.help.prompt_dynamic_rules_prefix": {
+        "it": (
+            "Intestazione inserita prima del testo delle regole dinamiche nel prompt di sistema "
+            "(solo se le regole dinamiche non sono vuote). Modificabile in <b>Avanzate…</b>. "
+            "Includi tu gli a capo nel testo personalizzato; vedi <b>Come vengono costruiti i prompt</b>."
+        ),
+        "en": (
+            "Header inserted before your dynamic rules text in the system prompt "
+            "(only when dynamic rules are not empty). Editable under <b>Advanced…</b>. "
+            "Include line breaks in custom text yourself; see <b>How prompts are built</b>."
+        ),
+    },
+    "settings.help.prompt_chat_context": {
+        "it": (
+            "Modello del messaggio utente quando invii in chat con «Includi contesto nota» dopo import 🧠. "
+            "Segnaposto: <code>{context}</code>, <code>{request}</code>. Modificabile in <b>Avanzate…</b>."
+        ),
+        "en": (
+            "User message template when you send chat with “include note context” after 🧠 import. "
+            "Placeholders: <code>{context}</code>, <code>{request}</code>. Editable under <b>Advanced…</b>."
         ),
     },
     "settings.help.temperature_optimize": {
@@ -681,9 +885,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Campo [{name}]:",
         "en": "Field [{name}]:",
     },
-    "chat.context.prefix": {
-        "it": "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:\n{context}\n\n[RICHIESTA DELLO STUDENTE]:\n{request}",
-        "en": "[FULL NOTE CONTEXT TO ANALYZE]:\n{context}\n\n[STUDENT REQUEST]:\n{request}",
+    "instructions.chat_context_wrapper": {
+        "it": (
+            "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:\n{context}\n\n[RICHIESTA DELLO STUDENTE]:\n{request}"
+        ),
+        "en": (
+            "[FULL NOTE CONTEXT TO ANALYZE]:\n{context}\n\n[STUDENT REQUEST]:\n{request}"
+        ),
     },
     "defaults.brain_import_message": {
         "it": "La nota qui sopra andrebbe scomposta in più note secondo il principio di atomicità? Se sì, come?",
@@ -692,39 +900,45 @@ _STRINGS: dict[str, dict[str, str]] = {
     "defaults.system_instruction": {
         "it": (
             "Sei un assistente esperto di Anki integrato nell'editor di uno studente.\n"
-            "Il tuo compito è ottimizzare, ripulire e formattare il codice HTML e MathJax fornito nel campo, "
-            "applicando RIGOROSAMENTE le preferenze metodologiche, di stile e di notazione dell'utente.\n\n"
+            "Ottimizza, ripulisci e formatta il contenuto dei campi Anki (HTML e MathJax), "
+            "applicando RIGOROSAMENTE le preferenze metodologiche, di stile e notazione dell'utente.\n\n"
             "FORMATTAZIONE ANKI (obbligatoria):\n"
-            "- I campi nota contengono solo HTML, non Markdown.\n"
-            "- Matematica inline: usa solo \\(...\\).\n"
-            "- Matematica display: usa solo \\[...\\].\n"
-            "- Non usare mai delimitatori $...$ o $$...$$.\n"
-            "- Converti matematica non formattata o in plain text in MathJax con i delimitatori sopra indicati.\n"
-            "- Usa tag HTML (<b>, <i>, <ul>, <ol>, <p>, <div>) per struttura ed enfasi."
+            "- Solo HTML nei campi, non Markdown.\n"
+            "- Matematica inline: solo \\(...\\). Display: solo \\[...\\]. Mai $...$ o $$...$$.\n"
+            "- Converti matematica plain o non formattata in MathJax con questi delimitatori.\n"
+            "- Usa tag HTML (<b>, <i>, <ul>, <ol>, <p>, <div>) per struttura ed enfasi; "
+            "preferisci blocchi a lunghe catene di <br>.\n"
+            "- Cloze Anki: preserva esattamente {{c1::...}}, {{c2::...}}, ecc. (hint opzionale dopo ::). "
+            "Non rimuovere, scoprire, rinumerare o appiattire le cloze; "
+            "puoi ripulire HTML/MathJax dentro il testo cloze."
         ),
         "en": (
             "You are an expert Anki assistant integrated into a student's editor.\n"
-            "Your task is to optimize, clean, and format the HTML and MathJax code provided in the field, "
-            "STRICTLY applying the user's methodological, style, and notation preferences.\n\n"
+            "Optimize, clean, and format Anki field content (HTML and MathJax), "
+            "strictly applying the user's methodological, style, and notation preferences.\n\n"
             "ANKI FORMATTING (mandatory):\n"
-            "- Note fields contain HTML only, not Markdown.\n"
-            "- Inline math: use \\(...\\) only.\n"
-            "- Display math: use \\[...\\] only.\n"
-            "- Never use $...$ or $$...$$ delimiters.\n"
-            "- Convert unformatted or plain-text math to MathJax using the delimiters above.\n"
-            "- Use HTML tags (<b>, <i>, <ul>, <ol>, <p>, <div>) for structure and emphasis."
+            "- HTML only in fields, not Markdown.\n"
+            "- Inline math: \\(...\\) only. Display math: \\[...\\] only. Never $...$ or $$...$$.\n"
+            "- Convert unformatted or plain-text math to MathJax with those delimiters.\n"
+            "- Use HTML tags (<b>, <i>, <ul>, <ol>, <p>, <div>) for structure and emphasis; "
+            "prefer blocks over long <br> chains.\n"
+            "- Anki clozes: preserve {{c1::...}}, {{c2::...}}, etc. exactly (optional hint after ::). "
+            "Do not remove, unwrap, renumber, or flatten clozes; "
+            "you may clean HTML/MathJax inside cloze text."
         ),
     },
-    "instructions.optimize_output": {
+    "instructions.optimize_user_prompt": {
         "it": (
-            "\n\nOTTIMIZZAZIONE CAMPO (obbligatorio):\n"
-            "- Restituisci SOLO HTML/MathJax pronto da incollare nel campo.\n"
-            "- Non aggiungere spiegazioni, commenti o testo introduttivo."
+            "Ottimizza il campo Anki qui sotto secondo le tue istruzioni di sistema. "
+            "Restituisci SOLO l'HTML/MathJax aggiornato del campo, pronto da incollare—"
+            "niente spiegazioni, commenti o preambolo. "
+            "Non riscrivere, ampliare o cambiare il significato salvo quanto richiesto dalle tue istruzioni."
         ),
         "en": (
-            "\n\nFIELD OPTIMIZATION (mandatory):\n"
-            "- Return ONLY HTML/MathJax ready to paste into the field.\n"
-            "- Do not add explanations, comments, or introductory text."
+            "Optimize the Anki field below per your system instructions. "
+            "Return ONLY the updated field HTML/MathJax, ready to paste back—"
+            "no explanations, comments, or preamble. "
+            "Do not rewrite, expand, or change meaning unless your instructions require it."
         ),
     },
     "instructions.dynamic_rules_prefix": {
@@ -737,7 +951,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "(Lower priority than the rules above):\n"
         ),
     },
-    "instructions.chat_format": {
+    "instructions.chat_system_addon": {
         "it": (
             "\nREGOLE DI FORMATTAZIONE PER LE RISPOSTE IN CHAT:\n"
             "- Per il testo esplicativo usa Markdown standard direttamente nel messaggio: **grassetto**, *corsivo*, `codice inline`, titoli con ##, elenchi, tabelle, separatori ---.\n"
@@ -756,7 +970,11 @@ _STRINGS: dict[str, dict[str, str]] = {
             "- Dentro ogni blocco code metti SOLO ciò che va incollato nel campo: niente spiegazioni, niente Markdown (usa tag HTML <b>, <i> per grassetto/corsivo nei campi).\n"
             "- Nei campi Anki, usa \\(...\\) per matematica inline e \\[...\\] per display; non usare $...$ o $$...$$.\n"
             "- Ogni blocco code avrà un pulsante Copia: l'utente decide cosa incollare in Anki.\n"
-            "- I blocchi code possono anche servire per esempi non legati a un campo; in quel caso non mettere un nome campo sulla riga sopra."
+            "- I blocchi code possono anche servire per esempi non legati a un campo; in quel caso non mettere un nome campo sulla riga sopra.\n\n"
+            "[META-REGOLA DI SISTEMA]: Se l'utente ti chiede esplicitamente di memorizzare, ricordare, "
+            "salvare o aggiungere una nuova regola globalmente o per il futuro, accetta la richiesta e includi "
+            "TASSATIVAMENTE in fondo alla tua risposta l'elenco completo e aggiornato di TUTTE le regole dinamiche "
+            "all'interno dei tag <UPDATE_DYNAMIC_RULES> e </UPDATE_DYNAMIC_RULES>. Includi sia le vecchie regole che la nuova."
         ),
         "en": (
             "\nCHAT REPLY FORMATTING RULES:\n"
@@ -776,18 +994,8 @@ _STRINGS: dict[str, dict[str, str]] = {
             "- Inside each code block put ONLY field content: no explanations, no Markdown (use HTML <b>, <i> for bold/italic in fields).\n"
             "- In Anki fields use \\(...\\) for inline math and \\[...\\] for display; never $...$ or $$...$$.\n"
             "- Each code block gets a Copy button; the user chooses what to paste into Anki.\n"
-            "- Code blocks may also show examples not tied to a field; then omit the field name line above."
-        ),
-    },
-    "instructions.meta_rule_dynamic": {
-        "it": (
-            "\n\n[META-REGOLA DI SISTEMA]: Se l'utente ti chiede esplicitamente di memorizzare, ricordare, "
-            "salvare o aggiungere una nuova regola globalmente o per il futuro, accetta la richiesta e includi "
-            "TASSATIVAMENTE in fondo alla tua risposta l'elenco completo e aggiornato di TUTTE le regole dinamiche "
-            "all'interno dei tag <UPDATE_DYNAMIC_RULES> e </UPDATE_DYNAMIC_RULES>. Includi sia le vecchie regole che la nuova."
-        ),
-        "en": (
-            "\n\n[META-SYSTEM RULE]: If the user explicitly asks you to memorize, remember, save, or add a new "
+            "- Code blocks may also show examples not tied to a field; then omit the field name line above.\n\n"
+            "[META-SYSTEM RULE]: If the user explicitly asks you to memorize, remember, save, or add a new "
             "rule globally or for the future, accept the request and MUST include at the end of your reply the "
             "complete updated list of ALL dynamic rules inside <UPDATE_DYNAMIC_RULES> and </UPDATE_DYNAMIC_RULES> "
             "tags. Include both previous rules and the new one."
@@ -954,6 +1162,112 @@ def normalize_brain_import_message_for_save(text: str, config: dict[str, Any]) -
     if is_builtin_brain_import_message(stripped):
         return ""
     return stripped
+
+
+def _builtin_prompt_texts(i18n_key: str) -> frozenset[str]:
+    entry = _STRINGS.get(i18n_key) or {}
+    return frozenset(
+        message.strip()
+        for message in (entry.get(LANG_IT), entry.get(LANG_EN))
+        if message and message.strip()
+    )
+
+
+def _is_builtin_prompt(text: str | None, i18n_key: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    return stripped in _builtin_prompt_texts(i18n_key)
+
+
+def _effective_prompt(config: dict[str, Any] | None, config_key: str, i18n_key: str) -> str:
+    stored_raw = (config or {}).get(config_key) or ""
+    if _is_builtin_prompt(stored_raw, i18n_key):
+        return tr(i18n_key, config=config)
+    return stored_raw
+
+
+def _normalize_prompt_for_save(text: str, i18n_key: str) -> str:
+    stripped = (text or "").strip()
+    if _is_builtin_prompt(stripped, i18n_key):
+        return ""
+    return stripped
+
+
+def default_optimize_user_prompt(config: dict[str, Any] | None = None) -> str:
+    return tr("instructions.optimize_user_prompt", config=config)
+
+
+def is_builtin_optimize_user_prompt(text: str | None) -> bool:
+    return _is_builtin_prompt(text, "instructions.optimize_user_prompt")
+
+
+def effective_optimize_user_prompt(config: dict[str, Any] | None = None) -> str:
+    return _effective_prompt(config, "prompt_optimize_user", "instructions.optimize_user_prompt")
+
+
+def normalize_optimize_user_prompt_for_save(text: str) -> str:
+    return _normalize_prompt_for_save(text, "instructions.optimize_user_prompt")
+
+
+def default_chat_system_addon(config: dict[str, Any] | None = None) -> str:
+    return tr("instructions.chat_system_addon", config=config)
+
+
+def is_builtin_chat_system_addon(text: str | None) -> bool:
+    return _is_builtin_prompt(text, "instructions.chat_system_addon")
+
+
+def effective_chat_system_addon(config: dict[str, Any] | None = None) -> str:
+    return _effective_prompt(config, "prompt_chat_addon", "instructions.chat_system_addon")
+
+
+def normalize_chat_system_addon_for_save(text: str) -> str:
+    return _normalize_prompt_for_save(text, "instructions.chat_system_addon")
+
+
+def default_dynamic_rules_prefix(config: dict[str, Any] | None = None) -> str:
+    return tr("instructions.dynamic_rules_prefix", config=config)
+
+
+def is_builtin_dynamic_rules_prefix(text: str | None) -> bool:
+    return _is_builtin_prompt(text, "instructions.dynamic_rules_prefix")
+
+
+def effective_dynamic_rules_prefix(config: dict[str, Any] | None = None) -> str:
+    return _effective_prompt(config, "prompt_dynamic_rules_prefix", "instructions.dynamic_rules_prefix")
+
+
+def normalize_dynamic_rules_prefix_for_save(text: str) -> str:
+    return _normalize_prompt_for_save(text, "instructions.dynamic_rules_prefix")
+
+
+def default_chat_context_wrapper(config: dict[str, Any] | None = None) -> str:
+    return tr("instructions.chat_context_wrapper", config=config)
+
+
+def is_builtin_chat_context_wrapper(text: str | None) -> bool:
+    return _is_builtin_prompt(text, "instructions.chat_context_wrapper")
+
+
+def effective_chat_context_wrapper(config: dict[str, Any] | None = None) -> str:
+    return _effective_prompt(config, "prompt_chat_context", "instructions.chat_context_wrapper")
+
+
+def normalize_chat_context_wrapper_for_save(text: str) -> str:
+    return _normalize_prompt_for_save(text, "instructions.chat_context_wrapper")
+
+
+def format_chat_context_message(
+    config: dict[str, Any] | None,
+    *,
+    context: str,
+    request: str,
+) -> str:
+    template = effective_chat_context_wrapper(config)
+    if "{context}" not in template or "{request}" not in template:
+        template = default_chat_context_wrapper(config)
+    return template.format(context=context, request=request)
 
 
 def _builtin_system_instructions() -> frozenset[str]:

@@ -24,7 +24,7 @@ from aqt.qt import (
 from aqt.utils import tooltip
 
 from ..config import api_key_configured, load_config, save_config
-from ..i18n import effective_brain_import_message, tr
+from ..i18n import effective_brain_import_message, format_chat_context_message, tr
 from ..gemini_client import (
     GeminiError,
     call_gemini,
@@ -33,7 +33,8 @@ from ..gemini_client import (
     trim_history,
 )
 from .chat_formatter import format_gemini_reply_html
-from .theme import chat_document_stylesheet, loading_label_stylesheet
+from .html_utils import closing_tags_suffix, html_endcap, render_field_table
+from .theme import chat_document_stylesheet, get_theme_colors, loading_label_stylesheet
 
 _TRAILING_EMPTY_HTML = re.compile(
     r"(?:"
@@ -55,6 +56,8 @@ _LEADING_EMPTY_HTML = re.compile(
     re.IGNORECASE,
 )
 
+_HTML_TAG = re.compile(r"<\/?[a-zA-Z][^>]*>", re.IGNORECASE)
+
 
 def _strip_field_html_edges(value: str) -> str:
     cleaned = value.strip()
@@ -66,6 +69,41 @@ def _strip_field_html_edges(value: str) -> str:
     cleaned = re.sub(r"^(<br\s*/?>|<div>\s*<br\s*/?>\s*</div>|<p>\s*</p>)+", "", cleaned)
     cleaned = _TRAILING_EMPTY_HTML.sub("", cleaned)
     return cleaned.strip()
+
+
+def _field_inner_html(value: str) -> str:
+    cleaned = _strip_field_html_edges(value)
+    if _HTML_TAG.search(cleaned):
+        return cleaned + closing_tags_suffix(cleaned)
+    return html.escape(cleaned)
+
+
+def _build_field_preview_block(name: str, inner: str, *, first: bool = False) -> str:
+    palette = get_theme_colors()
+    header = f"<b class='chat-code-label'>{html.escape(name)}:</b>"
+    return render_field_table(
+        header,
+        inner,
+        header_bg=palette.code_block_bg,
+        body_bg=palette.code_pre_bg,
+        body_class="chat-field-content",
+        spacer="" if first else "<br>",
+    )
+
+
+def _build_note_preview_html(field_blocks: list[str]) -> str:
+    inner = "".join(field_blocks)
+    inner += closing_tags_suffix(inner)
+    accent = get_theme_colors().preview_accent
+    return (
+        f"<br><table class='chat-preview-panel' width='100%' border='0' "
+        f"cellspacing='0' cellpadding='0'>"
+        f"<tr>"
+        f"<td bgcolor='{accent}' width='4' "
+        f"style='width:4px;padding:0;font-size:1px;line-height:1px;'>&nbsp;</td>"
+        f"<td style='padding:8px 12px;font-size:11px;'>{inner}</td>"
+        f"</tr></table>{html_endcap()}"
+    )
 
 
 class ChatWindow(QWidget):
@@ -87,6 +125,7 @@ class ChatWindow(QWidget):
         self._copy_blocks: dict[str, str] = {}
         self._copy_counter = 0
         self._stream_block_start: int | None = None
+        self._stream_visible = False
 
         layout = QVBoxLayout(self)
 
@@ -187,6 +226,7 @@ class ChatWindow(QWidget):
         self.api_history.clear()
         self.note_context = None
         self._copy_blocks.clear()
+        self._stream_visible = False
         self.context_checkbox.setChecked(False)
         self.chat_log.clear()
         self._append_system_message(
@@ -201,17 +241,13 @@ class ChatWindow(QWidget):
         field_blocks: list[str] = []
         context_lines: list[str] = []
 
+        first_field = True
         for name, value in note.items():
             if not value.strip():
                 continue
-            cleaned = _strip_field_html_edges(value)
-            inner = cleaned if cleaned.startswith("<") else html.escape(cleaned)
-            field_blocks.append(
-                f"<div class='chat-field-block'>"
-                f"<div class='chat-field-title'>{html.escape(name)}:</div>"
-                f"<div class='chat-field-content'>{inner}</div>"
-                f"</div>"
-            )
+            inner = _field_inner_html(value)
+            field_blocks.append(_build_field_preview_block(name, inner, first=first_field))
+            first_field = False
             context_lines.append(f"{tr('chat.context.field', config=config, name=name)}\n{value}")
 
         if not field_blocks:
@@ -230,7 +266,7 @@ class ChatWindow(QWidget):
             label=tr("chat.label.system", config=config),
         )
 
-        preview_html = "<div class='chat-preview-panel'>" + "".join(field_blocks) + "</div>"
+        preview_html = _build_note_preview_html(field_blocks)
         self.chat_log.append(preview_html)
         self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
 
@@ -261,9 +297,8 @@ class ChatWindow(QWidget):
 
         payload_text = user_text
         if self.context_checkbox.isChecked() and self.note_context:
-            payload_text = tr(
-                "chat.context.prefix",
-                config=config,
+            payload_text = format_chat_context_message(
+                config,
                 context=self.note_context,
                 request=user_text,
             )
@@ -276,7 +311,8 @@ class ChatWindow(QWidget):
         use_streaming = bool(config.get("chat_streaming", False))
 
         if use_streaming:
-            self._begin_streaming_reply()
+            self._stream_visible = False
+            self._start_loading()
             mw.taskman.run_in_background(
                 lambda: stream_gemini(
                     config=config,
@@ -285,7 +321,7 @@ class ChatWindow(QWidget):
                     temperature=temperature,
                     include_meta_rule=True,
                     on_chunk=lambda text: mw.taskman.run_on_main(
-                        lambda accumulated=text: self._update_streaming_reply(accumulated)
+                        lambda accumulated=text: self._handle_stream_chunk(accumulated)
                     ),
                 ),
                 self._handle_response,
@@ -305,6 +341,15 @@ class ChatWindow(QWidget):
             ),
             self._handle_response,
         )
+
+    def _handle_stream_chunk(self, accumulated: str) -> None:
+        if not accumulated:
+            return
+        if not self._stream_visible:
+            self._stop_loading()
+            self._begin_streaming_reply()
+            self._stream_visible = True
+        self._update_streaming_reply(accumulated)
 
     def _begin_streaming_reply(self) -> None:
         config = load_config()
@@ -379,6 +424,7 @@ class ChatWindow(QWidget):
         if self._stream_block_start is not None:
             self._clear_streaming_reply()
             self._stream_block_start = None
+        self._stream_visible = False
 
         if isinstance(exc, GeminiError):
             message = tr("chat.error", config=config, error=exc)

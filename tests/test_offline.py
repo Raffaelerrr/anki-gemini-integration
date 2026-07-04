@@ -26,6 +26,22 @@ class TestGeminiClient(unittest.TestCase):
         raw = "```html\n<p>Hello</p>\n```"
         self.assertEqual(self.gc.strip_markdown_fences(raw), "<p>Hello</p>")
 
+    def test_decode_stream_line_preserves_utf8(self):
+        raw = "Sì, più atomicità".encode("utf-8")
+        self.assertEqual(self.gc._decode_stream_line(raw), "Sì, più atomicità")
+
+    def test_iter_stream_text_deltas_decodes_utf8_text(self):
+        import json
+        from unittest.mock import Mock
+
+        chunk = {"candidates": [{"content": {"parts": [{"text": "Sì, più"}]}}]}
+        body = f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+        response = Mock()
+        response.iter_lines = lambda decode_unicode=False: iter(body.splitlines())
+
+        deltas = list(self.gc._iter_stream_text_deltas(response, {"language": "en"}))
+        self.assertEqual(deltas, ["Sì, più"])
+
     def test_extract_dynamic_rules(self):
         text = "Visible<UPDATE_DYNAMIC_RULES>\nRule 1\n</UPDATE_DYNAMIC_RULES>"
         cleaned, rules = self.gc.extract_dynamic_rules(text)
@@ -78,7 +94,12 @@ class TestGeminiClient(unittest.TestCase):
         self.assertEqual(chat_gen["thinkingConfig"]["thinkingBudget"], -1)
 
     def test_build_request_payload(self):
-        config = {"system_instruction": "Rules", "thinking_budget_optimize": 0, "thinking_budget_chat": -1}
+        config = {
+            "system_instruction": "Rules",
+            "dynamic_instructions": "Be concise",
+            "thinking_budget_optimize": 0,
+            "thinking_budget_chat": -1,
+        }
         payload = self.gc.build_request_payload(
             config=config,
             user_text="Hello",
@@ -87,10 +108,32 @@ class TestGeminiClient(unittest.TestCase):
             include_meta_rule=False,
             purpose="optimize",
         )
-        self.assertEqual(payload["contents"][-1]["parts"][0]["text"], "Hello")
+        user_text = payload["contents"][-1]["parts"][0]["text"]
+        self.assertIn("Return ONLY the updated field HTML/MathJax", user_text)
+        self.assertTrue(user_text.endswith("Hello"))
         self.assertEqual(payload["generationConfig"]["thinkingConfig"]["thinkingBudget"], 0)
         system_text = payload["systemInstruction"]["parts"][0]["text"]
-        self.assertIn("FIELD OPTIMIZATION", system_text)
+        self.assertEqual(system_text, "Rules\n\nADDITIONAL DYNAMIC RULES PREVIOUSLY STORED (Lower priority than the rules above):\nBe concise")
+        self.assertNotIn("OUTPUT (mandatory)", system_text)
+
+    def test_build_request_payload_uses_custom_dynamic_prefix(self):
+        config = {
+            "language": "en",
+            "system_instruction": "Rules",
+            "dynamic_instructions": "Be concise",
+            "prompt_dynamic_rules_prefix": "\nExtra rules:\n",
+            "thinking_budget_chat": -1,
+        }
+        payload = self.gc.build_request_payload(
+            config=config,
+            user_text="Hello",
+            history=None,
+            temperature=0.2,
+            include_meta_rule=False,
+            purpose="optimize",
+        )
+        system_text = payload["systemInstruction"]["parts"][0]["text"]
+        self.assertEqual(system_text, "Rules\nExtra rules:\nBe concise")
 
     def test_build_request_payload_chat_allows_explanations(self):
         config = {"system_instruction": "Rules", "language": "en", "thinking_budget_chat": -1}
@@ -103,7 +146,7 @@ class TestGeminiClient(unittest.TestCase):
             purpose="chat",
         )
         system_text = payload["systemInstruction"]["parts"][0]["text"]
-        self.assertNotIn("FIELD OPTIMIZATION", system_text)
+        self.assertNotIn("OUTPUT (mandatory)", system_text)
         self.assertIn("CHAT REPLY FORMATTING RULES", system_text)
 
     def test_build_request_payload_uses_split_instructions(self):
@@ -296,9 +339,52 @@ class TestI18n(unittest.TestCase):
         self.assertIn(r"\(...\)", en)
         self.assertIn(r"\[...\]", en)
         self.assertIn("$$", en)
-        self.assertIn("never use", en.lower())
+        self.assertIn("never", en.lower())
         self.assertIn("unformatted", en.lower())
-        self.assertNotIn("field optimization", en.lower())
+        self.assertNotIn("OUTPUT (mandatory)", en)
+        self.assertNotIn("OUTPUT (obbligatorio)", it)
+        self.assertIn("{{c1::", en)
+        self.assertIn("{{c1::", it)
+
+    def test_optimize_user_prompt_includes_output_rules(self):
+        en = self.i18n.default_optimize_user_prompt({"language": "en"})
+        self.assertIn("ONLY the updated field HTML/MathJax", en)
+        self.assertIn("no explanations", en.lower())
+        self.assertIn("do not rewrite", en.lower())
+
+    def test_chat_system_addon_merges_format_and_meta_rule(self):
+        en = self.i18n.default_chat_system_addon({"language": "en"})
+        self.assertIn("CHAT REPLY FORMATTING RULES", en)
+        self.assertIn("UPDATE_DYNAMIC_RULES", en)
+        self.assertIn("META-SYSTEM RULE", en)
+
+    def test_effective_advanced_prompts_use_config_overrides(self):
+        custom = {"language": "en", "prompt_optimize_user": "Custom optimize prefix"}
+        self.assertEqual(self.i18n.effective_optimize_user_prompt(custom), "Custom optimize prefix")
+        custom_chat = {"language": "en", "prompt_chat_addon": "Custom chat addon"}
+        self.assertEqual(self.i18n.effective_chat_system_addon(custom_chat), "Custom chat addon")
+        custom_prefix = {"language": "en", "prompt_dynamic_rules_prefix": "Custom dynamic header:\n"}
+        self.assertEqual(self.i18n.effective_dynamic_rules_prefix(custom_prefix), "Custom dynamic header:\n")
+        custom_wrapper = {"language": "en", "prompt_chat_context": "Note:\n{context}\nAsk: {request}"}
+        self.assertEqual(
+            self.i18n.format_chat_context_message(
+                custom_wrapper,
+                context="Field [Front]:\nHi",
+                request="Split this?",
+            ),
+            "Note:\nField [Front]:\nHi\nAsk: Split this?",
+        )
+
+    def test_format_chat_context_message_falls_back_without_placeholders(self):
+        config = {"language": "en", "prompt_chat_context": "Missing placeholders"}
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="ctx",
+            request="req",
+        )
+        self.assertIn("ctx", result)
+        self.assertIn("req", result)
+        self.assertIn("[FULL NOTE CONTEXT TO ANALYZE]", result)
 
     def test_effective_system_instruction_uses_language_default(self):
         english_default = self.i18n.default_system_instruction({"language": "en"})
@@ -390,6 +476,8 @@ class TestChatFormatter(unittest.TestCase):
         )
         self.assertIn("copy:t1-0", html_out)
         self.assertIn("Copy", html_out)
+        self.assertIn("chat-html-endcap", html_out)
+        self.assertIn("<table class='chat-code-block'", html_out)
         self.assertEqual(store["t1-0"], "<b>Hi</b>")
 
     def test_format_reply_empty(self):
@@ -487,6 +575,52 @@ class TestChatDialogHelpers(unittest.TestCase):
         self.assertEqual(fn("<p>Hi</p><br>"), "<p>Hi</p>")
         self.assertEqual(fn("  <div>Text</div>  "), "<div>Text</div>")
 
+    def test_field_inner_html_renders_inline_tags(self):
+        fn = self.chat._field_inner_html
+        self.assertEqual(
+            fn("Definisci la struttura algebrica di <b>gruppo</b>."),
+            "Definisci la struttura algebrica di <b>gruppo</b>.",
+        )
+        self.assertEqual(fn("plain text only"), "plain text only")
+        self.assertEqual(fn("x < 5"), "x &lt; 5")
+
+    def test_closing_tags_suffix_balances_tables_and_divs(self):
+        html_utils = _load_addon_module("ui.html_utils")
+        fn = html_utils.closing_tags_suffix
+        self.assertEqual(fn("<div><table><tr><td>x"), "</td></tr></table></div>")
+        self.assertEqual(fn("<p>Hi"), "</p>")
+        self.assertEqual(fn("<div><p>Hi</p>"), "</div>")
+
+    def test_field_inner_html_closes_unclosed_markup(self):
+        fn = self.chat._field_inner_html
+        self.assertTrue(fn("<div><p>Hello").endswith("</p></div>"))
+
+    def test_build_field_preview_block_uses_table_bgcolor(self):
+        fn = self.chat._build_field_preview_block
+        block = fn("Front", "Hello", first=True)
+        self.assertIn("<table class='chat-code-block'", block)
+        self.assertIn("bgcolor='#e8eaf6'", block)
+        self.assertIn("bgcolor='#f3f4f6'", block)
+        self.assertIn("<b class='chat-code-label'>Front:</b>", block)
+        self.assertNotIn("<br>", block)
+        spaced = fn("Back", "World", first=False)
+        self.assertTrue(spaced.startswith("<br>"))
+
+    def test_build_note_preview_html_closes_unclosed_divs(self):
+        blocks = [
+            (
+                "<table class='chat-code-block'><tr><td class='chat-field-content'>"
+                "<div><p>x</p>"
+            ),
+        ]
+        html = self.chat._build_note_preview_html(blocks)
+        self.assertTrue(html.startswith("<br><table class='chat-preview-panel'"))
+        self.assertIn("bgcolor='#7b1fa2'", html)
+        self.assertIn("<table class='chat-html-endcap'", html)
+        self.assertIn("bgcolor='#ffffff'", html)
+        self.assertEqual(html.count("<div"), html.count("</div>"))
+        self.assertEqual(html.count("<table"), html.count("</table>"))
+
 
 class TestConfig(unittest.TestCase):
     @classmethod
@@ -541,6 +675,11 @@ class TestConfig(unittest.TestCase):
     def test_default_config_value(self):
         self.assertEqual(self.config.default_config_value("model_optimize"), "gemini-2.5-flash-lite")
         self.assertEqual(self.config.default_config_value("brain_import_message"), "")
+        self.assertEqual(self.config.default_config_value("max_history_turns"), 10)
+        self.assertEqual(self.config.default_config_value("prompt_optimize_user"), "")
+        self.assertEqual(self.config.default_config_value("prompt_chat_addon"), "")
+        self.assertEqual(self.config.default_config_value("prompt_dynamic_rules_prefix"), "")
+        self.assertEqual(self.config.default_config_value("prompt_chat_context"), "")
 
     def test_api_key_configured(self):
         fn = self.config.api_key_configured

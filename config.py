@@ -35,10 +35,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "temperature_optimize": 0.1,
     "temperature_chat": 0.2,
     "timeout_seconds": 30,
-    "max_history_turns": 20,
+    "max_history_turns": 10,
     "confirm_before_apply": True,
     "max_retries": 2,
     "brain_import_message": "",
+    "prompt_optimize_user": "",
+    "prompt_chat_addon": "",
+    "prompt_dynamic_rules_prefix": "",
+    "prompt_chat_context": "",
     "suppress_default_system_instruction_warning": False,
     "suppress_api_key_restore_warning": False,
 }
@@ -63,6 +67,10 @@ RESTORABLE_SETTING_KEYS: tuple[str, ...] = (
     "confirm_before_apply",
     "max_retries",
     "brain_import_message",
+    "prompt_optimize_user",
+    "prompt_chat_addon",
+    "prompt_dynamic_rules_prefix",
+    "prompt_chat_context",
 )
 
 # Maps config keys to existing settings label i18n keys for the restore list.
@@ -81,6 +89,10 @@ RESTORABLE_SETTING_LABELS: dict[str, str] = {
     "temperature_chat": "settings.temp_chat",
     "confirm_before_apply": "settings.confirm_preview",
     "brain_import_message": "settings.brain_message",
+    "prompt_optimize_user": "settings.prompt_optimize_user",
+    "prompt_chat_addon": "settings.prompt_chat_addon",
+    "prompt_dynamic_rules_prefix": "settings.prompt_dynamic_rules_prefix",
+    "prompt_chat_context": "settings.prompt_chat_context",
     "system_instruction": "settings.system_instruction",
     "system_instruction_shared": "settings.system_instruction_shared",
     "system_instruction_optimize": "settings.system_instruction_optimize",

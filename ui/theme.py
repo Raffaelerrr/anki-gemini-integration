@@ -37,7 +37,7 @@ class ThemeColors:
     success: str
     error: str
     preview_accent: str
-    preview_bg: str
+    chat_surface_bg: str
 
 
 _LIGHT = ThemeColors(
@@ -53,16 +53,16 @@ _LIGHT = ThemeColors(
     msg_loading="#ef6c00",
     code_inline_bg="rgba(27, 31, 35, 0.06)",
     code_block_border="#c5cae9",
-    code_block_bg="rgba(92, 107, 192, 0.08)",
+    code_block_bg="#e8eaf6",
     code_label="#3949ab",
-    code_pre_bg="rgba(27, 31, 35, 0.04)",
+    code_pre_bg="#f3f4f6",
     panel_bg="#f6f8fa",
     panel_border="#d0d7de",
     panel_text="#2c3e50",
     success="#2e7d32",
     error="#c62828",
     preview_accent="#7b1fa2",
-    preview_bg="rgba(123, 31, 162, 0.08)",
+    chat_surface_bg="#ffffff",
 )
 
 _DARK = ThemeColors(
@@ -78,16 +78,16 @@ _DARK = ThemeColors(
     msg_loading="#ff9800",
     code_inline_bg="rgba(255, 255, 255, 0.1)",
     code_block_border="#5c6bc0",
-    code_block_bg="rgba(92, 107, 192, 0.08)",
+    code_block_bg="#3a3f5c",
     code_label="#9fa8da",
-    code_pre_bg="rgba(0, 0, 0, 0.2)",
+    code_pre_bg="#353535",
     panel_bg="rgba(255, 255, 255, 0.06)",
     panel_border="#555555",
     panel_text="#eceff1",
     success="#66bb6a",
     error="#ef5350",
     preview_accent="#9c27b0",
-    preview_bg="rgba(156, 39, 176, 0.08)",
+    chat_surface_bg="#2b2b2b",
 )
 
 
@@ -177,14 +177,10 @@ def chat_document_stylesheet(*, colors: ThemeColors | None = None) -> str:
         f".chat-code-pre {{ margin: 0; white-space: pre-wrap; word-wrap: break-word; "
         f"font-family: Consolas, monospace; font-size: 11px; color: {palette.text}; "
         f"background-color: {palette.code_pre_bg}; padding: 8px; border-radius: 4px; }}"
-        f".chat-preview-panel {{ background-color: {palette.preview_bg}; "
-        f"border-left: 4px solid {palette.preview_accent}; padding: 12px; "
-        f"margin: 14px 0 5px 0; font-size: 11px; border-radius: 4px; }}"
-        f".chat-preview-panel, .chat-preview-panel * {{ background-color: transparent; }}"
-        f".chat-field-block {{ margin-top: 12px; margin-bottom: 0px; line-height: 1.35; }}"
-        f".chat-field-block:first-child {{ margin-top: 0px; }}"
-        f".chat-field-title {{ font-weight: bold; display: block; margin: 0 0 4px 0; padding: 0; }}"
-        f".chat-field-content {{ margin: 0; padding: 0; display: block; }}"
+        f".chat-preview-panel {{ border-collapse: collapse; }}"
+        f".chat-after-preview {{ display: block; margin: 0; padding: 0; height: 0; }}"
+        f".chat-code-block .chat-field-content, .chat-code-block .chat-field-content * "
+        f"{{ background-color: transparent; }}"
         f".chat-field-content p, .chat-field-content div, "
         f".chat-field-content ol, .chat-field-content ul {{ "
         f"margin-top: 0px; margin-bottom: 4px; padding-top: 0px; }}"

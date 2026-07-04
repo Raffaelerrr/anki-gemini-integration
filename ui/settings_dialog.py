@@ -39,10 +39,26 @@ from ..i18n import (
     LANG_EN,
     LANG_IT,
     DEFAULT_LANGUAGE,
+    default_chat_system_addon,
+    default_dynamic_rules_prefix,
+    default_chat_context_wrapper,
+    default_optimize_user_prompt,
     effective_brain_import_message,
+    effective_chat_system_addon,
+    effective_dynamic_rules_prefix,
+    effective_chat_context_wrapper,
+    effective_optimize_user_prompt,
     is_builtin_brain_import_message,
+    is_builtin_chat_system_addon,
+    is_builtin_chat_context_wrapper,
+    is_builtin_dynamic_rules_prefix,
+    is_builtin_optimize_user_prompt,
     is_builtin_system_instruction,
     normalize_brain_import_message_for_save,
+    normalize_chat_system_addon_for_save,
+    normalize_chat_context_wrapper_for_save,
+    normalize_dynamic_rules_prefix_for_save,
+    normalize_optimize_user_prompt_for_save,
     normalize_system_instruction_fields_for_save,
     effective_system_instruction,
     tr,
@@ -114,6 +130,7 @@ class SettingsDialog(QDialog):
         self.stack.addWidget(self._build_form_page())
         self.stack.addWidget(self._build_restore_page())
         self.stack.addWidget(self._build_restore_warnings_page())
+        self.stack.addWidget(self._build_advanced_page())
         root.addWidget(self.stack, 1)
 
         self._form_btn_layout = QVBoxLayout()
@@ -139,8 +156,15 @@ class SettingsDialog(QDialog):
             self.btn_settings_help,
             tooltip=tr("settings.info", config=config),
         )
+        self.btn_advanced = QPushButton(tr("settings.advanced", config=config), self)
+        self.btn_advanced.clicked.connect(self._enter_advanced_mode)
+        _setup_footer_button(
+            self.btn_advanced,
+            tooltip=tr("settings.advanced.title", config=config),
+        )
         utility_row.addWidget(self.btn_restore_mode)
         utility_row.addWidget(self.btn_restore_warnings)
+        utility_row.addWidget(self.btn_advanced)
         utility_row.addWidget(self.btn_settings_help)
         utility_row.addStretch(1)
 
@@ -217,6 +241,18 @@ class SettingsDialog(QDialog):
         self._warnings_btn_layout.addWidget(self.btn_apply_warning_restore)
         self._warnings_btn_layout.addWidget(self.btn_warnings_back)
         root.addLayout(self._warnings_btn_layout)
+
+        self._advanced_btn_layout = QHBoxLayout()
+        self._advanced_btn_layout.setSpacing(8)
+        self.btn_advanced_back = QPushButton(tr("settings.restore.back", config=config), self)
+        self.btn_advanced_back.clicked.connect(self._leave_advanced_mode)
+        _setup_footer_button(
+            self.btn_advanced_back,
+            tooltip=tr("settings.restore.back", config=config),
+        )
+        self._advanced_btn_layout.addStretch(1)
+        self._advanced_btn_layout.addWidget(self.btn_advanced_back)
+        root.addLayout(self._advanced_btn_layout)
 
         self._set_subpage_mode(None)
 
@@ -328,7 +364,7 @@ class SettingsDialog(QDialog):
         params_row.addWidget(QLabel(tr("settings.chat_history", config=config)))
         self.history_input = NoWheelSpinBox(form_host)
         self.history_input.setRange(0, 100)
-        self.history_input.setValue(int(self.config.get("max_history_turns", 20)))
+        self.history_input.setValue(int(self.config.get("max_history_turns", 10)))
         params_row.addWidget(self.history_input)
         layout.addLayout(params_row)
 
@@ -490,6 +526,70 @@ class SettingsDialog(QDialog):
             checkbox.setChecked(is_warning_dismissed(self.config, key))
             layout.addWidget(checkbox)
             self._warning_restore_checkboxes[key] = checkbox
+
+        layout.addStretch(1)
+        scroll.setWidget(host)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.addWidget(scroll)
+        return page
+
+    def _build_advanced_page(self) -> QWidget:
+        config = self.config
+        page = QWidget(self)
+        scroll = QScrollArea(page)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        host = QWidget(scroll)
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(4, 4, 4, 4)
+
+        layout.addWidget(QLabel(f"<b>{tr('settings.advanced.title', config=config)}</b>"))
+        layout.addWidget(
+            QLabel(muted_hint_html(tr("settings.advanced.hint", config=config)), host)
+        )
+        layout.addWidget(QLabel("<br>"))
+
+        layout.addWidget(QLabel(f"<b>{tr('settings.prompt_optimize_user', config=config)}</b>"))
+        layout.addWidget(
+            QLabel(muted_hint_html(tr("settings.prompt_optimize_user.hint", config=config)), host)
+        )
+        self.prompt_optimize_user_input = ScrollAwareTextEdit(host)
+        self.prompt_optimize_user_input.setMinimumHeight(100)
+        self.prompt_optimize_user_input.setPlainText(effective_optimize_user_prompt(config))
+        layout.addWidget(self.prompt_optimize_user_input)
+
+        layout.addWidget(QLabel(f"<br><b>{tr('settings.prompt_chat_addon', config=config)}</b>"))
+        layout.addWidget(
+            QLabel(muted_hint_html(tr("settings.prompt_chat_addon.hint", config=config)), host)
+        )
+        self.prompt_chat_addon_input = ScrollAwareTextEdit(host)
+        self.prompt_chat_addon_input.setMinimumHeight(180)
+        self.prompt_chat_addon_input.setPlainText(effective_chat_system_addon(config))
+        layout.addWidget(self.prompt_chat_addon_input)
+
+        layout.addWidget(QLabel(f"<br><b>{tr('settings.prompt_dynamic_rules_prefix', config=config)}</b>"))
+        layout.addWidget(
+            QLabel(
+                muted_hint_html(tr("settings.prompt_dynamic_rules_prefix.hint", config=config)),
+                host,
+            )
+        )
+        self.prompt_dynamic_rules_prefix_input = ScrollAwareTextEdit(host)
+        self.prompt_dynamic_rules_prefix_input.setMinimumHeight(70)
+        self.prompt_dynamic_rules_prefix_input.setPlainText(effective_dynamic_rules_prefix(config))
+        layout.addWidget(self.prompt_dynamic_rules_prefix_input)
+
+        layout.addWidget(QLabel(f"<br><b>{tr('settings.prompt_chat_context', config=config)}</b>"))
+        layout.addWidget(
+            QLabel(muted_hint_html(tr("settings.prompt_chat_context.hint", config=config)), host)
+        )
+        self.prompt_chat_context_input = ScrollAwareTextEdit(host)
+        self.prompt_chat_context_input.setMinimumHeight(100)
+        self.prompt_chat_context_input.setPlainText(effective_chat_context_wrapper(config))
+        layout.addWidget(self.prompt_chat_context_input)
 
         layout.addStretch(1)
         scroll.setWidget(host)
@@ -673,9 +773,11 @@ class SettingsDialog(QDialog):
         on_form = mode is None
         on_defaults = mode == "defaults"
         on_warnings = mode == "warnings"
+        on_advanced = mode == "advanced"
 
         self.btn_restore_mode.setVisible(on_form)
         self.btn_restore_warnings.setVisible(on_form)
+        self.btn_advanced.setVisible(on_form)
         self.btn_settings_help.setVisible(on_form)
         self.btn_save.setVisible(on_form)
         self.btn_cancel.setVisible(on_form)
@@ -687,6 +789,8 @@ class SettingsDialog(QDialog):
         self.btn_warnings_toggle_all.setVisible(on_warnings)
         self.btn_apply_warning_restore.setVisible(on_warnings)
         self.btn_warnings_back.setVisible(on_warnings)
+
+        self.btn_advanced_back.setVisible(on_advanced)
 
     def _refresh_warning_restore_checkboxes(self) -> None:
         for key, checkbox in self._warning_restore_checkboxes.items():
@@ -757,6 +861,14 @@ class SettingsDialog(QDialog):
         self._set_subpage_mode("warnings")
 
     def _leave_restore_warnings_mode(self) -> None:
+        self.stack.setCurrentIndex(0)
+        self._set_subpage_mode(None)
+
+    def _enter_advanced_mode(self) -> None:
+        self.stack.setCurrentIndex(3)
+        self._set_subpage_mode("advanced")
+
+    def _leave_advanced_mode(self) -> None:
         self.stack.setCurrentIndex(0)
         self._set_subpage_mode(None)
 
@@ -867,6 +979,34 @@ class SettingsDialog(QDialog):
             self.dynamic_input.setPlainText(str(default_value))
             return
 
+        if key == "prompt_optimize_user":
+            lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
+            self.prompt_optimize_user_input.setPlainText(
+                default_optimize_user_prompt({"language": lang})
+            )
+            return
+
+        if key == "prompt_chat_addon":
+            lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
+            self.prompt_chat_addon_input.setPlainText(
+                default_chat_system_addon({"language": lang})
+            )
+            return
+
+        if key == "prompt_dynamic_rules_prefix":
+            lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
+            self.prompt_dynamic_rules_prefix_input.setPlainText(
+                default_dynamic_rules_prefix({"language": lang})
+            )
+            return
+
+        if key == "prompt_chat_context":
+            lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
+            self.prompt_chat_context_input.setPlainText(
+                default_chat_context_wrapper({"language": lang})
+            )
+            return
+
     def _apply_selected_defaults(self) -> None:
         selected = self._selected_restore_keys()
         if not selected:
@@ -904,6 +1044,26 @@ class SettingsDialog(QDialog):
         if is_builtin_brain_import_message(current_brain):
             self.brain_message_input.setPlainText(tr("defaults.brain_import_message", lang=lang))
         self._refresh_builtin_instruction_fields_for_language(lang)
+        current_optimize_prompt = self.prompt_optimize_user_input.toPlainText().strip()
+        if is_builtin_optimize_user_prompt(current_optimize_prompt):
+            self.prompt_optimize_user_input.setPlainText(
+                tr("instructions.optimize_user_prompt", lang=lang)
+            )
+        current_chat_addon = self.prompt_chat_addon_input.toPlainText().strip()
+        if is_builtin_chat_system_addon(current_chat_addon):
+            self.prompt_chat_addon_input.setPlainText(
+                tr("instructions.chat_system_addon", lang=lang)
+            )
+        current_dynamic_prefix = self.prompt_dynamic_rules_prefix_input.toPlainText().strip()
+        if is_builtin_dynamic_rules_prefix(current_dynamic_prefix):
+            self.prompt_dynamic_rules_prefix_input.setPlainText(
+                tr("instructions.dynamic_rules_prefix", lang=lang)
+            )
+        current_chat_context = self.prompt_chat_context_input.toPlainText().strip()
+        if is_builtin_chat_context_wrapper(current_chat_context):
+            self.prompt_chat_context_input.setPlainText(
+                tr("instructions.chat_context_wrapper", lang=lang)
+            )
 
     def _save_and_accept(self) -> None:
         new_key = self.api_key_input.text().strip()
@@ -935,6 +1095,18 @@ class SettingsDialog(QDialog):
         )
         self.config.update(instruction_fields)
         self.config["dynamic_instructions"] = self.dynamic_input.toPlainText()
+        self.config["prompt_optimize_user"] = normalize_optimize_user_prompt_for_save(
+            self.prompt_optimize_user_input.toPlainText()
+        )
+        self.config["prompt_chat_addon"] = normalize_chat_system_addon_for_save(
+            self.prompt_chat_addon_input.toPlainText()
+        )
+        self.config["prompt_dynamic_rules_prefix"] = normalize_dynamic_rules_prefix_for_save(
+            self.prompt_dynamic_rules_prefix_input.toPlainText()
+        )
+        self.config["prompt_chat_context"] = normalize_chat_context_wrapper_for_save(
+            self.prompt_chat_context_input.toPlainText()
+        )
         for key in DISMISSIBLE_WARNING_KEYS:
             self.config[key] = bool(self.config.get(key, False))
         save_config(self.config)

@@ -19,7 +19,13 @@ from .constants import (
     GEMINI_MODELS_LIST_PATH,
     GEMINI_STREAM_API_PATH,
 )
-from .i18n import effective_system_instruction, tr
+from .i18n import (
+    effective_chat_system_addon,
+    effective_dynamic_rules_prefix,
+    effective_optimize_user_prompt,
+    effective_system_instruction,
+    tr,
+)
 
 Purpose = Literal["optimize", "chat"]
 
@@ -56,14 +62,16 @@ def merge_system_instructions(
     instruction = effective_system_instruction(config, purpose=purpose)
     dynamic = (config.get("dynamic_instructions") or "").strip()
     if dynamic:
-        instruction += tr("instructions.dynamic_rules_prefix", config=config)
+        instruction += effective_dynamic_rules_prefix(config)
         instruction += dynamic
-    if purpose == "optimize":
-        instruction += tr("instructions.optimize_output", config=config)
     if include_meta_rule:
-        instruction += tr("instructions.chat_format", config=config)
-        instruction += tr("instructions.meta_rule_dynamic", config=config)
+        instruction += effective_chat_system_addon(config)
     return instruction
+
+
+def build_optimize_user_text(config: dict[str, Any], user_text: str) -> str:
+    prefix = effective_optimize_user_prompt(config)
+    return f"{prefix}\n\n{user_text}"
 
 
 def resolve_model(config: dict[str, Any], purpose: Purpose) -> str:
@@ -110,6 +118,8 @@ def build_request_payload(
     purpose: Purpose,
 ) -> dict[str, Any]:
     contents = list(history or [])
+    if purpose == "optimize":
+        user_text = build_optimize_user_text(config, user_text)
     contents.append({"role": "user", "parts": [{"text": user_text}]})
     return {
         "contents": contents,
@@ -174,8 +184,18 @@ def _extract_stream_text(data: dict[str, Any], config: dict[str, Any]) -> str:
     return "".join(part.get("text", "") for part in parts if part.get("text"))
 
 
+def _decode_stream_line(raw_line: bytes) -> str | None:
+    if not raw_line:
+        return None
+    try:
+        return raw_line.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw_line.decode("utf-8", errors="replace")
+
+
 def _iter_stream_text_deltas(response: requests.Response, config: dict[str, Any]):
-    for line in response.iter_lines(decode_unicode=True):
+    for raw_line in response.iter_lines(decode_unicode=False):
+        line = _decode_stream_line(raw_line)
         if not line or not line.startswith("data: "):
             continue
         payload = line[6:].strip()

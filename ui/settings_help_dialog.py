@@ -64,6 +64,11 @@ class SettingsHelpDialog(QDialog):
 
         self.intro_label = QLabel(muted_hint_html(tr("settings.help.intro", config=self.config)))
         outer.addWidget(self.intro_label)
+
+        btn_overview = QPushButton(tr("settings.help.prompts_overview.link", config=self.config), page)
+        btn_overview.clicked.connect(self._show_prompts_overview)
+        outer.addWidget(btn_overview)
+
         outer.addWidget(QLabel("<br>"))
 
         scroll = QScrollArea(page)
@@ -114,6 +119,13 @@ class SettingsHelpDialog(QDialog):
 
     def _show_list(self) -> None:
         self.stack.setCurrentIndex(0)
+
+    def _show_prompts_overview(self) -> None:
+        self.detail_title.setText(
+            f"<b>{tr('settings.help.prompts_overview.title', config=self.config)}</b>"
+        )
+        self.detail_body.setHtml(tr("settings.help.prompts_overview", config=self.config))
+        self.stack.setCurrentIndex(1)
 
     def _show_detail(self, setting_key: str) -> None:
         label_key = RESTORABLE_SETTING_LABELS.get(setting_key, setting_key)
