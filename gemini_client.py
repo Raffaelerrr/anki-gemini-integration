@@ -46,6 +46,10 @@ class GeminiResponseError(GeminiError):
     pass
 
 
+class GeminiCancelledError(GeminiError):
+    pass
+
+
 def strip_markdown_fences(text: str) -> str:
     cleaned = text.strip()
     cleaned = re.sub(r"^```(?:html|markdown|text)?\s*\n?", "", cleaned, flags=re.IGNORECASE)
@@ -193,21 +197,45 @@ def _decode_stream_line(raw_line: bytes) -> str | None:
         return raw_line.decode("utf-8", errors="replace")
 
 
-def _iter_stream_text_deltas(response: requests.Response, config: dict[str, Any]):
-    for raw_line in response.iter_lines(decode_unicode=False):
-        line = _decode_stream_line(raw_line)
-        if not line or not line.startswith("data: "):
-            continue
-        payload = line[6:].strip()
-        if not payload or payload == "[DONE]":
-            continue
+def _check_cancelled(
+    should_cancel: Callable[[], bool] | None,
+    config: dict[str, Any],
+) -> None:
+    if should_cancel is not None and should_cancel():
+        raise GeminiCancelledError(tr("gemini.cancelled", config=config))
+
+
+def _iter_stream_text_deltas(
+    response: requests.Response,
+    config: dict[str, Any],
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+):
+    try:
+        for raw_line in response.iter_lines(decode_unicode=False):
+            _check_cancelled(should_cancel, config)
+            line = _decode_stream_line(raw_line)
+            if not line or not line.startswith("data: "):
+                continue
+            payload = line[6:].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            text = _extract_stream_text(data, config)
+            if text:
+                yield text
+    except (AttributeError, requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError) as exc:
+        if should_cancel is not None and should_cancel():
+            raise GeminiCancelledError(tr("gemini.cancelled", config=config)) from exc
+        raise
+    finally:
         try:
-            data = json.loads(payload)
-        except json.JSONDecodeError:
-            continue
-        text = _extract_stream_text(data, config)
-        if text:
-            yield text
+            response.close()
+        except Exception:
+            pass
 
 
 def _classify_http_error(status_code: int, response_text: str, config: dict[str, Any]) -> GeminiError:
@@ -224,6 +252,75 @@ def _request_headers(api_key: str) -> dict[str, str]:
     return {"x-goog-api-key": api_key, "Content-Type": "application/json"}
 
 
+def _run_streaming_request(
+    *,
+    config: dict[str, Any],
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    timeout: int,
+    max_retries: int,
+    should_cancel: Callable[[], bool] | None = None,
+    register_response: Callable[[requests.Response | None], None] | None = None,
+    on_chunk: Callable[[str], None] | None = None,
+) -> str:
+    last_error: Exception | None = None
+    for attempt in range(max_retries + 1):
+        _check_cancelled(should_cancel, config)
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=timeout,
+                stream=True,
+            )
+            if register_response is not None:
+                register_response(response)
+            if not response.ok:
+                raise _classify_http_error(response.status_code, response.text, config)
+
+            accumulated = ""
+            for delta in _iter_stream_text_deltas(response, config, should_cancel=should_cancel):
+                accumulated += delta
+                if on_chunk is not None:
+                    on_chunk(accumulated)
+
+            if register_response is not None:
+                register_response(None)
+
+            if not accumulated.strip():
+                raise GeminiResponseError(tr("gemini.empty_response", config=config))
+            return accumulated
+        except GeminiCancelledError:
+            if register_response is not None:
+                register_response(None)
+            raise
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            if register_response is not None:
+                register_response(None)
+            if should_cancel is not None and should_cancel():
+                raise GeminiCancelledError(tr("gemini.cancelled", config=config)) from exc
+            last_error = GeminiError(tr("gemini.network_error", config=config, error=exc))
+        except GeminiError as exc:
+            if register_response is not None:
+                register_response(None)
+            if isinstance(exc, (GeminiAuthError, GeminiRateLimitError)):
+                raise
+            last_error = exc
+        except Exception as exc:
+            if register_response is not None:
+                register_response(None)
+            if should_cancel is not None and should_cancel():
+                raise GeminiCancelledError(tr("gemini.cancelled", config=config)) from exc
+            raise
+
+        if attempt < max_retries:
+            time.sleep(1.5 * (attempt + 1))
+
+    raise last_error or GeminiError(tr("gemini.unknown_error", config=config))
+
+
 def call_gemini(
     *,
     config: dict[str, Any],
@@ -232,6 +329,8 @@ def call_gemini(
     temperature: float | None = None,
     include_meta_rule: bool = False,
     purpose: Purpose = "chat",
+    should_cancel: Callable[[], bool] | None = None,
+    register_response: Callable[[requests.Response | None], None] | None = None,
 ) -> str:
     api_key = (config.get("api_key") or "").strip()
     model = resolve_model(config, purpose)
@@ -239,8 +338,6 @@ def call_gemini(
     max_retries = int(config.get("max_retries") or 2)
     temp = temperature if temperature is not None else float(config.get("temperature_chat") or 0.2)
 
-    url = build_api_url(model, stream=False)
-    headers = _request_headers(api_key)
     payload = build_request_payload(
         config=config,
         user_text=user_text,
@@ -249,6 +346,22 @@ def call_gemini(
         include_meta_rule=include_meta_rule,
         purpose=purpose,
     )
+    headers = _request_headers(api_key)
+
+    if should_cancel is not None:
+        url = build_api_url(model, stream=True)
+        return _run_streaming_request(
+            config=config,
+            url=url,
+            headers=headers,
+            payload=payload,
+            timeout=timeout,
+            max_retries=max_retries,
+            should_cancel=should_cancel,
+            register_response=register_response,
+        )
+
+    url = build_api_url(model, stream=False)
 
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
@@ -279,6 +392,8 @@ def stream_gemini(
     temperature: float | None = None,
     include_meta_rule: bool = False,
     on_chunk: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    register_response: Callable[[requests.Response | None], None] | None = None,
 ) -> str:
     api_key = (config.get("api_key") or "").strip()
     model = resolve_model(config, "chat")
@@ -297,33 +412,17 @@ def stream_gemini(
         purpose="chat",
     )
 
-    last_error: Exception | None = None
-    for attempt in range(max_retries + 1):
-        try:
-            response = requests.post(url, json=payload, headers=headers, timeout=timeout, stream=True)
-            if not response.ok:
-                raise _classify_http_error(response.status_code, response.text, config)
-
-            accumulated = ""
-            for delta in _iter_stream_text_deltas(response, config):
-                accumulated += delta
-                if on_chunk is not None:
-                    on_chunk(accumulated)
-
-            if not accumulated.strip():
-                raise GeminiResponseError(tr("gemini.empty_response", config=config))
-            return accumulated
-        except (requests.Timeout, requests.ConnectionError) as exc:
-            last_error = GeminiError(tr("gemini.network_error", config=config, error=exc))
-        except GeminiError as exc:
-            if isinstance(exc, (GeminiAuthError, GeminiRateLimitError)):
-                raise
-            last_error = exc
-
-        if attempt < max_retries:
-            time.sleep(1.5 * (attempt + 1))
-
-    raise last_error or GeminiError(tr("gemini.unknown_error", config=config))
+    return _run_streaming_request(
+        config=config,
+        url=url,
+        headers=headers,
+        payload=payload,
+        timeout=timeout,
+        max_retries=max_retries,
+        should_cancel=should_cancel,
+        register_response=register_response,
+        on_chunk=on_chunk,
+    )
 
 
 def build_models_list_url(*, page_token: str | None = None, page_size: int = 100) -> str:

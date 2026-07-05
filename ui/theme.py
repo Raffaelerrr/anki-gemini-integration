@@ -315,11 +315,13 @@ QPushButton {
 """
 
 
-def visibility_toggle_button_stylesheet(*, size: int = 24) -> str:
+def visibility_toggle_button_stylesheet(*, size: int = 26, icon_size: int = 14) -> str:
     radius = size // 2
+    inner = max(1, size - 2)
+    pad = max(0, (inner - icon_size) // 2)
     return f"""
-QPushButton {{
-    padding: 0px;
+QToolButton#visibilityToggle, QPushButton#visibilityToggle {{
+    padding: {pad}px;
     margin: 0px;
     min-width: {size}px;
     max-width: {size}px;

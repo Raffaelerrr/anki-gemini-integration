@@ -905,6 +905,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Invia",
         "en": "Send",
     },
+    "chat.stop": {
+        "it": "Stop",
+        "en": "Stop",
+    },
+    "chat.stopped": {
+        "it": "Risposta interrotta. Puoi modificare il messaggio e reinviarlo.",
+        "en": "Response stopped. You can edit your message and send again.",
+    },
     "chat.welcome": {
         "it": "Ciao! Puoi chiedermi spiegazioni o dirmi di memorizzare nuove direttive di stile.",
         "en": "Hi! You can ask for explanations or tell me to remember new style directives.",
@@ -929,6 +937,26 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Mostra nota importata",
         "en": "Show imported note",
     },
+    "chat.preview.open_window": {
+        "it": "Anteprima",
+        "en": "Preview",
+    },
+    "chat.preview.open_window.tooltip": {
+        "it": "Apri l'anteprima della nota importata in una finestra separata",
+        "en": "Open the imported note preview in a separate window",
+    },
+    "chat.preview.window_title": {
+        "it": "Anteprima nota importata",
+        "en": "Imported note preview",
+    },
+    "chat.preview.refresh": {
+        "it": "Aggiorna anteprima",
+        "en": "Refresh preview",
+    },
+    "chat.preview.empty": {
+        "it": "Nessun contenuto da mostrare.",
+        "en": "No content to show.",
+    },
     "chat.api_key_missing": {
         "it": "Errore: API Key mancante (⚙️).",
         "en": "Error: API key missing (⚙️).",
@@ -948,6 +976,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "chat.loading": {
         "it": "🤖 Gemini sta scrivendo.",
         "en": "🤖 Gemini is typing.",
+    },
+    "chat.stopping": {
+        "it": "⏹️ Interruzione in corso.",
+        "en": "⏹️ Stopping.",
     },
     "chat.copied": {
         "it": "Contenuto del campo copiato negli appunti.",
@@ -1204,6 +1236,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "gemini.unknown_error": {
         "it": "Errore sconosciuto durante la chiamata a Gemini.",
         "en": "Unknown error while calling Gemini.",
+    },
+    "gemini.cancelled": {
+        "it": "Richiesta annullata.",
+        "en": "Request cancelled.",
     },
     "gemini.models_empty": {
         "it": "L'API Gemini non ha restituito modelli utilizzabili per generateContent.",

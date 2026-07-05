@@ -46,3 +46,25 @@ def field_inner_html(value: str) -> str:
         return cleaned + closing_tags_suffix(cleaned)
     normalized = cleaned.replace("\r\n", "\n").replace("\r", "\n")
     return html.escape(normalized).replace("\n", "<br>")
+
+
+def field_rich_document_stylesheet() -> str:
+    from .theme import get_theme_colors
+
+    palette = get_theme_colors()
+    return (
+        f"body {{ color: {palette.text}; background-color: transparent; }}"
+    )
+
+
+def apply_field_rich_edit_theme(editor) -> None:
+    from .theme import apply_native_text_edit_surface_theme
+
+    apply_native_text_edit_surface_theme(editor)
+    editor.document().setDefaultStyleSheet(field_rich_document_stylesheet())
+
+
+def load_field_rich_edit(editor, value: str) -> None:
+    apply_field_rich_edit_theme(editor)
+    editor.setHtml(field_inner_html(value))
+    editor.document().setModified(False)

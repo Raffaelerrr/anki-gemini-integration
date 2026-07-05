@@ -318,6 +318,11 @@ class TestI18n(unittest.TestCase):
         )
         self.assertIn("{context}", self.i18n.tr("chat.edit_wrapper.wrapper_label", config=en))
         self.assertIn("{request}", self.i18n.tr("chat.edit_wrapper.wrapper_hint", config=en))
+        self.assertEqual(self.i18n.tr("chat.preview.refresh", config=en), "Refresh preview")
+        self.assertEqual(
+            self.i18n.tr("chat.preview.open_window.tooltip", config=en),
+            "Open the imported note preview in a separate window",
+        )
 
     def test_normalize_language(self):
         self.assertEqual(self.i18n.normalize_language("en"), "en")
@@ -1057,6 +1062,64 @@ class TestGeminiHttpIntegration(unittest.TestCase):
                 result = self.gc.call_gemini(config=self._base_config(), user_text="ping")
         self.assertEqual(result, "Recovered")
         self.assertEqual(post.call_count, 3)
+
+    def test_stream_gemini_cancelled(self):
+        checks = [0]
+
+        def should_cancel() -> bool:
+            checks[0] += 1
+            return checks[0] > 1
+
+        response = MagicMock(ok=True, status_code=200, text="")
+        response.iter_lines.return_value = [
+            b'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}',
+            b"",
+        ]
+
+        with patch.object(self.gc.requests, "post", return_value=response):
+            with self.assertRaises(self.gc.GeminiCancelledError):
+                self.gc.stream_gemini(
+                    config=self._base_config(),
+                    user_text="ping",
+                    should_cancel=should_cancel,
+                )
+
+    def test_stream_gemini_closed_response_is_cancelled(self):
+        cancelled = {"value": False}
+
+        def should_cancel() -> bool:
+            return cancelled["value"]
+
+        response = MagicMock(ok=True, status_code=200, text="")
+
+        def iter_lines(**kwargs):
+            cancelled["value"] = True
+            raise AttributeError("'NoneType' object has no attribute 'read'")
+
+        response.iter_lines.side_effect = iter_lines
+
+        with patch.object(self.gc.requests, "post", return_value=response):
+            with self.assertRaises(self.gc.GeminiCancelledError):
+                self.gc.stream_gemini(
+                    config=self._base_config(),
+                    user_text="ping",
+                    should_cancel=should_cancel,
+                )
+
+    def test_call_gemini_cancellable_uses_stream(self):
+        response = MagicMock(ok=True, status_code=200, text="")
+        response.iter_lines.return_value = [
+            b'data: {"candidates":[{"content":{"parts":[{"text":"OK"}]}}]}',
+            b"",
+        ]
+        with patch.object(self.gc.requests, "post", return_value=response) as post:
+            result = self.gc.call_gemini(
+                config=self._base_config(),
+                user_text="ping",
+                should_cancel=lambda: False,
+            )
+        self.assertEqual(result, "OK")
+        self.assertIn("alt=sse", post.call_args.args[0])
 
 
 if __name__ == "__main__":

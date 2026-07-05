@@ -2,113 +2,197 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from aqt.qt import (
+    QColor,
+    QPainter,
+    QPen,
+    Qt,
+    QRectF,
+    QStyle,
+    QWidget,
+)
+
 _ICONS_DIR = Path(__file__).resolve().parent / "icons"
-_EYE_VISIBLE_SVG = _ICONS_DIR / "eye.svg"
-_EYE_HIDDEN_SVG = _ICONS_DIR / "barred_eye.svg"
+_EYE_SVG = "eye.svg"
+_BARRED_EYE_SVG = "barred_eye.svg"
+
+
+def visibility_icon_paths() -> tuple[Path, Path]:
+    """Paths to the show/hide SVGs; replace these files with your own art."""
+    return (_ICONS_DIR / _EYE_SVG, _ICONS_DIR / _BARRED_EYE_SVG)
+
+
+def style_scrollbar_extent() -> int:
+    from aqt.qt import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return 14
+    try:
+        metric = QStyle.PixelMetric.PM_ScrollBarExtent
+    except AttributeError:
+        metric = QStyle.PM_ScrollBarExtent
+    return max(0, app.style().pixelMetric(metric))
+
+
+def paint_vector_eye(
+    painter: QPainter,
+    rect: QRectF,
+    *,
+    color: str,
+    visible: bool,
+) -> None:
+    cx = rect.center().x()
+    cy = rect.center().y()
+    eye_w = rect.width() * 0.86
+    eye_h = rect.height() * 0.50
+    eye_box = QRectF(cx - eye_w / 2, cy - eye_h / 2, eye_w, eye_h)
+
+    outline = QPen(QColor(color))
+    outline.setWidthF(1.25)
+    outline.setCosmetic(True)
+    outline.setCapStyle(Qt.PenCapStyle.RoundCap)
+    outline.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+
+    painter.setPen(outline)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawEllipse(eye_box)
+
+    pupil_r = rect.width() * 0.12
+    pupil = QRectF(cx - pupil_r, cy - pupil_r, pupil_r * 2, pupil_r * 2)
+    painter.setBrush(QColor(color))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.drawEllipse(pupil)
+
+    if not visible:
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        slash = QPen(QColor(color))
+        slash.setWidthF(1.35)
+        slash.setCosmetic(True)
+        slash.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(slash)
+        inset = min(rect.width(), rect.height()) * 0.18
+        painter.drawLine(
+            QRectF(rect.left() + inset, rect.bottom() - inset, 0, 0).topLeft(),
+            QRectF(rect.right() - inset, rect.top() + inset, 0, 0).topLeft(),
+        )
 
 
 def _tint_svg(svg_text: str, color: str) -> str:
+    """Replace currentColor / black strokes so QSvgRenderer paints the theme color."""
     tinted = svg_text.replace("currentColor", color)
     return tinted.replace("#000000", color)
 
 
-def _svg_renderer_class():
+def _load_svg_renderer(svg_path: Path, *, color: str):
+    if not svg_path.is_file():
+        return None
     try:
         from PyQt6.QtSvg import QSvgRenderer
-
-        return QSvgRenderer
     except ImportError:
         try:
-            from PyQt5.QtSvg import QSvgRenderer
-
-            return QSvgRenderer
+            from PyQt5.QtSvg import QSvgRenderer  # type: ignore[no-redef]
         except ImportError:
             return None
 
-
-def _render_svg_icon(svg_path: Path, *, color: str, size: int):
-    from aqt.qt import QIcon, QPainter, QPixmap, Qt
-
-    QSvgRenderer = _svg_renderer_class()
-    if QSvgRenderer is None or not svg_path.is_file():
-        return None
-
-    from aqt.qt import QByteArray, QRectF
+    from aqt.qt import QByteArray
 
     svg_text = _tint_svg(svg_path.read_text(encoding="utf-8"), color)
     renderer = QSvgRenderer(QByteArray(svg_text.encode("utf-8")))
     if not renderer.isValid():
         return None
+    return renderer
 
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
+
+def _render_svg_icon(
+    painter: QPainter,
+    rect: QRectF,
+    *,
+    svg_path: Path,
+    color: str,
+) -> bool:
+    renderer = _load_svg_renderer(svg_path, color=color)
+    if renderer is None:
+        return False
+
+    painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    inset = 1
-    bounds = size - 2 * inset
-    renderer.render(painter, QRectF(inset, inset, bounds, bounds))
-    painter.end()
-    return QIcon(pixmap)
+    renderer.render(painter, rect)
+    painter.restore()
+    return True
 
 
-def _render_fallback_icon(*, visible: bool, size: int):
-    from aqt.qt import QColor, QIcon, QPainter, QPen, QPixmap, Qt
+class VisibilityToggleButton(QWidget):
+    """Circular show/hide toggle; paints border + vector eye in paintEvent."""
 
-    from .theme import get_theme_colors
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        size: int = 28,
+        on_click=None,
+    ) -> None:
+        super().__init__(parent)
+        self._content_visible = True
+        self._on_click = on_click
+        self._size = size
+        self.setFixedSize(size, size)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet("background: transparent; border: none; margin: 0px;")
 
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
+    def set_content_visible(self, visible: bool) -> None:
+        if self._content_visible != visible:
+            self._content_visible = visible
+            self.update()
 
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    def paintEvent(self, event) -> None:
+        from .theme import get_theme_colors, is_night_mode
 
-    color = QColor(get_theme_colors().text)
-    outline = QPen(color)
-    outline.setWidthF(max(1.2, size * 0.08))
-    outline.setCapStyle(Qt.PenCapStyle.RoundCap)
-    outline.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-    cx = size / 2
-    cy = size / 2
-    eye_w = size * 0.72
-    eye_h = size * 0.38
+        palette = get_theme_colors()
+        border_color = "#000000" if not is_night_mode() else palette.border
+        fg = palette.text
 
-    painter.setPen(outline)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.drawEllipse(
-        int(cx - eye_w / 2),
-        int(cy - eye_h / 2),
-        int(eye_w),
-        int(eye_h),
-    )
+        side = float(min(self.width(), self.height()))
+        ring = QRectF(2.0, 2.0, side - 4.0, side - 4.0)
 
-    pupil_r = size * 0.11
-    painter.setBrush(color)
-    painter.drawEllipse(
-        int(cx - pupil_r),
-        int(cy - pupil_r),
-        int(pupil_r * 2),
-        int(pupil_r * 2),
-    )
-
-    if not visible:
+        border_pen = QPen(QColor(border_color))
+        border_pen.setWidthF(1.0)
+        border_pen.setCosmetic(True)
+        painter.setPen(border_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        slash = QPen(color)
-        slash.setWidthF(max(1.4, size * 0.09))
-        slash.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(slash)
-        inset = size * 0.16
-        painter.drawLine(int(inset), int(size - inset), int(size - inset), int(inset))
+        painter.drawEllipse(ring)
 
-    painter.end()
-    return QIcon(pixmap)
+        eye_rect = ring.adjusted(
+            ring.width() * 0.20,
+            ring.height() * 0.24,
+            -ring.width() * 0.20,
+            -ring.height() * 0.24,
+        )
+        show_path, hide_path = visibility_icon_paths()
+        svg_path = show_path if self._content_visible else hide_path
+        if not _render_svg_icon(painter, eye_rect, svg_path=svg_path, color=fg):
+            paint_vector_eye(
+                painter,
+                eye_rect,
+                color=fg,
+                visible=self._content_visible,
+            )
+        painter.end()
 
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.on_clicked()
+        super().mousePressEvent(event)
 
-def visibility_icon(*, visible: bool, size: int = 18):
-    from .theme import get_theme_colors
+    def on_clicked(self) -> None:
+        if self._on_click is not None:
+            self._on_click()
 
-    svg_path = _EYE_VISIBLE_SVG if visible else _EYE_HIDDEN_SVG
-    icon = _render_svg_icon(svg_path, color=get_theme_colors().text, size=size)
-    if icon is not None:
-        return icon
-    return _render_fallback_icon(visible=visible, size=size)
+    def sizeHint(self):
+        from aqt.qt import QSize
+
+        return QSize(self._size, self._size)
