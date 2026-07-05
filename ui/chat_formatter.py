@@ -13,6 +13,8 @@ _FENCE_RE = re.compile(
     r"```[ \t]*([^\n`]*)\n(.*?)```",
     re.DOTALL,
 )
+_BOLD_MARKER_RE = re.compile(r"\*\*")
+_PARTIAL_HEADING_RE = re.compile(r"^#{1,6}$")
 
 
 def _parse_field_label_line(line: str) -> str | None:
@@ -187,6 +189,100 @@ def _render_code_block(
         header_bg=palette.code_block_bg,
         body_bg=palette.code_pre_bg,
     )
+
+
+def _split_at_open_fence(text: str) -> tuple[str, str]:
+    """Keep prose and closed fences in *safe*; defer an opening ``` fence to plain text."""
+    last_end = 0
+    for match in _FENCE_RE.finditer(text):
+        last_end = match.end()
+    remainder = text[last_end:]
+    fence_start = remainder.find("```")
+    if fence_start >= 0:
+        split_at = last_end + fence_start
+        return text[:split_at], text[split_at:]
+    return text, ""
+
+
+def _single_backtick_positions(text: str) -> list[int]:
+    positions: list[int] = []
+    index = 0
+    while index < len(text):
+        if text.startswith("```", index):
+            index += 3
+            continue
+        if text[index] == "`":
+            positions.append(index)
+        index += 1
+    return positions
+
+
+def _inline_unsafe_suffix_start(text: str) -> int | None:
+    """Index where trailing inline markdown should stay plain until it completes."""
+    if not text:
+        return None
+
+    unsafe_at: int | None = None
+
+    bold_markers = list(_BOLD_MARKER_RE.finditer(text))
+    if len(bold_markers) % 2 == 1:
+        unsafe_at = bold_markers[-1].start()
+
+    backticks = _single_backtick_positions(text)
+    if len(backticks) % 2 == 1:
+        unsafe_at = min(unsafe_at, backticks[-1]) if unsafe_at is not None else backticks[-1]
+
+    lines = text.split("\n")
+    last_line = lines[-1] if lines else ""
+    if _PARTIAL_HEADING_RE.match(last_line):
+        line_start = len(text) - len(last_line)
+        unsafe_at = min(unsafe_at, line_start) if unsafe_at is not None else line_start
+
+    return unsafe_at
+
+
+def split_streaming_reply(text: str) -> tuple[str, str]:
+    """Split streamed markdown into a renderable prefix and a plain-text tail."""
+    if not text:
+        return "", ""
+
+    safe, tail = _split_at_open_fence(text)
+    inline_start = _inline_unsafe_suffix_start(safe)
+    if inline_start is not None:
+        return safe[:inline_start], safe[inline_start:] + tail
+    return safe, tail
+
+
+def _escape_streaming_tail(text: str) -> str:
+    if not text:
+        return ""
+    escaped = html.escape(text).replace("\n", "<br>")
+    return f'<span class="chat-stream-text">{escaped}</span>'
+
+
+def format_streaming_reply_html(
+    text: str,
+    copy_store: dict[str, str],
+    id_prefix: str,
+    *,
+    config: dict[str, Any] | None = None,
+) -> str:
+    """Render completed markdown during streaming; keep incomplete syntax as plain text."""
+    safe, tail = split_streaming_reply(text)
+    parts: list[str] = []
+    if safe.strip():
+        formatted = format_gemini_reply_html(
+            safe,
+            copy_store,
+            id_prefix,
+            config=config,
+            endcap=False,
+        )
+        if formatted:
+            parts.append(formatted)
+    if tail:
+        parts.append(_escape_streaming_tail(tail))
+    return "".join(parts)
 
 
 def format_gemini_reply_html(

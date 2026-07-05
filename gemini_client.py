@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 import urllib.parse
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, Mapping
 
 import requests
 
@@ -224,6 +225,7 @@ def _iter_stream_text_deltas(
                 data = json.loads(payload)
             except json.JSONDecodeError:
                 continue
+            _raise_if_stream_error_payload(data, config)
             text = _extract_stream_text(data, config)
             if text:
                 yield text
@@ -238,11 +240,132 @@ def _iter_stream_text_deltas(
             pass
 
 
-def _classify_http_error(status_code: int, response_text: str, config: dict[str, Any]) -> GeminiError:
+def _parse_error_json(response_text: str) -> dict[str, Any] | None:
+    try:
+        data = json.loads(response_text)
+    except json.JSONDecodeError:
+        return None
+    error = data.get("error")
+    return error if isinstance(error, dict) else None
+
+
+def _retry_after_seconds(
+    headers: Mapping[str, str] | None,
+    error: dict[str, Any] | None,
+) -> float | None:
+    if headers is not None:
+        for key in ("Retry-After", "retry-after"):
+            raw = headers.get(key)
+            if not raw:
+                continue
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                continue
+
+    if error is None:
+        return None
+
+    for detail in error.get("details") or []:
+        if not isinstance(detail, dict):
+            continue
+        if not str(detail.get("@type", "")).endswith("RetryInfo"):
+            continue
+        match = re.match(r"([\d.]+)", str(detail.get("retryDelay", "")))
+        if match:
+            return float(match.group(1))
+    return None
+
+
+def _is_daily_quota_error(error: dict[str, Any]) -> bool:
+    for detail in error.get("details") or []:
+        if not isinstance(detail, dict):
+            continue
+        if not str(detail.get("@type", "")).endswith("QuotaFailure"):
+            continue
+        for violation in detail.get("violations") or []:
+            if not isinstance(violation, dict):
+                continue
+            quota_id = str(violation.get("quotaId") or "").casefold()
+            if "perday" in quota_id or "daily" in quota_id:
+                return True
+    message = str(error.get("message") or "").casefold()
+    return "per day" in message or "daily quota" in message or "per-day" in message
+
+
+def _is_rate_limit_error(
+    status_code: int,
+    error: dict[str, Any] | None,
+    response_text: str,
+) -> bool:
+    if status_code == 429:
+        return True
+    if error is None:
+        lowered = response_text.casefold()
+        return "resource_exhausted" in lowered or "rate limit" in lowered
+
+    if error.get("status") == "RESOURCE_EXHAUSTED" or error.get("code") == 429:
+        return True
+
+    for detail in error.get("details") or []:
+        if not isinstance(detail, dict):
+            continue
+        reason = str(detail.get("reason") or "").casefold()
+        if reason in {"rate_limit_exceeded", "quota_exceeded"}:
+            return True
+
+    message = str(error.get("message") or "").casefold()
+    return "quota" in message and ("exceeded" in message or "exhausted" in message)
+
+
+def _build_rate_limit_error(
+    config: dict[str, Any],
+    error: dict[str, Any] | None,
+    retry_seconds: float | None,
+) -> GeminiRateLimitError:
+    if error is not None and _is_daily_quota_error(error):
+        return GeminiRateLimitError(tr("gemini.rate_limit_daily", config=config))
+    if retry_seconds is not None and retry_seconds > 0:
+        seconds = max(1, int(math.ceil(retry_seconds)))
+        return GeminiRateLimitError(tr("gemini.rate_limit_retry", config=config, seconds=seconds))
+    return GeminiRateLimitError(tr("gemini.rate_limit", config=config))
+
+
+def _raise_if_stream_error_payload(data: dict[str, Any], config: dict[str, Any]) -> None:
+    error = data.get("error")
+    if not isinstance(error, dict):
+        return
+
+    retry_seconds = _retry_after_seconds(None, error)
+    status_code = int(error.get("code") or 429)
+    payload_text = json.dumps(data, ensure_ascii=False)
+    if _is_rate_limit_error(status_code, error, payload_text):
+        raise _build_rate_limit_error(config, error, retry_seconds)
+
+    message = str(error.get("message") or "").strip()
+    if not message:
+        message = tr(
+            "gemini.http_error",
+            config=config,
+            status=status_code,
+            detail=payload_text[:300],
+        )
+    raise GeminiError(message)
+
+
+def _classify_http_error(
+    status_code: int,
+    response_text: str,
+    config: dict[str, Any],
+    *,
+    headers: Mapping[str, str] | None = None,
+) -> GeminiError:
+    error = _parse_error_json(response_text)
+    retry_seconds = _retry_after_seconds(headers, error)
+    if _is_rate_limit_error(status_code, error, response_text):
+        return _build_rate_limit_error(config, error, retry_seconds)
     if status_code in (401, 403):
         return GeminiAuthError(tr("gemini.auth_error", config=config))
-    if status_code == 429:
-        return GeminiRateLimitError(tr("gemini.rate_limit", config=config))
     return GeminiError(
         tr("gemini.http_error", config=config, status=status_code, detail=response_text[:300])
     )
@@ -278,7 +401,12 @@ def _run_streaming_request(
             if register_response is not None:
                 register_response(response)
             if not response.ok:
-                raise _classify_http_error(response.status_code, response.text, config)
+                raise _classify_http_error(
+                    response.status_code,
+                    response.text,
+                    config,
+                    headers=response.headers,
+                )
 
             accumulated = ""
             for delta in _iter_stream_text_deltas(response, config, should_cancel=should_cancel):
@@ -368,7 +496,12 @@ def call_gemini(
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=timeout)
             if not response.ok:
-                raise _classify_http_error(response.status_code, response.text, config)
+                raise _classify_http_error(
+                    response.status_code,
+                    response.text,
+                    config,
+                    headers=response.headers,
+                )
             data = response.json()
             return _parse_response_payload(data, config)
         except (requests.Timeout, requests.ConnectionError) as exc:
@@ -486,7 +619,12 @@ def list_gemini_models(*, config: dict[str, Any]) -> list[str]:
             raise GeminiError(tr("gemini.network_error", config=config, error=exc)) from exc
 
         if not response.ok:
-            raise _classify_http_error(response.status_code, response.text, config)
+            raise _classify_http_error(
+                response.status_code,
+                response.text,
+                config,
+                headers=response.headers,
+            )
 
         data = response.json()
         for entry in data.get("models") or []:

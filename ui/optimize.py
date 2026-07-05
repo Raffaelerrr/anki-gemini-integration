@@ -7,7 +7,7 @@ from aqt.qt import QCheckBox, QDialog, QMessageBox
 from aqt.utils import showInfo, showWarning, tooltip
 
 from ..config import api_key_configured, is_warning_dismissed, load_config, save_config, uses_default_system_instruction
-from ..gemini_client import GeminiError, call_gemini, strip_markdown_fences
+from ..gemini_client import GeminiAuthError, GeminiError, GeminiRateLimitError, call_gemini, strip_markdown_fences
 from ..i18n import tr
 from .preview_dialog import PreviewDialog
 
@@ -112,8 +112,10 @@ def _handle_optimize_result(future, editor, field_index: int, original: str, con
                 return
 
         _apply_optimized_text(editor, field_index, original, optimized)
-    except GeminiError as exc:
+    except (GeminiRateLimitError, GeminiAuthError) as exc:
         showWarning(str(exc))
+    except GeminiError as exc:
+        showWarning(tr("optimize.error", config=config, error=exc))
     except Exception as exc:
         showWarning(tr("optimize.error", config=config, error=exc))
 

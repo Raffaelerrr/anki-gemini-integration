@@ -1225,6 +1225,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Limite di richieste raggiunto. Riprova tra qualche secondo.",
         "en": "Rate limit reached. Try again in a few seconds.",
     },
+    "gemini.rate_limit_retry": {
+        "it": "Limite di richieste raggiunto. Riprova tra circa {seconds} secondi.",
+        "en": "Rate limit reached. Try again in about {seconds} seconds.",
+    },
+    "gemini.rate_limit_daily": {
+        "it": "Quota giornaliera Gemini esaurita. Riprova domani o controlla i limiti su Google AI Studio.",
+        "en": "Daily Gemini quota exceeded. Try again tomorrow or check your limits in Google AI Studio.",
+    },
     "gemini.http_error": {
         "it": "Errore HTTP {status}: {detail}",
         "en": "HTTP error {status}: {detail}",

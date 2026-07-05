@@ -32,14 +32,16 @@ from ..i18n import (
     tr,
 )
 from ..gemini_client import (
+    GeminiAuthError,
     GeminiCancelledError,
     GeminiError,
+    GeminiRateLimitError,
     call_gemini,
     extract_dynamic_rules,
     stream_gemini,
     trim_history,
 )
-from .chat_formatter import format_gemini_reply_html
+from .chat_formatter import format_gemini_reply_html, format_streaming_reply_html
 from .chat_log_renderer import render_chat_document
 from .chat_messages import ChatMessage
 from .imported_note_preview_window import ImportedNotePreviewWindow
@@ -90,7 +92,6 @@ class ChatWindow(QWidget):
         self._streaming_message_index: int | None = None
         self._stream_visible = False
         self._loading_mode: str | None = None
-        self._streaming_anchor_scroll: int | None = None
         self._closing = False
         self._request_in_flight = False
         self._cancel_event = threading.Event()
@@ -289,7 +290,6 @@ class ChatWindow(QWidget):
         self._close_note_preview_window()
         self._stream_visible = False
         self._streaming_message_index = None
-        self._clear_streaming_scroll_anchor()
 
     def _render_chat_log(
         self,
@@ -299,14 +299,12 @@ class ChatWindow(QWidget):
     ) -> None:
         bar = self.chat_log.verticalScrollBar()
         previous_value = bar.value()
-        at_bottom = bar.value() >= bar.maximum() - 8
-        anchor = scroll_anchor if scroll_anchor is not None else self._streaming_anchor_scroll
 
         self.chat_log.setHtml(render_chat_document(self._messages))
 
-        if anchor is not None:
-            bar.setValue(min(anchor, bar.maximum()))
-        elif preserve_scroll and not at_bottom:
+        if scroll_anchor is not None:
+            bar.setValue(min(scroll_anchor, bar.maximum()))
+        elif preserve_scroll:
             bar.setValue(min(previous_value, bar.maximum()))
         else:
             self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
@@ -328,11 +326,6 @@ class ChatWindow(QWidget):
         if last_match is not None and not last_match.isNull():
             self.chat_log.setTextCursor(last_match)
             self.chat_log.ensureCursorVisible()
-
-        self._streaming_anchor_scroll = self.chat_log.verticalScrollBar().value()
-
-    def _clear_streaming_scroll_anchor(self) -> None:
-        self._streaming_anchor_scroll = None
 
     def _add_message(self, message: ChatMessage) -> None:
         self._messages.append(message)
@@ -396,7 +389,6 @@ class ChatWindow(QWidget):
         self._copy_blocks.clear()
         self._stream_visible = False
         self._streaming_message_index = None
-        self._clear_streaming_scroll_anchor()
         self.context_checkbox.setChecked(False)
         self.edit_wrapper_checkbox.setChecked(False)
         self.edit_wrapper_checkbox.setEnabled(False)
@@ -656,17 +648,23 @@ class ChatWindow(QWidget):
     def _update_streaming_reply(self, text: str) -> None:
         if self._streaming_message_index is None:
             return
-        safe = html.escape(text).replace("\n", "<br>")
+        config = load_config()
+        stream_id = f"r{self._copy_counter + 1}"
+        reply_html = format_streaming_reply_html(
+            text,
+            self._copy_blocks,
+            stream_id,
+            config=config,
+        )
         message = self._messages[self._streaming_message_index]
-        message.body_html = f"<br><span class='chat-stream-text'>{safe}</span>"
-        self._render_chat_log()
+        message.body_html = f"<br>{reply_html}" if reply_html else ""
+        self._render_chat_log(preserve_scroll=True)
 
     def _clear_streaming_reply(self) -> None:
         if self._streaming_message_index is None:
             return
         index = self._streaming_message_index
         self._streaming_message_index = None
-        self._clear_streaming_scroll_anchor()
         if 0 <= index < len(self._messages):
             self._messages.pop(index)
         self._render_chat_log(preserve_scroll=False)
@@ -696,7 +694,6 @@ class ChatWindow(QWidget):
 
         gemini_label = tr("chat.label.gemini", config=config)
         was_streaming = self._streaming_message_index is not None
-        saved_anchor = self._streaming_anchor_scroll if was_streaming else None
         if self._streaming_message_index is not None:
             message = self._messages[self._streaming_message_index]
             message.label = gemini_label
@@ -722,11 +719,9 @@ class ChatWindow(QWidget):
                 )
             )
 
-        if was_streaming:
-            self._render_chat_log(scroll_anchor=saved_anchor)
-            self._clear_streaming_scroll_anchor()
-        else:
-            self._render_chat_log(preserve_scroll=False)
+        self._render_chat_log(preserve_scroll=True)
+        if not was_streaming:
+            self._scroll_to_streaming_message_start()
 
     def _remove_last_user_message(self) -> None:
         for index in range(len(self._messages) - 1, -1, -1):
@@ -769,7 +764,9 @@ class ChatWindow(QWidget):
             self._clear_streaming_reply()
         self._stream_visible = False
 
-        if isinstance(exc, GeminiError):
+        if isinstance(exc, (GeminiRateLimitError, GeminiAuthError)):
+            message = str(exc)
+        elif isinstance(exc, GeminiError):
             message = tr("chat.error", config=config, error=exc)
         else:
             message = tr("chat.unexpected_error", config=config, error=exc)

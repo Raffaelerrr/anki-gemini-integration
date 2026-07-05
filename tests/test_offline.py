@@ -204,6 +204,46 @@ class TestGeminiClient(unittest.TestCase):
         err = self.gc._classify_http_error(403, "nope", config)
         self.assertIsInstance(err, self.gc.GeminiAuthError)
 
+    def test_classify_http_error_rate_limit_with_retry_after(self):
+        config = {"language": "en"}
+        err = self.gc._classify_http_error(
+            429,
+            '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Too many requests"}}',
+            config,
+            headers={"Retry-After": "12"},
+        )
+        self.assertIsInstance(err, self.gc.GeminiRateLimitError)
+        self.assertIn("12", str(err))
+
+    def test_classify_http_error_daily_quota(self):
+        config = {"language": "en"}
+        body = (
+            '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Quota exceeded",'
+            '"details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":'
+            '[{"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}]}}'
+        )
+        err = self.gc._classify_http_error(429, body, config)
+        self.assertIsInstance(err, self.gc.GeminiRateLimitError)
+        self.assertIn("Daily Gemini quota", str(err))
+
+    def test_stream_error_payload_rate_limit(self):
+        config = {"language": "en"}
+        payload = {
+            "error": {
+                "code": 429,
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": "5s",
+                    }
+                ],
+            }
+        }
+        with self.assertRaises(self.gc.GeminiRateLimitError) as ctx:
+            self.gc._raise_if_stream_error_payload(payload, config)
+        self.assertIn("5", str(ctx.exception))
+
     def test_call_gemini_auth_not_retried(self):
         config = {
             "language": "en",
@@ -559,6 +599,40 @@ class TestChatFormatter(unittest.TestCase):
         self.assertNotIn("<hr", user.lower())
         self.assertNotIn("chat-html-endcap", reply)
         self.assertNotIn("chat-hr", reply)
+
+    def test_split_streaming_reply_closed_bold(self):
+        safe, tail = self.fmt.split_streaming_reply("Hello **world**!")
+        self.assertEqual(safe, "Hello **world**!")
+        self.assertEqual(tail, "")
+
+    def test_split_streaming_reply_unclosed_bold(self):
+        safe, tail = self.fmt.split_streaming_reply("Hello **wor")
+        self.assertEqual(safe, "Hello ")
+        self.assertEqual(tail, "**wor")
+
+    def test_split_streaming_reply_open_fence(self):
+        safe, tail = self.fmt.split_streaming_reply("Intro\n```python\nprint(1)")
+        self.assertEqual(safe, "Intro\n")
+        self.assertEqual(tail, "```python\nprint(1)")
+
+    def test_split_streaming_reply_closed_fence_then_prose(self):
+        text = "Text\n```\nline\n```\nMore **ok**"
+        safe, tail = self.fmt.split_streaming_reply(text)
+        self.assertEqual(safe, text)
+        self.assertEqual(tail, "")
+
+    def test_format_streaming_reply_renders_safe_prefix(self):
+        store: dict[str, str] = {}
+        html_out = self.fmt.format_streaming_reply_html(
+            "Hello **world** and **par",
+            store,
+            "s1",
+            config={"language": "en"},
+        )
+        self.assertIn("chat-prose", html_out)
+        self.assertIn("chat-stream-text", html_out)
+        self.assertIn("**par", html_out)
+        self.assertNotIn("**world**", html_out)
 
 
 class TestTheme(unittest.TestCase):
@@ -1083,6 +1157,25 @@ class TestGeminiHttpIntegration(unittest.TestCase):
                     user_text="ping",
                     should_cancel=should_cancel,
                 )
+
+    def test_stream_gemini_rate_limit_not_retried(self):
+        response = MagicMock(ok=False, status_code=429, text="Too Many Requests")
+        response.headers = {}
+        with patch.object(self.gc.requests, "post", return_value=response) as post:
+            with self.assertRaises(self.gc.GeminiRateLimitError):
+                self.gc.stream_gemini(config=self._base_config(), user_text="ping")
+        self.assertEqual(post.call_count, 1)
+
+    def test_stream_gemini_rate_limit_in_sse_payload(self):
+        response = MagicMock(ok=True, status_code=200, text="")
+        response.headers = {}
+        response.iter_lines.return_value = [
+            b'data: {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Quota"}}',
+            b"",
+        ]
+        with patch.object(self.gc.requests, "post", return_value=response):
+            with self.assertRaises(self.gc.GeminiRateLimitError):
+                self.gc.stream_gemini(config=self._base_config(), user_text="ping")
 
     def test_stream_gemini_closed_response_is_cancelled(self):
         cancelled = {"value": False}
