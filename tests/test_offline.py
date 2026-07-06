@@ -358,6 +358,19 @@ class TestI18n(unittest.TestCase):
         )
         self.assertIn("{context}", self.i18n.tr("chat.edit_wrapper.wrapper_label", config=en))
         self.assertIn("{request}", self.i18n.tr("chat.edit_wrapper.wrapper_hint", config=en))
+        self.assertIn("{templates}", self.i18n.tr("chat.edit_wrapper.wrapper_label", config=en))
+        self.assertIn("{styling}", self.i18n.tr("chat.edit_wrapper.wrapper_invalid", config=en))
+        basic_label = self.i18n.chat_edit_wrapper_label_text({"language": "en"})
+        self.assertIn("{context}", basic_label)
+        self.assertNotIn("{templates}", basic_label)
+        full_config = {
+            "language": "en",
+            "brain_import_templates": True,
+            "brain_import_css": True,
+        }
+        full_label = self.i18n.chat_edit_wrapper_label_text(full_config)
+        self.assertIn("{templates}", full_label)
+        self.assertIn("{styling}", full_label)
         self.assertEqual(self.i18n.tr("chat.preview.refresh", config=en), "Refresh preview")
         self.assertEqual(
             self.i18n.tr("chat.preview.open_window.tooltip", config=en),
@@ -452,6 +465,115 @@ class TestI18n(unittest.TestCase):
         self.assertIn("ctx", result)
         self.assertIn("req", result)
         self.assertIn("[FULL NOTE CONTEXT TO ANALYZE]", result)
+        self.assertNotIn("[CARD TEMPLATES]", result)
+
+    def test_format_chat_context_message_includes_templates_and_styling(self):
+        config = {"language": "en"}
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="Field [Front]:\nHi",
+            request="Split?",
+            templates="[CARD TYPE 1 NAME] Basic\n[FRONT TEMPLATE]:\n{{Front}}",
+            styling=".card { color: red; }",
+        )
+        self.assertIn("[CARD TEMPLATES]", result)
+        self.assertIn("[NOTE TYPE STYLING]", result)
+        self.assertIn("{{Front}}", result)
+        self.assertIn(".card { color: red; }", result)
+
+    def test_format_chat_context_message_injects_templates_after_context(self):
+        config = {"language": "en"}
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="ctx",
+            request="req",
+            templates="tmpl-block",
+            template="Note:\n{context}\nAsk: {request}",
+        )
+        self.assertLess(result.index("ctx"), result.index("tmpl-block"))
+        self.assertLess(result.index("tmpl-block"), result.index("req"))
+
+    def test_format_chat_context_message_includes_templates_format_guide(self):
+        config = {"language": "en"}
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="ctx",
+            request="req",
+            templates="[FRONT TEMPLATE]:\n{{Front}}",
+        )
+        self.assertIn("[HOW TO READ ANKI CARD TEMPLATES AND STYLING]", result)
+        self.assertLess(result.index("ctx"), result.index("[HOW TO READ ANKI"))
+        self.assertLess(result.index("[HOW TO READ ANKI"), result.index("{{Front}}"))
+        self.assertLess(result.index("{{Front}}"), result.index("req"))
+
+    def test_format_chat_context_message_omits_format_guide_without_templates(self):
+        config = {"language": "en"}
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="ctx",
+            request="req",
+        )
+        self.assertNotIn("[HOW TO READ ANKI CARD TEMPLATES AND STYLING]", result)
+
+    def test_effective_card_templates_format_prompt(self):
+        config = {"language": "en"}
+        text = self.i18n.effective_card_templates_format_prompt(config)
+        self.assertIn("Card types", text)
+        self.assertIn("{{Front}}", text)
+
+    def test_build_optimize_prompt_inspection(self):
+        prompt_inspection = _load_addon_module("prompt_inspection")
+        config = {"language": "en", "dynamic_instructions": "Rule A"}
+        inspection = prompt_inspection.build_optimize_prompt_inspection(config)
+        self.assertEqual(inspection.purpose, "optimize")
+        formula = inspection.formula_text(config)
+        self.assertIn("System instructions", formula)
+        self.assertIn("Dynamic rules", formula)
+        self.assertIn("User message prefix", formula)
+        full = inspection.full_text(config)
+        self.assertIn("Rule A", full)
+
+    def test_chat_session_config_fingerprint(self):
+        prompt_inspection = _load_addon_module("prompt_inspection")
+        base = {"language": "en", "model_chat": "gemini-2.5-flash"}
+        fp1 = prompt_inspection.chat_session_config_fingerprint(base)
+        fp2 = prompt_inspection.chat_session_config_fingerprint(dict(base))
+        self.assertEqual(fp1, fp2)
+        changed = dict(base)
+        changed["temperature_chat"] = 0.9
+        self.assertTrue(
+            prompt_inspection.chat_session_config_changed(fp1, changed)
+        )
+
+    def test_build_chat_prompt_inspection(self):
+        prompt_inspection = _load_addon_module("prompt_inspection")
+        config = {"language": "en", "max_history_turns": 10}
+        inspection = prompt_inspection.build_chat_prompt_inspection(
+            config,
+            history=[{"role": "user", "parts": [{"text": "Hi"}]}],
+            next_user_text="Next",
+            outgoing_payload="Wrapped next",
+        )
+        formula = inspection.formula_text(config)
+        self.assertIn("Chat history", formula)
+        self.assertIn("Next user message", formula)
+        self.assertIn("Wrapped next", inspection.full_text(config))
+
+    def test_format_card_templates_block(self):
+        card_templates = _load_addon_module("ui.card_templates")
+        block = card_templates.format_card_templates_block(
+            [
+                card_templates.CardTemplateData(
+                    name="Basic",
+                    front="{{Front}}",
+                    back="{{Back}}",
+                )
+            ],
+            config={"language": "en"},
+        )
+        self.assertIn("[CARD TYPE 1 NAME] Basic", block)
+        self.assertIn("[FRONT TEMPLATE]:", block)
+        self.assertIn("{{Front}}", block)
 
     def test_chat_context_wrapper_missing_placeholders(self):
         fn = self.i18n.chat_context_wrapper_missing_placeholders
@@ -462,6 +584,67 @@ class TestI18n(unittest.TestCase):
         self.assertTrue(fn("Ask: {request}"))
         self.assertTrue(fn("{contex} and {request}"))
         self.assertTrue(fn("{context} and {reques}"))
+
+    def test_build_chat_context_wrapper_for_import_settings(self):
+        minimal = {"language": "en"}
+        wrapper = self.i18n.build_chat_context_wrapper_for_import_settings(minimal)
+        self.assertIn("{context}", wrapper)
+        self.assertIn("{request}", wrapper)
+        self.assertNotIn("{templates}", wrapper)
+        self.assertNotIn("{styling}", wrapper)
+
+        with_templates = {
+            "language": "en",
+            "brain_import_templates": True,
+        }
+        wrapper = self.i18n.build_chat_context_wrapper_for_import_settings(with_templates)
+        self.assertIn("{templates}", wrapper)
+        self.assertNotIn("{styling}", wrapper)
+
+        full = {
+            "language": "en",
+            "brain_import_templates": True,
+            "brain_import_css": True,
+        }
+        wrapper = self.i18n.build_chat_context_wrapper_for_import_settings(full)
+        self.assertIn("{templates}", wrapper)
+        self.assertIn("{styling}", wrapper)
+
+    def test_filter_wrapper_for_import_settings(self):
+        full = self.i18n.tr("instructions.chat_context_wrapper", config={"language": "en"})
+        minimal = self.i18n.filter_wrapper_for_import_settings(
+            full,
+            {"language": "en"},
+        )
+        self.assertIn("{context}", minimal)
+        self.assertNotIn("{templates}", minimal)
+        self.assertNotIn("{styling}", minimal)
+
+    def test_chat_context_wrapper_for_session_uses_import_settings(self):
+        stored = self.i18n.tr("instructions.chat_context_wrapper", config={"language": "en"})
+        session = self.i18n.chat_context_wrapper_for_session({"language": "en"})
+        self.assertNotEqual(session, stored)
+        self.assertNotIn("{templates}", session)
+
+    def test_estimate_chat_request_tokens(self):
+        token_estimate = _load_addon_module("token_estimate")
+        self.assertEqual(token_estimate.estimate_text_tokens(""), 0)
+        self.assertEqual(token_estimate.estimate_text_tokens("abcd"), 1)
+        self.assertEqual(
+            token_estimate.estimate_chat_request_tokens(
+                "message",
+                [{"role": "user", "parts": [{"text": "history"}]}],
+            ),
+            4,
+        )
+        self.assertEqual(
+            token_estimate.estimate_chat_request_tokens(
+                "message",
+                [{"role": "user", "parts": [{"text": "history"}]}],
+                system_instruction="system",
+            ),
+            6,
+        )
 
     def test_effective_system_instruction_uses_language_default(self):
         english_default = self.i18n.default_system_instruction({"language": "en"})
@@ -811,6 +994,10 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(defaults["thinking_budget_optimize"], 0)
         self.assertEqual(defaults["thinking_budget_chat"], -1)
         self.assertTrue(defaults["chat_streaming"])
+        self.assertFalse(defaults["brain_import_templates"])
+        self.assertFalse(defaults["brain_import_css"])
+        self.assertEqual(defaults["chat_token_warning_threshold"], 3000)
+        self.assertFalse(defaults["chat_prompt_inspection"])
 
     def test_apply_config_migrations_from_legacy_model(self):
         migrated = self.config._apply_config_migrations(
@@ -857,6 +1044,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(self.config.default_config_value("prompt_chat_addon"), "")
         self.assertEqual(self.config.default_config_value("prompt_dynamic_rules_prefix"), "")
         self.assertEqual(self.config.default_config_value("prompt_chat_context"), "")
+        self.assertEqual(self.config.default_config_value("prompt_card_templates_format"), "")
 
     def test_api_key_configured(self):
         fn = self.config.api_key_configured

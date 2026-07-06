@@ -12,6 +12,7 @@ from .ui.window_lifecycle import (
 )
 from .ui.chat_dialog import open_chat
 from .ui.optimize import optimize_field_with_gemini, undo_last_optimization
+from .ui.scroll_test_dialog import open_scroll_test_dialog
 from .ui.settings_dialog import open_settings_dialog
 from .ui.theme import refresh_addon_theme
 
@@ -71,6 +72,9 @@ def init_tools_menu() -> None:
     action.setShortcut("Ctrl+Alt+C")
     action.triggered.connect(lambda: open_chat())
     mw.form.menuTools.addAction(action)
+    scroll_test_action = QAction("Anki AI: Scroll test (debug)", mw)
+    scroll_test_action.triggered.connect(lambda: open_scroll_test_dialog(mw))
+    mw.form.menuTools.addAction(scroll_test_action)
 
 
 def cleanup() -> None:

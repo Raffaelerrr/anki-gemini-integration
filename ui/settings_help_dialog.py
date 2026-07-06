@@ -18,7 +18,7 @@ from aqt.qt import (
 
 from ..config import RESTORABLE_SETTING_KEYS, RESTORABLE_SETTING_LABELS, SETTING_HELP_KEYS
 from ..i18n import tr
-from .theme import info_button_stylesheet, muted_hint_html
+from .theme import apply_native_page_scroll_theme, info_button_stylesheet, muted_hint_html
 
 
 def _make_info_button(parent: QWidget, config: dict[str, Any]) -> QPushButton:
@@ -65,7 +65,7 @@ class SettingsHelpDialog(QDialog):
         close_row.addWidget(self.btn_close)
         root.addLayout(close_row)
 
-        self._default_buttons = (self.btn_overview, self.btn_back, self.btn_close)
+        self._default_buttons = (self.btn_overview, self.btn_chat_live, self.btn_back, self.btn_close)
         self._set_help_page("list")
 
     def _build_list_page(self) -> QWidget:
@@ -82,12 +82,18 @@ class SettingsHelpDialog(QDialog):
         self.btn_overview.clicked.connect(self._show_prompts_overview)
         outer.addWidget(self.btn_overview)
 
+        self.btn_chat_live = QPushButton(tr("settings.help.chat_live_settings.link", config=self.config), page)
+        self.btn_chat_live.setAutoDefault(False)
+        self.btn_chat_live.setDefault(False)
+        self.btn_chat_live.clicked.connect(self._show_chat_live_settings)
+        outer.addWidget(self.btn_chat_live)
+
         outer.addWidget(QLabel("<br>"))
 
         scroll = QScrollArea(page)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        apply_native_page_scroll_theme(scroll)
 
         host = QWidget(scroll)
         layout = QVBoxLayout(host)
@@ -153,6 +159,14 @@ class SettingsHelpDialog(QDialog):
             f"<b>{tr('settings.help.prompts_overview.title', config=self.config)}</b>"
         )
         self.detail_body.setHtml(tr("settings.help.prompts_overview", config=self.config))
+        self.stack.setCurrentIndex(1)
+        self._set_help_page("detail")
+
+    def _show_chat_live_settings(self) -> None:
+        self.detail_title.setText(
+            f"<b>{tr('settings.help.chat_live_settings.title', config=self.config)}</b>"
+        )
+        self.detail_body.setHtml(tr("settings.help.chat_live_settings", config=self.config))
         self.stack.setCurrentIndex(1)
         self._set_help_page("detail")
 

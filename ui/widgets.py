@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import math
+import weakref
 
-from aqt.qt import (
-    QApplication,
+from aqt.qt import (    QApplication,
     QComboBox,
     QDoubleSpinBox,
     QObject,
     QScrollArea,
+    QScrollBar,
     QSpinBox,
     Qt,
     QTimer,
@@ -17,7 +18,10 @@ from aqt.qt import (
 
 _WHEEL_EVENT_TYPE = 31  # QEvent.Type.Wheel
 _WHEEL_GESTURE_MS = 300
-
+_SCROLL_AWARE_WINDOW_COUNTS: weakref.WeakKeyDictionary[QWidget, int] = weakref.WeakKeyDictionary()
+_SCROLL_AWARE_EDITORS_BY_WINDOW: weakref.WeakKeyDictionary[
+    QWidget, set[ScrollAwareTextEdit]
+] = weakref.WeakKeyDictionary()
 
 def _qt_widget_alive(widget: QWidget | None) -> bool:
     if widget is None:
@@ -35,6 +39,30 @@ def _event_global_pos(event) -> object:
     return event.globalPos()
 
 
+def _wheel_deltas(event) -> tuple[int, int]:
+    """Read wheel deltas for edge detection; native scrolling uses the original event."""
+    delta_y = event.angleDelta().y()
+    delta_x = event.angleDelta().x()
+    if hasattr(event, "pixelDelta"):
+        pixel = event.pixelDelta()
+        px = pixel.x()
+        py = pixel.y()
+        if px != 0 or py != 0:
+            if py != 0:
+                delta_y = py
+            if px != 0:
+                delta_x = px
+    return delta_y, delta_x
+
+
+def _is_scroll_bar_widget(widget: QWidget | None) -> bool:
+    while widget is not None:
+        if isinstance(widget, QScrollBar):
+            return True
+        widget = widget.parentWidget()
+    return False
+
+
 def _forward_wheel_event(widget: QWidget, event) -> None:
     ancestor = widget.parentWidget()
     while ancestor is not None:
@@ -50,21 +78,44 @@ def _scroll_area_by_wheel(scroll: QScrollArea, event) -> None:
     event.accept()
 
 
-def _text_edit_layout_width(editor: QTextEdit) -> int:
-    if not _qt_widget_alive(editor):
-        return 320
-    viewport = editor.viewport()
-    if viewport is not None and viewport.width() > 4:
-        return viewport.width()
-    frame = editor.frameWidth() * 2
-    if editor.width() > frame + 4:
-        return editor.width() - frame
-    widget = editor.parentWidget()
-    while widget is not None:
-        if widget.width() > 4:
-            return max(32, widget.width() - 16)
-        widget = widget.parentWidget()
-    return 320
+def _scroll_bar_by_wheel_delta(bar: QScrollBar, delta: int) -> None:
+    if delta == 0:
+        return
+    step = max(1, bar.singleStep())
+    movement = round(delta * step / 120)
+    if movement == 0:
+        movement = 1 if delta > 0 else -1
+    bar.setValue(max(bar.minimum(), min(bar.maximum(), bar.value() - movement)))
+
+
+def _apply_native_wheel_scroll(editor: QTextEdit, event) -> None:
+    """Move scroll bars directly; Qt wheel delivery is unreliable once filters intercept."""
+    pixel = event.pixelDelta()
+    angle = event.angleDelta()
+    px = pixel.x()
+    py = pixel.y()
+    ax = angle.x()
+    ay = angle.y()
+
+    if px or py:
+        if py:
+            bar = editor.verticalScrollBar()
+            if bar is not None:
+                bar.setValue(max(bar.minimum(), min(bar.maximum(), bar.value() - py)))
+        if px:
+            bar = editor.horizontalScrollBar()
+            if bar is not None:
+                bar.setValue(max(bar.minimum(), min(bar.maximum(), bar.value() - px)))
+    else:
+        if ay:
+            bar = editor.verticalScrollBar()
+            if bar is not None:
+                _scroll_bar_by_wheel_delta(bar, ay)
+        if ax:
+            bar = editor.horizontalScrollBar()
+            if bar is not None:
+                _scroll_bar_by_wheel_delta(bar, ax)
+    event.accept()
 
 
 def bind_text_edit_auto_height(
@@ -82,17 +133,22 @@ def bind_text_edit_auto_height(
         if not _qt_widget_alive(editor):
             return
         try:
-            text_width = _text_edit_layout_width(editor)
-            editor.document().setTextWidth(text_width)
+            editor.document().setTextWidth(-1)
             doc_height = editor.document().documentLayout().documentSize().height()
             frame = editor.frameWidth() * 2
             natural = int(math.ceil(doc_height + frame + 8))
             if maximum is None:
                 height = int(max(minimum, natural))
                 editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-                editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             else:
                 height = int(max(minimum, min(natural, maximum)))
+                editor.setVerticalScrollBarPolicy(
+                    Qt.ScrollBarPolicy.ScrollBarAsNeeded
+                    if natural > maximum
+                    else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+                )
+                editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             if editor.height() != height:
                 editor.setFixedHeight(height)
                 editor.updateGeometry()
@@ -127,9 +183,25 @@ class _ScrollAwareWheelAppFilter(QObject):
         if event.type() != _WHEEL_EVENT_TYPE or not isinstance(obj, QWidget):
             return False
         window = obj.window()
-        if window is None or not window.findChildren(ScrollAwareTextEdit):
+        if window is None or not ScrollAwareTextEdit._window_uses_scroll_aware_wheel(window):
             return False
         ScrollAwareTextEdit._update_wheel_gesture_lock(event)
+        editor = ScrollAwareTextEdit._find_scroll_aware_editor(obj)
+        if (
+            editor is not None
+            and editor.hasFocus()
+            and ScrollAwareTextEdit._page_scroll_gesture_lock() is None
+        ):
+            decision = ScrollAwareTextEdit._would_intercept_focused_editor_wheel(editor, event)
+            if decision is False:
+                return False
+        lock = ScrollAwareTextEdit._wheel_gesture_lock
+        if lock is None:
+            return False
+        redirect = ScrollAwareTextEdit._wheel_gesture_in_progress or _is_scroll_bar_widget(obj)
+        if redirect and ScrollAwareTextEdit._should_redirect_wheel_to_lock(obj, lock, event):
+            ScrollAwareTextEdit._dispatch_wheel_to_lock(lock, event)
+            return True
         return False
 
 
@@ -141,8 +213,8 @@ def _install_scroll_aware_wheel_app_filter() -> None:
     app._scroll_aware_wheel_filter_installed = True
 
 
-class _ScrollAwareTextEditWheelFilter(QObject):
-    """Intercept wheel events on the editor and its viewport (Qt delivers them there)."""
+class _ScrollAwareViewportWheelForwarder(QObject):
+    """Ensure viewport wheel events reach ScrollAwareTextEdit.wheelEvent."""
 
     def __init__(self, editor: ScrollAwareTextEdit) -> None:
         super().__init__(editor)
@@ -151,31 +223,23 @@ class _ScrollAwareTextEditWheelFilter(QObject):
     def eventFilter(self, obj, event) -> bool:
         if event.type() != _WHEEL_EVENT_TYPE:
             return False
-        editor = self._editor
-        cls = ScrollAwareTextEdit
-        lock = cls._wheel_gesture_lock
+        self._editor.wheelEvent(event)
+        return True
 
-        if isinstance(lock, QScrollArea):
-            _scroll_area_by_wheel(lock, event)
-            return True
 
-        if not editor.hasFocus():
-            scroll = cls._find_enclosing_scroll_area(editor)
-            if scroll is not None:
-                _scroll_area_by_wheel(scroll, event)
-            else:
-                event.ignore()
-            return True
+class _ScrollAwareTextEditWheelFilter(QObject):
+    """Redirect wheel events on scroll bars during cross-widget gesture locks."""
 
-        if lock is editor or (
-            lock is None and cls._contains_global_point(editor, _event_global_pos(event))
-        ):
-            editor._wheel_scroll_self(event)
-            return True
+    def __init__(self, editor: ScrollAwareTextEdit) -> None:
+        super().__init__(editor)
+        self._editor = editor
 
-        scroll = cls._find_enclosing_scroll_area(editor)
-        if scroll is not None:
-            _scroll_area_by_wheel(scroll, event)
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() != _WHEEL_EVENT_TYPE or not _is_scroll_bar_widget(obj):
+            return False
+        lock = ScrollAwareTextEdit._wheel_gesture_lock
+        if lock is not None and ScrollAwareTextEdit._should_redirect_wheel_to_lock(obj, lock, event):
+            ScrollAwareTextEdit._dispatch_wheel_to_lock(lock, event)
             return True
         return False
 
@@ -184,18 +248,240 @@ class ScrollAwareTextEdit(QTextEdit):
     """Scroll page by default; scroll text content only after the field is clicked."""
 
     _wheel_gesture_lock: ScrollAwareTextEdit | QScrollArea | None = None
+    _wheel_gesture_in_progress: bool = False
     _wheel_gesture_timer: QTimer | None = None
+    _wheel_native_delivery_ids: set[int] = set()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self._scroll_aware_window = self.window()
+        self._register_in_window()
+        self.destroyed.connect(self._unregister_from_window)
         self._ensure_wheel_gesture_timer()
         _install_scroll_aware_wheel_app_filter()
         self._wheel_filter = _ScrollAwareTextEditWheelFilter(self)
-        self.installEventFilter(self._wheel_filter)
         viewport = self.viewport()
         if viewport is not None:
-            viewport.installEventFilter(self._wheel_filter)
+            self._viewport_wheel_forwarder = _ScrollAwareViewportWheelForwarder(self)
+            viewport.installEventFilter(self._viewport_wheel_forwarder)
+        for bar in (self.horizontalScrollBar(), self.verticalScrollBar()):
+            if bar is not None:
+                bar.installEventFilter(self._wheel_filter)
+
+    @classmethod
+    def _page_scroll_gesture_lock(cls) -> QScrollArea | None:
+        lock = cls._wheel_gesture_lock
+        if cls._wheel_gesture_in_progress and isinstance(lock, QScrollArea):
+            return lock
+        return None
+
+    @classmethod
+    def _native_wheel_event(cls, editor: ScrollAwareTextEdit, event) -> None:
+        """Deliver wheel to the editor after the app filter consumed the original event."""
+        event_id = id(event)
+        if event_id in cls._wheel_native_delivery_ids:
+            return
+        cls._wheel_native_delivery_ids.add(event_id)
+        _apply_native_wheel_scroll(editor, event)
+        QTimer.singleShot(0, lambda eid=event_id: cls._wheel_native_delivery_ids.discard(eid))
+
+    @classmethod
+    def _should_forward_editor_wheel_to_page(cls, editor: ScrollAwareTextEdit, event) -> bool:
+        delta_y, delta_x = _wheel_deltas(event)
+        return (
+            delta_x != 0
+            and cls._has_horizontal_scroll(editor)
+            and not cls._can_scroll_horizontally(editor, delta_x)
+        )
+
+    @classmethod
+    def _should_swallow_vertical_editor_wheel(cls, editor: ScrollAwareTextEdit, event) -> bool:
+        delta_y, delta_x = _wheel_deltas(event)
+        return (
+            delta_y != 0
+            and delta_x == 0
+            and cls._has_vertical_scroll(editor)
+            and not cls._can_scroll_vertically(editor, delta_y)
+        )
+
+    @classmethod
+    def _route_focused_editor_wheel(cls, editor: ScrollAwareTextEdit, event) -> bool | None:
+        """Route wheel for a focused editor, or None when the editor is not focused."""
+        if not editor.hasFocus():
+            return None
+
+        page_lock = cls._page_scroll_gesture_lock()
+        if page_lock is not None:
+            _scroll_area_by_wheel(page_lock, event)
+            return True
+
+        delta_y, delta_x = _wheel_deltas(event)
+
+        if cls._should_forward_editor_wheel_to_page(editor, event):
+            scroll = cls._find_enclosing_scroll_area(editor)
+            if scroll is not None:
+                _scroll_area_by_wheel(scroll, event)
+            else:
+                event.ignore()
+            return True
+
+        if cls._should_swallow_vertical_editor_wheel(editor, event):
+            event.accept()
+            return True
+
+        if cls._editor_can_consume_wheel(editor, delta_y, delta_x):
+            return False
+
+        scroll = cls._find_enclosing_scroll_area(editor)
+        lock = cls._wheel_gesture_lock
+        if scroll is not None:
+            _scroll_area_by_wheel(scroll, event)
+        elif isinstance(lock, QScrollArea):
+            _scroll_area_by_wheel(lock, event)
+        else:
+            event.ignore()
+        return True
+
+    @classmethod
+    def _would_intercept_focused_editor_wheel(cls, editor: ScrollAwareTextEdit, event) -> bool | None:
+        """Read-only focused-editor routing decision, or None when not focused."""
+        if not editor.hasFocus():
+            return None
+        if cls._page_scroll_gesture_lock() is not None:
+            return True
+        delta_y, delta_x = _wheel_deltas(event)
+        if cls._should_forward_editor_wheel_to_page(editor, event):
+            return True
+        if cls._should_swallow_vertical_editor_wheel(editor, event):
+            return True
+        if cls._editor_can_consume_wheel(editor, delta_y, delta_x):
+            return False
+        return True
+
+    @classmethod
+    def _would_intercept_wheel(cls, editor: ScrollAwareTextEdit, event) -> bool:
+        """Read-only routing decision (for debug logging)."""
+        focused = cls._would_intercept_focused_editor_wheel(editor, event)
+        if focused is not None:
+            return focused
+
+        lock = cls._wheel_gesture_lock
+        if cls._wheel_gesture_in_progress and isinstance(lock, QScrollArea):
+            return True
+        return not editor.hasFocus()
+
+    @classmethod
+    def _route_wheel_event(cls, editor: ScrollAwareTextEdit, event) -> bool:
+        focused = cls._route_focused_editor_wheel(editor, event)
+        if focused is not None:
+            return focused
+
+        lock = cls._wheel_gesture_lock
+        if cls._wheel_gesture_in_progress and isinstance(lock, QScrollArea):
+            scroll = cls._find_enclosing_scroll_area(editor)
+            if scroll is not None:
+                _scroll_area_by_wheel(scroll, event)
+            else:
+                _scroll_area_by_wheel(lock, event)
+            return True
+
+        scroll = cls._find_enclosing_scroll_area(editor)
+        if scroll is not None:
+            _scroll_area_by_wheel(scroll, event)
+        else:
+            event.ignore()
+        return True
+
+    def wheelEvent(self, event) -> None:
+        if type(self)._route_wheel_event(self, event):
+            return
+        _apply_native_wheel_scroll(self, event)
+
+    def _register_in_window(self) -> None:
+        window = self._scroll_aware_window
+        if window is None:
+            return
+        _SCROLL_AWARE_WINDOW_COUNTS[window] = _SCROLL_AWARE_WINDOW_COUNTS.get(window, 0) + 1
+        editors = _SCROLL_AWARE_EDITORS_BY_WINDOW.get(window)
+        if editors is None:
+            editors = set()
+            _SCROLL_AWARE_EDITORS_BY_WINDOW[window] = editors
+        editors.add(self)
+
+    def _unregister_from_window(self, *_args) -> None:
+        window = self._scroll_aware_window
+        if window is None:
+            return
+        count = _SCROLL_AWARE_WINDOW_COUNTS.get(window, 0) - 1
+        if count <= 0:
+            _SCROLL_AWARE_WINDOW_COUNTS.pop(window, None)
+            _SCROLL_AWARE_EDITORS_BY_WINDOW.pop(window, None)
+        else:
+            _SCROLL_AWARE_WINDOW_COUNTS[window] = count
+        editors = _SCROLL_AWARE_EDITORS_BY_WINDOW.get(window)
+        if editors is not None:
+            editors.discard(self)
+
+    @classmethod
+    def _window_uses_scroll_aware_wheel(cls, window: QWidget) -> bool:
+        return _SCROLL_AWARE_WINDOW_COUNTS.get(window, 0) > 0
+
+    @classmethod
+    def _widget_is_within_lock_target(
+        cls,
+        widget: QWidget,
+        lock: ScrollAwareTextEdit | QScrollArea,
+    ) -> bool:
+        current: QWidget | None = widget
+        while current is not None:
+            if current is lock:
+                return True
+            current = current.parentWidget()
+        return False
+
+    @classmethod
+    def _scroll_bar_owner(cls, widget: QWidget) -> ScrollAwareTextEdit | QScrollArea | None:
+        current: QWidget | None = widget
+        while current is not None:
+            if isinstance(current, QScrollBar):
+                parent = current.parentWidget()
+                if isinstance(parent, ScrollAwareTextEdit):
+                    return parent
+                if isinstance(parent, QScrollArea):
+                    return parent
+                return None
+            current = current.parentWidget()
+        return None
+
+    @classmethod
+    def _should_redirect_wheel_to_lock(
+        cls,
+        widget: QWidget,
+        lock: ScrollAwareTextEdit | QScrollArea,
+        event,
+    ) -> bool:
+        if _is_scroll_bar_widget(widget):
+            return cls._scroll_bar_owner(widget) is not lock
+        editor = cls._find_scroll_aware_editor(widget)
+        if isinstance(lock, QScrollArea) and editor is not None:
+            if cls._wheel_gesture_in_progress:
+                return True
+            if editor.hasFocus():
+                delta_y, delta_x = _wheel_deltas(event)
+                if cls._editor_can_consume_wheel(editor, delta_y, delta_x):
+                    return False
+            return True
+        return not cls._widget_is_within_lock_target(widget, lock)
+
+    @classmethod
+    def _dispatch_wheel_to_lock(cls, lock: ScrollAwareTextEdit | QScrollArea, event) -> None:
+        if isinstance(lock, ScrollAwareTextEdit):
+            if type(lock)._route_wheel_event(lock, event):
+                return
+            cls._native_wheel_event(lock, event)
+        else:
+            _scroll_area_by_wheel(lock, event)
 
     @classmethod
     def _ensure_wheel_gesture_timer(cls) -> QTimer:
@@ -210,6 +496,7 @@ class ScrollAwareTextEdit(QTextEdit):
     @classmethod
     def _clear_wheel_gesture_lock(cls) -> None:
         cls._wheel_gesture_lock = None
+        cls._wheel_gesture_in_progress = False
 
     @classmethod
     def _widget_under_global_pos(cls, global_pos) -> QWidget | None:
@@ -236,8 +523,18 @@ class ScrollAwareTextEdit(QTextEdit):
         return None
 
     @classmethod
-    def _can_scroll_internally_in_direction(cls, editor: ScrollAwareTextEdit, delta: int) -> bool:
-        if not editor.is_internally_scrollable():
+    def _has_vertical_scroll(cls, editor: ScrollAwareTextEdit) -> bool:
+        bar = editor.verticalScrollBar()
+        return bar.maximum() > bar.minimum()
+
+    @classmethod
+    def _has_horizontal_scroll(cls, editor: ScrollAwareTextEdit) -> bool:
+        bar = editor.horizontalScrollBar()
+        return bar.maximum() > bar.minimum()
+
+    @classmethod
+    def _can_scroll_vertically(cls, editor: ScrollAwareTextEdit, delta: int) -> bool:
+        if not cls._has_vertical_scroll(editor):
             return False
         if delta == 0:
             return True
@@ -251,6 +548,46 @@ class ScrollAwareTextEdit(QTextEdit):
         return True
 
     @classmethod
+    def _can_scroll_horizontally(cls, editor: ScrollAwareTextEdit, delta: int) -> bool:
+        if not cls._has_horizontal_scroll(editor):
+            return False
+        if delta == 0:
+            return True
+        bar = editor.horizontalScrollBar()
+        at_left = bar.value() <= bar.minimum()
+        at_right = bar.value() >= bar.maximum()
+        if delta > 0 and at_left:
+            return False
+        if delta < 0 and at_right:
+            return False
+        return True
+
+    @classmethod
+    def _can_scroll_internally_in_direction(cls, editor: ScrollAwareTextEdit, delta: int) -> bool:
+        return cls._can_scroll_vertically(editor, delta)
+
+    @classmethod
+    def _editor_can_consume_wheel(cls, editor: ScrollAwareTextEdit, delta_y: int, delta_x: int) -> bool:
+        if delta_x != 0 and cls._can_scroll_horizontally(editor, delta_x):
+            return True
+        if delta_y != 0 and cls._can_scroll_vertically(editor, delta_y):
+            return True
+        if delta_y == 0 and delta_x == 0:
+            return cls._has_vertical_scroll(editor) or cls._has_horizontal_scroll(editor)
+        return False
+
+    @classmethod
+    def _point_over_editor(
+        cls,
+        editor: ScrollAwareTextEdit,
+        global_pos,
+        widget: QWidget | None,
+    ) -> bool:
+        if cls._contains_global_point(editor, global_pos):
+            return True
+        return widget is not None and cls._find_scroll_aware_editor(widget) is editor
+
+    @classmethod
     def _resolve_wheel_gesture_lock(
         cls,
         global_pos,
@@ -261,10 +598,10 @@ class ScrollAwareTextEdit(QTextEdit):
         if (
             editor is not None
             and editor.hasFocus()
-            and cls._contains_global_point(editor, global_pos)
+            and cls._point_over_editor(editor, global_pos, widget)
         ):
-            delta = event.angleDelta().y()
-            if cls._can_scroll_internally_in_direction(editor, delta):
+            delta_y, delta_x = _wheel_deltas(event)
+            if cls._editor_can_consume_wheel(editor, delta_y, delta_x):
                 return editor
             return cls._find_enclosing_scroll_area(editor)
         return cls._find_enclosing_scroll_area(widget)
@@ -272,23 +609,37 @@ class ScrollAwareTextEdit(QTextEdit):
     @classmethod
     def _update_wheel_gesture_lock(cls, event) -> None:
         phase = event.phase()
+        timer = cls._ensure_wheel_gesture_timer()
         if phase == Qt.ScrollPhase.ScrollBegin:
             cls._wheel_gesture_lock = cls._resolve_wheel_gesture_lock(
                 _event_global_pos(event),
                 event,
             )
-            cls._ensure_wheel_gesture_timer().stop()
+            cls._wheel_gesture_in_progress = True
+            timer.stop()
             return
         if phase == Qt.ScrollPhase.ScrollEnd:
             cls._clear_wheel_gesture_lock()
-            cls._ensure_wheel_gesture_timer().stop()
+            timer.stop()
             return
-        timer = cls._ensure_wheel_gesture_timer()
-        if not timer.isActive():
+        if cls._wheel_gesture_in_progress:
+            if not isinstance(cls._wheel_gesture_lock, QScrollArea):
+                widget = cls._widget_under_global_pos(_event_global_pos(event))
+                editor = cls._find_scroll_aware_editor(widget)
+                if editor is not None and editor.hasFocus():
+                    delta_y, delta_x = _wheel_deltas(event)
+                    if cls._editor_can_consume_wheel(editor, delta_y, delta_x):
+                        cls._wheel_gesture_lock = editor
+            timer.stop()
+            timer.start()
+            return
+        if cls._wheel_gesture_lock is None:
             cls._wheel_gesture_lock = cls._resolve_wheel_gesture_lock(
                 _event_global_pos(event),
                 event,
             )
+            cls._wheel_gesture_in_progress = True
+        timer.stop()
         timer.start()
 
     def clear_text_selection(self) -> None:
@@ -308,13 +659,15 @@ class ScrollAwareTextEdit(QTextEdit):
         host = self.window()
         if host is None:
             return
-        for editor in host.findChildren(ScrollAwareTextEdit):
+        editors = _SCROLL_AWARE_EDITORS_BY_WINDOW.get(host)
+        if not editors:
+            return
+        for editor in editors:
             if editor is not self:
                 editor.clear_text_selection()
 
     def is_internally_scrollable(self) -> bool:
-        bar = self.verticalScrollBar()
-        return bar.maximum() > bar.minimum()
+        return self._has_vertical_scroll(self) or self._has_horizontal_scroll(self)
 
     def _forward_wheel_to_enclosing_scroll(self, event) -> None:
         scroll = self._find_enclosing_scroll_area(self)
@@ -322,18 +675,6 @@ class ScrollAwareTextEdit(QTextEdit):
             _scroll_area_by_wheel(scroll, event)
         else:
             event.ignore()
-
-    def _wheel_scroll_self(self, event) -> None:
-        if not self.is_internally_scrollable():
-            self._forward_wheel_to_enclosing_scroll(event)
-            return
-
-        delta = event.angleDelta().y()
-        if delta == 0 or not self._can_scroll_internally_in_direction(self, delta):
-            event.accept()
-            return
-        super().wheelEvent(event)
-        event.accept()
 
 
 class _NoWheelMixin:

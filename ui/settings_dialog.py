@@ -35,27 +35,31 @@ from ..config import (
     load_config,
     save_config,
 )
-from ..gemini_client import GeminiError, list_gemini_models
+from ..prompt_inspection import build_optimize_prompt_inspection
 from ..i18n import (
     LANG_EN,
     LANG_IT,
     DEFAULT_LANGUAGE,
+    default_card_templates_format_prompt,
     default_chat_system_addon,
     default_dynamic_rules_prefix,
     default_chat_context_wrapper,
     default_optimize_user_prompt,
     effective_brain_import_message,
+    effective_card_templates_format_prompt,
     effective_chat_system_addon,
     effective_dynamic_rules_prefix,
     effective_chat_context_wrapper,
     effective_optimize_user_prompt,
     is_builtin_brain_import_message,
+    is_builtin_card_templates_format_prompt,
     is_builtin_chat_system_addon,
     is_builtin_chat_context_wrapper,
     is_builtin_dynamic_rules_prefix,
     is_builtin_optimize_user_prompt,
     is_builtin_system_instruction,
     normalize_brain_import_message_for_save,
+    normalize_card_templates_format_prompt_for_save,
     normalize_chat_system_addon_for_save,
     normalize_chat_context_wrapper_for_save,
     normalize_dynamic_rules_prefix_for_save,
@@ -64,7 +68,8 @@ from ..i18n import (
     effective_system_instruction,
     tr,
 )
-from .chat_dialog import refresh_chat_language
+from .chat_dialog import refresh_chat_from_settings, refresh_chat_language
+from .prompt_inspection_dialog import PromptInspectionWindow
 from .settings_help_dialog import open_settings_help_dialog
 from .model_selector import (
     create_model_selector,
@@ -81,6 +86,7 @@ from .settings_compact_controls import (
 )
 from .widgets import ScrollAwareTextEdit
 from .theme import (
+    apply_native_page_scroll_theme,
     muted_hint_html,
     panel_content_html,
     panel_widget_stylesheet,
@@ -126,6 +132,7 @@ class SettingsDialog(QDialog):
         self._all_warnings_checked = True
         self._model_refresh_busy = False
         self._settings_help_dialog = None
+        self._optimize_prompt_inspection_window: PromptInspectionWindow | None = None
         self._force_shutdown = False
         self.silentlyClose = True
         self.setWindowModality(Qt.WindowModality.NonModal)
@@ -310,7 +317,7 @@ class SettingsDialog(QDialog):
         scroll = QScrollArea(page)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        apply_native_page_scroll_theme(scroll)
 
         form_host = QWidget(scroll)
         layout = QVBoxLayout(form_host)
@@ -400,6 +407,15 @@ class SettingsDialog(QDialog):
         self.chat_streaming_checkbox.setChecked(bool(self.config.get("chat_streaming", True)))
         layout.addWidget(self.chat_streaming_checkbox)
 
+        self.chat_prompt_inspection_checkbox = QCheckBox(
+            tr("settings.chat_prompt_inspection", config=config),
+            form_host,
+        )
+        self.chat_prompt_inspection_checkbox.setChecked(
+            bool(self.config.get("chat_prompt_inspection", False))
+        )
+        layout.addWidget(self.chat_prompt_inspection_checkbox)
+
         params_row = QHBoxLayout()
         params_row.addWidget(QLabel(tr("settings.timeout", config=config)))
         timeout_shell, self.timeout_input = create_settings_spinbox(form_host)
@@ -419,6 +435,18 @@ class SettingsDialog(QDialog):
         self.history_input.setValue(int(self.config.get("max_history_turns", 10)))
         params_row.addWidget(history_shell)
         layout.addLayout(params_row)
+
+        token_row = QHBoxLayout()
+        token_row.addWidget(QLabel(tr("settings.chat_token_warning_threshold", config=config)))
+        token_warn_shell, self.chat_token_warning_input = create_settings_spinbox(form_host)
+        self.chat_token_warning_input.setRange(1, 200000)
+        self.chat_token_warning_input.setSingleStep(500)
+        self.chat_token_warning_input.setValue(
+            int(self.config.get("chat_token_warning_threshold", 3000))
+        )
+        token_row.addWidget(token_warn_shell)
+        token_row.addStretch(1)
+        layout.addLayout(token_row)
 
         temp_row = QHBoxLayout()
         temp_row.addWidget(QLabel(tr("settings.temp_optimize", config=config)))
@@ -440,6 +468,15 @@ class SettingsDialog(QDialog):
         self.confirm_checkbox.setChecked(bool(self.config.get("confirm_before_apply", True)))
         layout.addWidget(self.confirm_checkbox)
 
+        self.btn_inspect_optimize_prompt = QPushButton(
+            tr("settings.inspect_optimize_prompt", config=config),
+            form_host,
+        )
+        self.btn_inspect_optimize_prompt.setAutoDefault(False)
+        self.btn_inspect_optimize_prompt.setDefault(False)
+        self.btn_inspect_optimize_prompt.clicked.connect(self._open_optimize_prompt_inspection)
+        layout.addWidget(self.btn_inspect_optimize_prompt)
+
         layout.addWidget(QLabel(f"<br><b>{tr('settings.brain_message', config=config)}</b>"))
         self.brain_message_hint = QLabel(
             muted_hint_html(tr("settings.brain_message.hint", config=config)),
@@ -451,6 +488,22 @@ class SettingsDialog(QDialog):
         self.brain_message_input.setMaximumHeight(120)
         self.brain_message_input.setPlainText(effective_brain_import_message(self.config))
         layout.addWidget(brain_shell)
+
+        self.brain_import_templates_checkbox = QCheckBox(
+            tr("settings.brain_import_templates", config=config),
+            form_host,
+        )
+        self.brain_import_templates_checkbox.setChecked(
+            bool(self.config.get("brain_import_templates", False))
+        )
+        layout.addWidget(self.brain_import_templates_checkbox)
+
+        self.brain_import_css_checkbox = QCheckBox(
+            tr("settings.brain_import_css", config=config),
+            form_host,
+        )
+        self.brain_import_css_checkbox.setChecked(bool(self.config.get("brain_import_css", False)))
+        layout.addWidget(self.brain_import_css_checkbox)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.system_instruction', config=config)}</b>"))
         self.instruction_shared_checkbox = QCheckBox(
@@ -526,7 +579,7 @@ class SettingsDialog(QDialog):
         scroll = QScrollArea(page)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        apply_native_page_scroll_theme(scroll)
 
         host = QWidget(scroll)
         layout = QVBoxLayout(host)
@@ -561,7 +614,7 @@ class SettingsDialog(QDialog):
         scroll = QScrollArea(page)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        apply_native_page_scroll_theme(scroll)
 
         host = QWidget(scroll)
         layout = QVBoxLayout(host)
@@ -596,7 +649,7 @@ class SettingsDialog(QDialog):
         scroll = QScrollArea(page)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        apply_native_page_scroll_theme(scroll)
 
         host = QWidget(scroll)
         layout = QVBoxLayout(host)
@@ -646,6 +699,22 @@ class SettingsDialog(QDialog):
         self.prompt_chat_context_input.setMinimumHeight(100)
         self.prompt_chat_context_input.setPlainText(effective_chat_context_wrapper(config))
         layout.addWidget(context_prompt_shell)
+
+        layout.addWidget(
+            QLabel(f"<br><b>{tr('settings.prompt_card_templates_format', config=config)}</b>")
+        )
+        layout.addWidget(
+            QLabel(
+                muted_hint_html(tr("settings.prompt_card_templates_format.hint", config=config)),
+                host,
+            )
+        )
+        templates_format_shell, self.prompt_card_templates_format_input = create_settings_text_edit(host)
+        self.prompt_card_templates_format_input.setMinimumHeight(120)
+        self.prompt_card_templates_format_input.setPlainText(
+            effective_card_templates_format_prompt(config)
+        )
+        layout.addWidget(templates_format_shell)
 
         layout.addStretch(1)
         scroll.setWidget(host)
@@ -740,6 +809,10 @@ class SettingsDialog(QDialog):
         self.brain_message_hint.setText(
             muted_hint_html(tr("settings.brain_message.hint", config=config))
         )
+        self.brain_import_templates_checkbox.setText(
+            tr("settings.brain_import_templates", config=config)
+        )
+        self.brain_import_css_checkbox.setText(tr("settings.brain_import_css", config=config))
         self.shortcuts_panel.setText(
             panel_content_html(tr("settings.shortcuts.body", config=config))
         )
@@ -916,11 +989,13 @@ class SettingsDialog(QDialog):
         config["thinking_budget_optimize"] = self.thinking_budget_optimize_input.value()
         config["thinking_budget_chat"] = self.thinking_budget_chat_input.value()
         config["chat_streaming"] = self.chat_streaming_checkbox.isChecked()
+        config["chat_prompt_inspection"] = self.chat_prompt_inspection_checkbox.isChecked()
         config.pop("model", None)
         config.pop("thinking_budget", None)
         config["timeout_seconds"] = self.timeout_input.value()
         config["max_retries"] = self.retries_input.value()
         config["max_history_turns"] = self.history_input.value()
+        config["chat_token_warning_threshold"] = self.chat_token_warning_input.value()
         config["temperature_optimize"] = self.temp_optimize_input.value()
         config["temperature_chat"] = self.temp_chat_input.value()
         config["confirm_before_apply"] = self.confirm_checkbox.isChecked()
@@ -928,6 +1003,8 @@ class SettingsDialog(QDialog):
         config["brain_import_message"] = normalize_brain_import_message_for_save(
             brain_message, config
         )
+        config["brain_import_templates"] = self.brain_import_templates_checkbox.isChecked()
+        config["brain_import_css"] = self.brain_import_css_checkbox.isChecked()
         instruction_fields = normalize_system_instruction_fields_for_save(
             shared=self.instruction_shared_checkbox.isChecked(),
             shared_text=self.instruction_input.toPlainText(),
@@ -948,6 +1025,9 @@ class SettingsDialog(QDialog):
         )
         config["prompt_chat_context"] = normalize_chat_context_wrapper_for_save(
             self.prompt_chat_context_input.toPlainText()
+        )
+        config["prompt_card_templates_format"] = normalize_card_templates_format_prompt_for_save(
+            self.prompt_card_templates_format_input.toPlainText()
         )
         for key in DISMISSIBLE_WARNING_KEYS:
             config[key] = bool(config.get(key, False))
@@ -1082,6 +1162,10 @@ class SettingsDialog(QDialog):
             self.chat_streaming_checkbox.setChecked(bool(default_value))
             return
 
+        if key == "chat_prompt_inspection":
+            self.chat_prompt_inspection_checkbox.setChecked(bool(default_value))
+            return
+
         if key == "timeout_seconds":
             self.timeout_input.setValue(int(default_value))
             return
@@ -1092,6 +1176,10 @@ class SettingsDialog(QDialog):
 
         if key == "max_history_turns":
             self.history_input.setValue(int(default_value))
+            return
+
+        if key == "chat_token_warning_threshold":
+            self.chat_token_warning_input.setValue(int(default_value))
             return
 
         if key == "temperature_optimize":
@@ -1110,6 +1198,14 @@ class SettingsDialog(QDialog):
             self.brain_message_input.setPlainText(
                 effective_brain_import_message({"language": self.language_combo.currentData() or DEFAULT_LANGUAGE})
             )
+            return
+
+        if key == "brain_import_templates":
+            self.brain_import_templates_checkbox.setChecked(bool(default_value))
+            return
+
+        if key == "brain_import_css":
+            self.brain_import_css_checkbox.setChecked(bool(default_value))
             return
 
         if key == "system_instruction":
@@ -1164,6 +1260,13 @@ class SettingsDialog(QDialog):
             lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
             self.prompt_chat_context_input.setPlainText(
                 default_chat_context_wrapper({"language": lang})
+            )
+            return
+
+        if key == "prompt_card_templates_format":
+            lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
+            self.prompt_card_templates_format_input.setPlainText(
+                default_card_templates_format_prompt({"language": lang})
             )
             return
 
@@ -1224,6 +1327,11 @@ class SettingsDialog(QDialog):
             self.prompt_chat_context_input.setPlainText(
                 tr("instructions.chat_context_wrapper", lang=lang)
             )
+        current_templates_format = self.prompt_card_templates_format_input.toPlainText().strip()
+        if is_builtin_card_templates_format_prompt(current_templates_format):
+            self.prompt_card_templates_format_input.setPlainText(
+                tr("instructions.card_templates_format", lang=lang)
+            )
 
     def _save_and_accept(self) -> None:
         if not self._confirm_save_if_needed():
@@ -1231,8 +1339,19 @@ class SettingsDialog(QDialog):
 
         self.config = self._collect_pending_config()
         save_config(self.config)
-        refresh_chat_language()
+        refresh_chat_from_settings()
         self.accept()
+
+    def _open_optimize_prompt_inspection(self) -> None:
+        pending = self._collect_pending_config()
+        config = pending
+        inspection = build_optimize_prompt_inspection(pending)
+        if self._optimize_prompt_inspection_window is None:
+            self._optimize_prompt_inspection_window = PromptInspectionWindow(
+                self,
+                title=tr("prompt.inspect.optimize.title", config=config),
+            )
+        self._optimize_prompt_inspection_window.show_inspection(inspection, pending)
 
 
 def _clear_settings_dialog_ref(_result: int | None = None) -> None:

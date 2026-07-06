@@ -8,6 +8,7 @@ from aqt.qt import (
     QFrame,
     QPalette,
     QScrollArea,
+    QSizePolicy,
     Qt,
     QTextEdit,
     QWidget,
@@ -159,6 +160,42 @@ def wrapper_warning_stylesheet(*, colors: ThemeColors | None = None) -> str:
     )
 
 
+def settings_stale_banner_stylesheet(*, colors: ThemeColors | None = None) -> str:
+    palette = colors or get_theme_colors()
+    bg = palette.msg_loading
+    fg = palette.chat_surface_bg
+    return (
+        f"QWidget#settingsStaleBanner {{"
+        f" background-color: {bg};"
+        " border-radius: 4px;"
+        "}"
+        f" QLabel#settingsStaleBannerText {{"
+        " background: transparent;"
+        f" color: {fg};"
+        " font-size: 11px;"
+        " font-weight: bold;"
+        " padding: 8px 0px 8px 10px;"
+        "}"
+        f" QPushButton#settingsStaleBannerClose {{"
+        " background: transparent;"
+        f" color: {fg};"
+        " font-size: 16px;"
+        " font-weight: bold;"
+        " border: none;"
+        " padding: 0px 0px 3px 0px;"
+        " margin: 6px 8px 6px 0px;"
+        " min-width: 28px;"
+        " max-width: 28px;"
+        " min-height: 28px;"
+        " max-height: 28px;"
+        "}"
+        " QPushButton#settingsStaleBannerClose:hover {"
+        " background-color: rgba(0, 0, 0, 0.12);"
+        " border-radius: 4px;"
+        "}"
+    )
+
+
 PANEL_BORDER_RADIUS = 4
 
 
@@ -214,6 +251,17 @@ def scrollbar_stylesheet(
     return rules
 
 
+def apply_native_page_scroll_theme(scroll: QScrollArea) -> None:
+    """Page-level scroll areas: show both axes when content overflows."""
+    palette = get_theme_colors()
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setStyleSheet(
+        "QScrollArea { background: transparent; }"
+        + scrollbar_stylesheet(track_bg="transparent", colors=palette)
+    )
+
+
 def apply_native_text_edit_surface_theme(editor: QTextEdit) -> None:
     palette = get_theme_colors()
     surface = palette.chat_surface_bg
@@ -231,9 +279,22 @@ def apply_native_text_edit_surface_theme(editor: QTextEdit) -> None:
         "QTextEdit {"
         f" background-color: {surface};"
         f" color: {palette.text};"
-        " border: none;"
+        " border: 1px solid transparent;"
+        " border-radius: 3px;"
         " padding: 4px;"
         "}"
+        "QTextEdit:focus {"
+        f" border: 1px solid {palette.link};"
+        f" background-color: {surface};"
+        "}"
+        + scrollbar_stylesheet(track_bg=surface, colors=palette)
+    )
+    editor.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+    editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    editor.setMinimumWidth(0)
+    editor.setSizePolicy(
+        QSizePolicy.Policy.Expanding,
+        editor.sizePolicy().verticalPolicy(),
     )
     viewport = editor.viewport()
     if viewport is not None:
@@ -260,7 +321,7 @@ def apply_native_fields_scroll_theme(panel: QWidget, scroll: QScrollArea) -> Non
         "}"
     )
     scroll.setFrameShape(QFrame.Shape.NoFrame)
-    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     scroll.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
     viewport = scroll.viewport()
@@ -286,15 +347,6 @@ def _fields_scroll_inner_stylesheet(*, border: str | None, radius: int, palette)
         f"{border_rule}"
         "}"
         + scrollbar_stylesheet(track_bg="transparent", colors=palette)
-        + (
-            "QScrollBar:horizontal {"
-            " height: 0px; min-height: 0px; max-height: 0px;"
-            " margin: 0px; padding: 0px; border: none; background: transparent;"
-            "}"
-            "QAbstractScrollArea::corner {"
-            " width: 0px; height: 0px;"
-            "}"
-        )
     )
 
 

@@ -116,6 +116,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Streaming risposte in chat (mostra il testo man mano che arriva)",
         "en": "Stream chat replies (show text as it arrives)",
     },
+    "settings.chat_prompt_inspection": {
+        "it": "Abilita ispezione prompt in chat",
+        "en": "Enable chat prompt inspection",
+    },
+    "settings.inspect_optimize_prompt": {
+        "it": "Ispeziona prompt ottimizzazione",
+        "en": "Inspect optimize prompt",
+    },
     "settings.timeout": {
         "it": "Timeout (s):",
         "en": "Timeout (s):",
@@ -147,6 +155,18 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.brain_message.hint": {
         "it": "Testo inserito automaticamente nella chat quando importi una nota con il bottone 🧠.",
         "en": "Text inserted automatically in chat when you import a note with the 🧠 button.",
+    },
+    "settings.brain_import_templates": {
+        "it": "Includi i template delle carte del tipo di nota nel messaggio chat",
+        "en": "Include the note type's card templates in the chat message",
+    },
+    "settings.brain_import_css": {
+        "it": "Includi lo stile CSS del tipo di nota nel messaggio chat",
+        "en": "Include the note type CSS styling in the chat message",
+    },
+    "settings.chat_token_warning_threshold": {
+        "it": "Avviso token chat oltre",
+        "en": "Chat token warning above",
     },
     "settings.advanced": {
         "it": "Avanzate…",
@@ -220,6 +240,20 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": (
             "Used when you send chat with “include note context” after 🧠 import. "
             "Required placeholders: {context} (note fields), {request} (your message)."
+        ),
+    },
+    "settings.prompt_card_templates_format": {
+        "it": "Guida formato template e CSS (chat con import template/stile)",
+        "en": "Template & CSS format guide (chat with template/style import)",
+    },
+    "settings.prompt_card_templates_format.hint": {
+        "it": (
+            "Se nel messaggio sono inclusi template carte e/o CSS del tipo di nota, questo testo "
+            "viene concatenato subito prima di quelle sezioni per spiegare come leggerle."
+        ),
+        "en": (
+            "When card templates and/or note type CSS are included in the message, this text is "
+            "chained immediately before those sections to explain how to read them."
         ),
     },
     "settings.system_instruction": {
@@ -372,6 +406,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Come vengono costruiti i prompt…",
         "en": "How prompts are built…",
     },
+    "settings.help.chat_live_settings.link": {
+        "it": "Impostazioni chat applicabili subito…",
+        "en": "Which chat settings apply immediately…",
+    },
+    "settings.help.chat_live_settings.title": {
+        "it": "Impostazioni chat applicabili subito",
+        "en": "Which chat settings apply immediately",
+    },
     "settings.help.prompts_overview.title": {
         "it": "Come vengono costruiti i prompt",
         "en": "How prompts are built",
@@ -379,7 +421,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.help.prompts_overview": {
         "it": (
             "L'add-on invia a Gemini un <b>prompt di sistema</b> e uno o più <b>messaggi utente</b>. "
-            "Quasi tutto il testo è modificabile nelle Impostazioni (e quattro blocchi in <b>Avanzate…</b>). "
+            "Quasi tutto il testo è modificabile nelle Impostazioni (e cinque blocchi in <b>Avanzate…</b>). "
             "I pezzi vengono concatenati nell'ordine sotto — non vengono aggiunti spazi o a capo automatici "
             "tra un blocco e l'altro, salvo dove indicato.<br><br>"
             "<b>Ottimizzazione campo (Ctrl+Shift+G)</b><br>"
@@ -405,7 +447,10 @@ _STRINGS: dict[str, dict[str, str]] = {
             "I campi in <code>{context}</code> provengono dall'anteprima modificabile sopra la chat; "
             "ogni campo è formattato come "
             "<code>Campo [Nome]:</code> + HTML grezzo.<br>"
-            "Se il wrapper personalizzato omette un segnaposto, si usa il modello predefinito.<br><br>"
+            "Se il wrapper personalizzato omette un segnaposto, si usa il modello predefinito.<br>"
+            "Se sono attivi import template e/o CSS e compaiono nel messaggio, subito prima delle "
+            "sezioni template/CSS viene concatenata la "
+            "<b>guida formato template e CSS</b> (Avanzate).<br><br>"
             "<b>Non inviato a Gemini</b>: messaggio di benvenuto, "
             "nome del campo nel messaggio normale.<br><br>"
             "<b>Messaggio import 🧠</b>: precompila la casella di input; i campi nota compaiono "
@@ -413,11 +458,12 @@ _STRINGS: dict[str, dict[str, str]] = {
             "utente normale (eventualmente avvolto dal wrapper contesto).<br><br>"
             "<b>Prefisso regole dinamiche</b>: il predefinito inizia con due a capo (<code>\\n\\n</code>) "
             "e termina con uno. In un prefisso personalizzato, includi tu stesso gli a capo "
-            "prima/dopo il testo, altrimenti il blocco si attacca a quello precedente."
+            "prima/dopo il testo, altrimenti il blocco si attacca a quello precedente.<br><br>"
+            "Vedi anche <b>Impostazioni chat applicabili subito</b> nella guida impostazioni."
         ),
         "en": (
             "The add-on sends Gemini a <b>system prompt</b> and one or more <b>user messages</b>. "
-            "Almost all text is editable in Settings (plus four blocks under <b>Advanced…</b>). "
+            "Almost all text is editable in Settings (plus five blocks under <b>Advanced…</b>). "
             "Pieces are concatenated in the order below — the add-on does not insert extra spaces "
             "or line breaks between blocks unless noted.<br><br>"
             "<b>Field optimize (Ctrl+Shift+G)</b><br>"
@@ -443,7 +489,10 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Fields in <code>{context}</code> come from the editable preview above the chat; "
             "each field is formatted as "
             "<code>Field [Name]:</code> + raw HTML.<br>"
-            "If a custom wrapper omits a placeholder, the default template is used.<br><br>"
+            "If a custom wrapper omits a placeholder, the default template is used.<br>"
+            "When template and/or CSS import is enabled and those sections appear in the message, "
+            "the <b>template &amp; CSS format guide</b> (Advanced) is chained immediately before "
+            "the template and styling sections.<br><br>"
             "<b>Not sent to Gemini</b>: welcome message, "
             "field name in a normal message.<br><br>"
             "<b>🧠 import message</b>: pre-fills the input box; note fields appear in the "
@@ -451,7 +500,8 @@ _STRINGS: dict[str, dict[str, str]] = {
             "(optionally wrapped by the note context wrapper).<br><br>"
             "<b>Dynamic rules prefix</b>: the default starts with two line breaks (<code>\\n\\n</code>) "
             "and ends with one. In a custom prefix, include line breaks before/after your text yourself, "
-            "or the block will run into the text above or below."
+            "or the block will run into the text above or below.<br><br>"
+            "See also <b>Which chat settings apply immediately?</b> in the settings guide."
         ),
     },
     "settings.help.info_tooltip": {
@@ -629,15 +679,35 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.help.prompt_chat_context": {
         "it": (
             "Modello del messaggio utente quando invii in chat con «Includi contesto nota» dopo import 🧠. "
-            "Segnaposto: <code>{context}</code>, <code>{request}</code>. "
+            "Segnaposto: <code>{context}</code>, <code>{request}</code>, "
+            "<code>{templates}</code>, <code>{styling}</code>. "
+            "Se {templates} o {styling} mancano, vengono inseriti dopo {context}. "
             "Modificabile in <b>Avanzate…</b> o temporaneamente con «Modifica wrapper» nella chat "
             "(i campi nota si modificano nell'anteprima sopra la chat)."
         ),
         "en": (
             "User message template when you send chat with “include note context” after 🧠 import. "
-            "Placeholders: <code>{context}</code>, <code>{request}</code>. "
+            "Placeholders: <code>{context}</code>, <code>{request}</code>, "
+            "<code>{templates}</code>, <code>{styling}</code>. "
+            "If {templates} or {styling} are omitted, they are inserted after {context}. "
             "Editable under <b>Advanced…</b> or temporarily via <b>Edit wrapper</b> in chat "
             "(note fields are edited in the preview above the chat)."
+        ),
+    },
+    "settings.help.prompt_card_templates_format": {
+        "it": (
+            "Testo concatenato <b>prima delle sezioni template carte e CSS del tipo di nota</b> "
+            "quando compaiono nel messaggio (import 🧠 con le relative opzioni "
+            "attive in Impostazioni). Spiega a Gemini come interpretare le sezioni "
+            "<code>[TEMPLATE DELLE CARTE]</code> e <code>[STILE DEL TIPO DI NOTA]</code> "
+            "che seguono. Modificabile in <b>Avanzate…</b>. Se vuoto, non viene inviato nulla."
+        ),
+        "en": (
+            "Text chained <b>before the card template and note type CSS sections</b> when they "
+            "appear in the message (🧠 import with the corresponding Settings options enabled). "
+            "Explains to Gemini how to read the "
+            "<code>[CARD TEMPLATES]</code> and <code>[NOTE TYPE STYLING]</code> sections that follow. "
+            "Editable under <b>Advanced…</b>. If empty, nothing extra is sent."
         ),
     },
     "settings.help.temperature_optimize": {
@@ -686,6 +756,85 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Customize the message to always ask the same kind of analysis (e.g. atomicity, "
             "simplification). Keep the default text to use the standard message "
             "in your selected language."
+        ),
+    },
+    "settings.help.brain_import_templates": {
+        "it": (
+            "Se attivo, quando invii in chat con «Includi contesto nota», il messaggio include "
+            "tutti i template delle carte del tipo di nota (fronte e retro). "
+            "Puoi modificarli con «Modifica template» nella chat. Disattivato per impostazione predefinita "
+            "per limitare la dimensione del messaggio inviato a Gemini."
+        ),
+        "en": (
+            "When enabled, sending chat with “include note context” adds all card templates "
+            "from the note type (front and back) to the message. "
+            "You can edit them via <b>Edit templates</b> in chat. Off by default to keep "
+            "Gemini message size smaller."
+        ),
+    },
+    "settings.help.brain_import_css": {
+        "it": (
+            "Se attivo, include il CSS condiviso del tipo di nota in una sezione dedicata del messaggio chat. "
+            "Disattivato per impostazione predefinita perché spesso è lungo e raramente necessario."
+        ),
+        "en": (
+            "When enabled, includes the note type's shared CSS in a dedicated section of the chat message. "
+            "Off by default because it is often long and rarely needed."
+        ),
+    },
+    "settings.help.chat_token_warning_threshold": {
+        "it": (
+            "Prima di inviare in chat, stima i token di input totali inviati a Gemini "
+            "(istruzioni di sistema, cronologia e messaggio in uscita). "
+            "Se superi questa soglia, compare un avviso (non disattivabile) con possibilità di annullare l'invio. "
+            "La stima usa ~4 caratteri per token ed è approssimativa (di solito leggermente al di sotto del reale). "
+            "Si applica subito anche con una chat già aperta."
+        ),
+        "en": (
+            "Before sending in chat, estimates total input tokens sent to Gemini "
+            "(system instructions, history, and outgoing message). "
+            "Above this threshold, a non-dismissable warning appears and you can cancel the send. "
+            "The estimate uses ~4 characters per token and is approximate (often slightly below actual). "
+            "Applies immediately even with an open chat."
+        ),
+    },
+    "settings.help.chat_prompt_inspection": {
+        "it": (
+            "Mostra un pulsante 🔍 nella barra della chat che apre una finestra di sola lettura con "
+            "l'intero prompt che verrebbe inviato (sistema, cronologia, prossimo messaggio). "
+            "Include un pulsante Aggiorna. Si attiva/disattiva subito anche con chat aperta."
+        ),
+        "en": (
+            "Shows a 🔍 button in the chat toolbar that opens a read-only window with the full prompt "
+            "that would be sent (system, history, next message). Includes a Refresh button. "
+            "Toggles on/off immediately even with an open chat."
+        ),
+    },
+    "settings.help.inspect_optimize_prompt": {
+        "it": (
+            "Apre una finestra di sola lettura con il prompt completo usato per l'ottimizzazione campo "
+            "(Ctrl+Shift+G): istruzioni di sistema, regole dinamiche, prefisso utente e segnaposto "
+            "per il contenuto del campo attivo."
+        ),
+        "en": (
+            "Opens a read-only window with the full prompt used for field optimize (Ctrl+Shift+G): "
+            "system instructions, dynamic rules, user prefix, and a placeholder for the active field content."
+        ),
+    },
+    "settings.help.chat_live_settings": {
+        "it": (
+            "<b>Impostazioni chat applicabili subito</b> (chat aperta): lingua interfaccia, "
+            "soglia avviso token, ispezione prompt, timeout, max retry.<br>"
+            "<b>Richiedono nuova conversazione</b> (banner in chat): istruzioni di sistema, "
+            "regole dinamiche, modello/temperatura/thinking chat, streaming, storico turni, "
+            "prompt avanzati chat, import template/CSS. Usa «Nuova conversazione» o chiudi e riapri la chat."
+        ),
+        "en": (
+            "<b>Settings applied immediately</b> (open chat): interface language, token warning threshold, "
+            "prompt inspection, timeout, max retries.<br>"
+            "<b>Require a new conversation</b> (banner in chat): system instructions, dynamic rules, "
+            "chat model/temperature/thinking, streaming, history turns, advanced chat prompts, "
+            "template/CSS import. Use <b>New conversation</b> or close and reopen chat."
         ),
     },
     "settings.help.system_instruction": {
@@ -852,16 +1001,64 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Edit wrapper",
     },
     "chat.edit_wrapper.wrapper_label": {
+        "it": "Testo wrapper ({context}, {request}; opzionali {templates}, {styling}):",
+        "en": "Wrapper text ({context}, {request}; optional {templates}, {styling}):",
+    },
+    "chat.edit_wrapper.wrapper_label.basic": {
         "it": "Testo wrapper ({context}, {request}):",
         "en": "Wrapper text ({context}, {request}):",
     },
+    "chat.edit_wrapper.wrapper_label.with_optional": {
+        "it": "Testo wrapper ({{context}}, {{request}}; opzionali {optional}):",
+        "en": "Wrapper text ({{context}}, {{request}}; optional {optional}):",
+    },
     "chat.edit_wrapper.wrapper_hint": {
+        "it": "Il tuo messaggio in basso sostituisce {request}. {templates} e {styling} sono opzionali.",
+        "en": "Your message below replaces {request}. {templates} and {styling} are optional.",
+    },
+    "chat.edit_wrapper.wrapper_hint.basic": {
         "it": "Il tuo messaggio in basso sostituisce {request}.",
         "en": "Your message below replaces {request}.",
     },
+    "chat.edit_wrapper.wrapper_hint.with_optional": {
+        "it": "Il tuo messaggio in basso sostituisce {{request}}. Opzionali: {optional}.",
+        "en": "Your message below replaces {{request}}. Optional: {optional}.",
+    },
     "chat.edit_wrapper.wrapper_invalid": {
-        "it": "Formato wrapper errato. Ripristino predefiniti.",
-        "en": "The wrapper format is wrong. Reverting to defaults.",
+        "it": "Il wrapper deve includere {context} e {request} ({templates} e {styling} sono opzionali). Ripristino predefiniti.",
+        "en": "The wrapper must include {context} and {request} ({templates} and {styling} are optional). Reverting to defaults.",
+    },
+    "chat.edit_wrapper.wrapper_invalid.basic": {
+        "it": "Il wrapper deve includere {context} e {request}. Ripristino predefiniti.",
+        "en": "The wrapper must include {context} and {request}. Reverting to defaults.",
+    },
+    "chat.edit_wrapper.wrapper_invalid.with_optional": {
+        "it": "Il wrapper deve includere {{context}} e {{request}} (opzionali {optional}). Ripristino predefiniti.",
+        "en": "The wrapper must include {{context}} and {{request}} (optional {optional}). Reverting to defaults.",
+    },
+    "chat.edit_templates": {
+        "it": "Modifica template",
+        "en": "Edit templates",
+    },
+    "chat.edit_templates.hint": {
+        "it": "Template delle carte e stile CSS del tipo di nota. Non compaiono nell'anteprima nota.",
+        "en": "Note type card templates and CSS styling. Not shown in the note preview.",
+    },
+    "chat.edit_templates.hint.templates_only": {
+        "it": "Template delle carte del tipo di nota. Non compaiono nell'anteprima nota.",
+        "en": "Note type card templates. Not shown in the note preview.",
+    },
+    "chat.edit_templates.hint.styling_only": {
+        "it": "Stile CSS del tipo di nota. Non compare nell'anteprima nota.",
+        "en": "Note type CSS styling. Not shown in the note preview.",
+    },
+    "chat.edit_templates.card_label": {
+        "it": "Tipo carta {index}: {name}",
+        "en": "Card type {index}: {name}",
+    },
+    "chat.edit_templates.jump": {
+        "it": "Vai al tipo carta…",
+        "en": "Go to card type…",
     },
     "chat.edit_context.fields_label": {
         "it": "Campi nota (modificabili nell'anteprima sopra la chat):",
@@ -872,16 +1069,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Note content sent as {context} (editable in the preview):",
     },
     "chat.edit_context.wrapper_label": {
-        "it": "Testo wrapper ({context}, {request}):",
-        "en": "Wrapper text ({context}, {request}):",
+        "it": "Testo wrapper ({context}, {request}; opzionali {templates}, {styling}):",
+        "en": "Wrapper text ({context}, {request}; optional {templates}, {styling}):",
     },
     "chat.edit_context.wrapper_hint": {
-        "it": "Il tuo messaggio in basso sostituisce {request}.",
-        "en": "Your message below replaces {request}.",
+        "it": "Il tuo messaggio in basso sostituisce {request}. {templates} e {styling} sono opzionali.",
+        "en": "Your message below replaces {request}. {templates} and {styling} are optional.",
     },
     "chat.edit_context.wrapper_invalid": {
-        "it": "Formato wrapper errato. Ripristino predefiniti.",
-        "en": "The wrapper format is wrong. Reverting to defaults.",
+        "it": "Il wrapper deve includere {context} e {request} ({templates} e {styling} sono opzionali). Ripristino predefiniti.",
+        "en": "The wrapper must include {context} and {request} ({templates} and {styling} are optional). Reverting to defaults.",
     },
     "chat.new_conversation": {
         "it": "Nuova conversazione",
@@ -961,6 +1158,134 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Errore: API Key mancante (⚙️).",
         "en": "Error: API key missing (⚙️).",
     },
+    "chat.large_payload.title": {
+        "it": "Invio chat molto grande",
+        "en": "Large chat send",
+    },
+    "chat.large_payload.message": {
+        "it": "Stima ~{count} token di input totali per la prossima richiesta a Gemini (soglia {threshold}). Inviare comunque?",
+        "en": "The next Gemini request is estimated at ~{count} total input tokens (threshold {threshold}). Send anyway?",
+    },
+    "chat.large_payload.detail": {
+        "it": (
+            "La stima include tutto ciò che Gemini riceve come input: istruzioni di sistema "
+            "(incluse regole dinamiche e meta-regola chat), cronologia chat e il messaggio utente "
+            "in uscita (contesto nota, template/stile se attivi, ecc.). "
+            "Approssimazione ~4 caratteri per token; non include i token generati in risposta. "
+            "Puoi alzare la soglia in Impostazioni → «Avviso token chat oltre»."
+        ),
+        "en": (
+            "The estimate includes everything Gemini receives as input: system instructions "
+            "(including dynamic rules and the chat meta-rule), chat history, and the outgoing user "
+            "message (note context, templates/styling when enabled, etc.). "
+            "Approximate (~4 characters per token); it does not include tokens generated in the reply. "
+            "You can raise the threshold in Settings → “Chat token warning above”."
+        ),
+    },
+    "chat.inspect_prompt": {
+        "it": "🔍",
+        "en": "🔍",
+    },
+    "chat.inspect_prompt.tooltip": {
+        "it": "Ispeziona il prompt che verrà inviato",
+        "en": "Inspect what prompt will be sent",
+    },
+    "chat.settings_stale.message": {
+        "it": "Avvia una nuova conversazione perché tutte le impostazioni vengano aggiornate.",
+        "en": "Start a new conversation for all settings to be updated.",
+    },
+    "chat.settings_stale.dismiss": {
+        "it": "×",
+        "en": "×",
+    },
+    "prompt.inspect.refresh": {
+        "it": "Aggiorna",
+        "en": "Refresh",
+    },
+    "prompt.inspect.formula": {
+        "it": "Composizione: {formula}",
+        "en": "Composition: {formula}",
+    },
+    "prompt.inspect.optimize.title": {
+        "it": "Ispezione prompt ottimizzazione",
+        "en": "Optimize prompt inspection",
+    },
+    "prompt.inspect.chat.title": {
+        "it": "Ispezione prompt chat",
+        "en": "Chat prompt inspection",
+    },
+    "prompt.inspect.system_instruction": {
+        "it": "Istruzioni di sistema",
+        "en": "System instructions",
+    },
+    "prompt.inspect.dynamic_rules_prefix": {
+        "it": "Prefisso regole dinamiche",
+        "en": "Dynamic rules prefix",
+    },
+    "prompt.inspect.dynamic_instructions": {
+        "it": "Regole dinamiche",
+        "en": "Dynamic rules",
+    },
+    "prompt.inspect.chat_system_addon": {
+        "it": "Istruzioni aggiuntive chat",
+        "en": "Extra chat system instructions",
+    },
+    "prompt.inspect.optimize_user_prefix": {
+        "it": "Prefisso messaggio utente (ottimizzazione)",
+        "en": "User message prefix (optimize)",
+    },
+    "prompt.inspect.field_content": {
+        "it": "Contenuto campo Anki",
+        "en": "Anki field content",
+    },
+    "prompt.inspect.field_placeholder": {
+        "it": "[Qui verrebbe inserito l'HTML del campo attivo in Anki]",
+        "en": "[Active Anki field HTML would appear here]",
+    },
+    "prompt.inspect.chat_history": {
+        "it": "Cronologia chat",
+        "en": "Chat history",
+    },
+    "prompt.inspect.history_role": {
+        "it": "Messaggio {index} ({role})",
+        "en": "Message {index} ({role})",
+    },
+    "prompt.inspect.next_user_message": {
+        "it": "Prossimo messaggio utente",
+        "en": "Next user message",
+    },
+    "prompt.inspect.empty_next_message": {
+        "it": "[Nessun testo da inviare]",
+        "en": "[No text to send]",
+    },
+    "prompt.inspect.empty_draft": {
+        "it": "[campo vuoto]",
+        "en": "[empty input]",
+    },
+    "prompt.inspect.draft_input_note": {
+        "it": "Bozza attuale nella casella di input (non inviata):\n{draft}",
+        "en": "Current draft in the input box (not sent yet):\n{draft}",
+    },
+    "prompt.inspect.meta.model": {
+        "it": "Modello: {model}",
+        "en": "Model: {model}",
+    },
+    "prompt.inspect.meta.temperature": {
+        "it": "Temperatura: {temperature}",
+        "en": "Temperature: {temperature}",
+    },
+    "prompt.inspect.meta.thinking_budget": {
+        "it": "Budget thinking: {budget}",
+        "en": "Thinking budget: {budget}",
+    },
+    "prompt.inspect.meta.streaming": {
+        "it": "Streaming: {enabled}",
+        "en": "Streaming: {enabled}",
+    },
+    "prompt.inspect.meta.history_turns": {
+        "it": "Cronologia inclusa: {turns} turni (max {max_turns})",
+        "en": "History included: {turns} turns (max {max_turns})",
+    },
     "chat.rules_updated": {
         "it": "Memoria dinamica dell'add-on aggiornata e salvata!",
         "en": "Add-on dynamic memory updated and saved!",
@@ -1001,12 +1326,81 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Campo [{name}]:",
         "en": "Field [{name}]:",
     },
+    "chat.context.section.note": {
+        "it": "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:",
+        "en": "[FULL NOTE CONTEXT TO ANALYZE]:",
+    },
+    "chat.context.section.templates": {
+        "it": "[TEMPLATE DELLE CARTE]",
+        "en": "[CARD TEMPLATES]",
+    },
+    "chat.context.section.styling": {
+        "it": "[STILE DEL TIPO DI NOTA]",
+        "en": "[NOTE TYPE STYLING]",
+    },
+    "chat.context.section.request": {
+        "it": "[RICHIESTA DELLO STUDENTE]:",
+        "en": "[STUDENT REQUEST]:",
+    },
+    "chat.context.card_type_header": {
+        "it": "[TIPO CARTA {index} NOME] {name}",
+        "en": "[CARD TYPE {index} NAME] {name}",
+    },
+    "chat.context.front_template": {
+        "it": "[TEMPLATE FRONTE]:",
+        "en": "[FRONT TEMPLATE]:",
+    },
+    "chat.context.back_template": {
+        "it": "[TEMPLATE RETRO]:",
+        "en": "[BACK TEMPLATE]:",
+    },
     "instructions.chat_context_wrapper": {
         "it": (
-            "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:\n{context}\n\n[RICHIESTA DELLO STUDENTE]:\n{request}"
+            "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:\n{context}\n\n"
+            "[TEMPLATE DELLE CARTE]\n{templates}\n\n"
+            "[STILE DEL TIPO DI NOTA]\n{styling}\n\n"
+            "[RICHIESTA DELLO STUDENTE]:\n{request}"
         ),
         "en": (
-            "[FULL NOTE CONTEXT TO ANALYZE]:\n{context}\n\n[STUDENT REQUEST]:\n{request}"
+            "[FULL NOTE CONTEXT TO ANALYZE]:\n{context}\n\n"
+            "[CARD TEMPLATES]\n{templates}\n\n"
+            "[NOTE TYPE STYLING]\n{styling}\n\n"
+            "[STUDENT REQUEST]:\n{request}"
+        ),
+    },
+    "instructions.card_templates_format": {
+        "it": (
+            "[GUIDA AL FORMATO TEMPLATE E CSS ANKI]\n"
+            "Le sezioni [TEMPLATE DELLE CARTE] e/o [STILE DEL TIPO DI NOTA] sotto provengono "
+            "dal tipo di nota Anki importato:\n"
+            "• Tipi di carta: un tipo di nota può avere più tipi di carta (es. Base, Inverso). "
+            "Ognuno ha un template fronte e uno retro.\n"
+            "• Template fronte/retro: frammenti HTML mostrati domanda e risposta. "
+            "Usano segnaposto di campo Anki come {{Front}}, {{Back}} o qualsiasi nome campo "
+            "tra doppie parentesi graffe.\n"
+            "• Sintassi Anki: {{NomeCampo}}, {{c1::testo::hint}} per cloze, "
+            "{{#Campo}}...{{/Campo}} per sezioni condizionali, filtri come |hint:, ecc. "
+            "Sono sintassi template Anki — non testo letterale da riscrivere salvo richiesta.\n"
+            "• Stile del tipo di nota: un unico blocco CSS condiviso da tutte le carte del tipo. "
+            "I selettori nel CSS (es. .card, #front) si applicano al rendering delle carte.\n"
+            "Usa questo riferimento per capire come i campi della nota verranno renderizzati; "
+            "non trattare template HTML o CSS come la domanda dello studente salvo richiesta esplicita."
+        ),
+        "en": (
+            "[HOW TO READ ANKI CARD TEMPLATES AND STYLING]\n"
+            "The [CARD TEMPLATES] and/or [NOTE TYPE STYLING] sections below come from the imported Anki note type:\n"
+            "• Card types: a note type may have several card types (e.g. Basic, Reversed). "
+            "Each has a front template and a back template.\n"
+            "• Front/back templates: HTML snippets shown on the question and answer sides. "
+            "They use Anki field placeholders like {{Front}}, {{Back}}, or any custom field name "
+            "in double curly braces.\n"
+            "• Anki syntax: {{FieldName}}, {{c1::text::hint}} for clozes, "
+            "{{#Field}}...{{/Field}} for conditional blocks, filters such as |hint:, etc. "
+            "This is Anki template syntax—not literal text to rewrite unless asked.\n"
+            "• Note type styling: one shared CSS block for all cards of that type. "
+            "Selectors in the CSS (e.g. .card, #front) apply when cards render.\n"
+            "Use this reference to understand how imported note fields will render as cards; "
+            "do not treat template HTML or CSS as the student's question unless they ask about it."
         ),
     },
     "defaults.brain_import_message": {
@@ -1422,16 +1816,43 @@ def default_chat_context_wrapper(config: dict[str, Any] | None = None) -> str:
     return tr("instructions.chat_context_wrapper", config=config)
 
 
-def is_builtin_chat_context_wrapper(text: str | None) -> bool:
-    return _is_builtin_prompt(text, "instructions.chat_context_wrapper")
-
-
 def effective_chat_context_wrapper(config: dict[str, Any] | None = None) -> str:
     return _effective_prompt(config, "prompt_chat_context", "instructions.chat_context_wrapper")
 
 
 def normalize_chat_context_wrapper_for_save(text: str) -> str:
     return _normalize_prompt_for_save(text, "instructions.chat_context_wrapper")
+
+
+def default_card_templates_format_prompt(config: dict[str, Any] | None = None) -> str:
+    return tr("instructions.card_templates_format", config=config)
+
+
+def is_builtin_card_templates_format_prompt(text: str | None) -> bool:
+    return _is_builtin_prompt(text, "instructions.card_templates_format")
+
+
+def effective_card_templates_format_prompt(config: dict[str, Any] | None = None) -> str:
+    return _effective_prompt(
+        config,
+        "prompt_card_templates_format",
+        "instructions.card_templates_format",
+    )
+
+
+def normalize_card_templates_format_prompt_for_save(text: str) -> str:
+    return _normalize_prompt_for_save(text, "instructions.card_templates_format")
+
+
+def card_templates_format_addon(
+    config: dict[str, Any] | None,
+    *,
+    templates: str,
+    styling: str,
+) -> str:
+    if not templates.strip() and not styling.strip():
+        return ""
+    return effective_card_templates_format_prompt(config).strip()
 
 
 def chat_context_wrapper_missing_placeholders(text: str | None) -> bool:
@@ -1441,17 +1862,264 @@ def chat_context_wrapper_missing_placeholders(text: str | None) -> bool:
     return "{context}" not in stripped or "{request}" not in stripped
 
 
+def is_builtin_chat_context_wrapper(text: str | None) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    if _is_builtin_prompt(text, "instructions.chat_context_wrapper"):
+        return True
+    return stripped in _legacy_chat_context_wrappers()
+
+
+def _import_templates_enabled(config: dict[str, Any] | None) -> bool:
+    return bool((config or {}).get("brain_import_templates", False))
+
+
+def _import_css_enabled(config: dict[str, Any] | None) -> bool:
+    return bool((config or {}).get("brain_import_css", False))
+
+
+def build_chat_context_wrapper_for_import_settings(
+    config: dict[str, Any] | None = None,
+) -> str:
+    parts = [f"{tr('chat.context.section.note', config=config)}\n{{context}}"]
+    if _import_templates_enabled(config):
+        parts.append(f"{tr('chat.context.section.templates', config=config)}\n{{templates}}")
+    if _import_css_enabled(config):
+        parts.append(f"{tr('chat.context.section.styling', config=config)}\n{{styling}}")
+    parts.append(f"{tr('chat.context.section.request', config=config)}\n{{request}}")
+    return "\n\n".join(parts)
+
+
+def _wrapper_section_markers(config: dict[str, Any] | None) -> dict[str, set[str]]:
+    return {
+        "templates": {
+            tr("chat.context.section.templates", config=config).strip(),
+            "[CARD TEMPLATES]",
+            "[CARD TEMPLATES AND STYLING]",
+            "[TEMPLATE DELLE CARTE]",
+        },
+        "styling": {
+            tr("chat.context.section.styling", config=config).strip(),
+            "[NOTE TYPE STYLING]",
+            "[STILE DEL TIPO DI NOTA]",
+        },
+    }
+
+
+def filter_wrapper_for_import_settings(text: str, config: dict[str, Any] | None = None) -> str:
+    markers = _wrapper_section_markers(config)
+    kept: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not _import_templates_enabled(config):
+            if "{templates}" in line:
+                continue
+            if stripped in markers["templates"]:
+                continue
+        if not _import_css_enabled(config):
+            if "{styling}" in line:
+                continue
+            if stripped in markers["styling"]:
+                continue
+        kept.append(line)
+    collapsed: list[str] = []
+    blank_run = 0
+    for line in kept:
+        if not line.strip():
+            blank_run += 1
+            if blank_run <= 2:
+                collapsed.append(line)
+            continue
+        blank_run = 0
+        collapsed.append(line)
+    return "\n".join(collapsed).strip()
+
+
+def chat_context_wrapper_for_session(
+    config: dict[str, Any] | None = None,
+    *,
+    template_override: str | None = None,
+) -> str:
+    raw = (template_override or effective_chat_context_wrapper(config)).strip()
+    if is_builtin_chat_context_wrapper(raw):
+        return build_chat_context_wrapper_for_import_settings(config)
+    return filter_wrapper_for_import_settings(raw, config)
+
+
+def _optional_wrapper_placeholders(config: dict[str, Any] | None) -> list[str]:
+    optional: list[str] = []
+    if _import_templates_enabled(config):
+        optional.append("{templates}")
+    if _import_css_enabled(config):
+        optional.append("{styling}")
+    return optional
+
+
+def chat_edit_wrapper_label_text(config: dict[str, Any] | None = None) -> str:
+    optional = _optional_wrapper_placeholders(config)
+    if optional:
+        return tr(
+            "chat.edit_wrapper.wrapper_label.with_optional",
+            config=config,
+            optional=", ".join(optional),
+        )
+    return tr("chat.edit_wrapper.wrapper_label.basic", config=config)
+
+
+def chat_edit_wrapper_hint_text(config: dict[str, Any] | None = None) -> str:
+    optional = _optional_wrapper_placeholders(config)
+    if optional:
+        return tr(
+            "chat.edit_wrapper.wrapper_hint.with_optional",
+            config=config,
+            optional=", ".join(optional),
+        )
+    return tr("chat.edit_wrapper.wrapper_hint.basic", config=config)
+
+
+def chat_edit_wrapper_invalid_text(config: dict[str, Any] | None = None) -> str:
+    optional = _optional_wrapper_placeholders(config)
+    if optional:
+        return tr(
+            "chat.edit_wrapper.wrapper_invalid.with_optional",
+            config=config,
+            optional=", ".join(optional),
+        )
+    return tr("chat.edit_wrapper.wrapper_invalid.basic", config=config)
+
+
+def chat_edit_templates_hint_text(config: dict[str, Any] | None = None) -> str:
+    templates = _import_templates_enabled(config)
+    css = _import_css_enabled(config)
+    if templates and css:
+        return tr("chat.edit_templates.hint", config=config)
+    if css and not templates:
+        return tr("chat.edit_templates.hint.styling_only", config=config)
+    return tr("chat.edit_templates.hint.templates_only", config=config)
+
+
+def _legacy_chat_context_wrappers() -> frozenset[str]:
+    return frozenset(
+        message.strip()
+        for message in (
+            "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:\n{context}\n\n[RICHIESTA DELLO STUDENTE]:\n{request}",
+            "[FULL NOTE CONTEXT TO ANALYZE]:\n{context}\n\n[STUDENT REQUEST]:\n{request}",
+        )
+        if message.strip()
+    )
+
+
+def _safe_replace(template: str, key: str, value: str) -> str:
+    return template.replace(f"{{{key}}}", value)
+
+
+def _inject_before_marker(body: str, marker: str, insert: str) -> str:
+    if not insert.strip():
+        return body
+    if not marker:
+        return f"{body.rstrip()}\n\n{insert}"
+    index = body.find(marker)
+    if index < 0:
+        return f"{body.rstrip()}\n\n{insert}"
+    return f"{body[:index].rstrip()}\n\n{insert}\n\n{body[index:]}"
+
+
+def _inject_after_first(body: str, anchor: str, insert: str) -> str:
+    if not insert.strip() or not anchor:
+        if insert.strip():
+            return f"{body.rstrip()}\n\n{insert}"
+        return body
+    index = body.find(anchor)
+    if index < 0:
+        return f"{body.rstrip()}\n\n{insert}"
+    insert_at = index + len(anchor)
+    return f"{body[:insert_at].rstrip()}\n\n{insert}{body[insert_at:]}"
+
+
+def _assemble_builtin_chat_context_message(
+    config: dict[str, Any] | None,
+    *,
+    context: str,
+    request: str,
+    templates: str,
+    styling: str,
+) -> str:
+    parts = [f"{tr('chat.context.section.note', config=config)}\n{context}"]
+    format_addon = card_templates_format_addon(
+        config,
+        templates=templates,
+        styling=styling,
+    )
+    if format_addon:
+        parts.append(format_addon)
+    if templates.strip():
+        parts.append(f"{tr('chat.context.section.templates', config=config)}\n{templates}")
+    if styling.strip():
+        parts.append(f"{tr('chat.context.section.styling', config=config)}\n{styling}")
+    parts.append(f"{tr('chat.context.section.request', config=config)}\n{request}")
+    return "\n\n".join(parts)
+
+
 def format_chat_context_message(
     config: dict[str, Any] | None,
     *,
     context: str,
     request: str,
+    templates: str = "",
+    styling: str = "",
     template: str | None = None,
 ) -> str:
     resolved = (template or "").strip() or effective_chat_context_wrapper(config)
     if "{context}" not in resolved or "{request}" not in resolved:
-        resolved = default_chat_context_wrapper(config)
-    return resolved.format(context=context, request=request)
+        resolved = build_chat_context_wrapper_for_import_settings(config)
+
+    templates = templates or ""
+    styling = styling or ""
+
+    if is_builtin_chat_context_wrapper(resolved):
+        return _assemble_builtin_chat_context_message(
+            config,
+            context=context,
+            request=request,
+            templates=templates,
+            styling=styling,
+        )
+
+    body = resolved
+    body = _safe_replace(body, "context", context)
+    body = _safe_replace(body, "request", request)
+
+    format_addon = card_templates_format_addon(
+        config,
+        templates=templates,
+        styling=styling,
+    )
+    if format_addon:
+        if "{templates}" in body:
+            body = _inject_before_marker(body, "{templates}", format_addon)
+        elif "{styling}" in body and not templates.strip():
+            body = _inject_before_marker(body, "{styling}", format_addon)
+        elif templates.strip() or styling.strip():
+            body = _inject_after_first(body, context, format_addon)
+
+    if "{templates}" in resolved:
+        body = _safe_replace(body, "templates", templates)
+    elif templates.strip():
+        anchor = format_addon if format_addon and format_addon in body else context
+        section = f"{tr('chat.context.section.templates', config=config)}\n{templates}"
+        body = _inject_after_first(body, anchor, section)
+
+    if "{styling}" in resolved:
+        body = _safe_replace(body, "styling", styling)
+    elif styling.strip():
+        anchor = templates if templates.strip() and templates in body else (
+            format_addon if format_addon and format_addon in body else context
+        )
+        section = f"{tr('chat.context.section.styling', config=config)}\n{styling}"
+        body = _inject_after_first(body, anchor, section)
+
+    return body
 
 
 def _builtin_system_instructions() -> frozenset[str]:
