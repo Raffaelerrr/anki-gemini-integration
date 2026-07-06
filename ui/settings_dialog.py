@@ -11,11 +11,13 @@ from aqt.qt import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPoint,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
     Qt,
+    QTimer,
     QVBoxLayout,
     QWidget,
 )
@@ -67,10 +69,13 @@ from ..i18n import (
     normalize_system_instruction_fields_for_save,
     effective_system_instruction,
     tr,
+    chat_context_wrapper_missing_placeholders,
+    wrapper_import_warning_text,
+    wrapper_missing_import_placeholders,
 )
 from .chat_dialog import refresh_chat_from_settings, refresh_chat_language
 from .prompt_inspection_dialog import PromptInspectionWindow
-from .settings_help_dialog import open_settings_help_dialog
+from .settings_help_dialog import _make_info_button, open_settings_help_dialog
 from .model_selector import (
     create_model_selector,
     model_selector_value,
@@ -87,10 +92,12 @@ from .settings_compact_controls import (
 from .widgets import ScrollAwareTextEdit
 from .theme import (
     apply_native_page_scroll_theme,
+    info_button_stylesheet,
     muted_hint_html,
     panel_content_html,
     panel_widget_stylesheet,
     refresh_native_text_edits_in,
+    settings_stale_banner_stylesheet,
     status_color_stylesheet,
 )
 
@@ -104,6 +111,8 @@ QPushButton {
     min-height: 28px;
 }
 """
+
+_WRAPPER_IMPORT_WARNING_BANNER_WIDTH = 520
 
 
 def _setup_footer_button(button: QPushButton, *, tooltip: str) -> None:
@@ -133,6 +142,7 @@ class SettingsDialog(QDialog):
         self._model_refresh_busy = False
         self._settings_help_dialog = None
         self._optimize_prompt_inspection_window: PromptInspectionWindow | None = None
+        self._wrapper_import_warnings_dismissed: set[str] = set()
         self._force_shutdown = False
         self.silentlyClose = True
         self.setWindowModality(Qt.WindowModality.NonModal)
@@ -496,6 +506,9 @@ class SettingsDialog(QDialog):
         self.brain_import_templates_checkbox.setChecked(
             bool(self.config.get("brain_import_templates", False))
         )
+        self.brain_import_templates_checkbox.toggled.connect(
+            self._update_wrapper_import_warning_banner
+        )
         layout.addWidget(self.brain_import_templates_checkbox)
 
         self.brain_import_css_checkbox = QCheckBox(
@@ -503,6 +516,7 @@ class SettingsDialog(QDialog):
             form_host,
         )
         self.brain_import_css_checkbox.setChecked(bool(self.config.get("brain_import_css", False)))
+        self.brain_import_css_checkbox.toggled.connect(self._update_wrapper_import_warning_banner)
         layout.addWidget(self.brain_import_css_checkbox)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.system_instruction', config=config)}</b>"))
@@ -553,6 +567,11 @@ class SettingsDialog(QDialog):
         layout.addWidget(
             QLabel(f"<br><b>{tr('settings.dynamic_instructions', config=config)}</b>")
         )
+        self.dynamic_instructions_hint = QLabel(
+            muted_hint_html(tr("settings.dynamic_instructions.hint", config=config)),
+            form_host,
+        )
+        layout.addWidget(self.dynamic_instructions_hint)
         dynamic_shell, self.dynamic_input = create_settings_text_edit(form_host)
         self.dynamic_input.setMinimumHeight(100)
         self.dynamic_input.setPlaceholderText(tr("settings.dynamic_placeholder", config=config))
@@ -647,6 +666,7 @@ class SettingsDialog(QDialog):
         config = self.config
         page = QWidget(self)
         scroll = QScrollArea(page)
+        self._advanced_page_scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         apply_native_page_scroll_theme(scroll)
@@ -691,13 +711,77 @@ class SettingsDialog(QDialog):
         self.prompt_dynamic_rules_prefix_input.setPlainText(effective_dynamic_rules_prefix(config))
         layout.addWidget(dynamic_prefix_shell)
 
-        layout.addWidget(QLabel(f"<br><b>{tr('settings.prompt_chat_context', config=config)}</b>"))
+        wrapper_title_row = QWidget(host)
+        wrapper_title_row.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        wrapper_header = QHBoxLayout(wrapper_title_row)
+        wrapper_header.setContentsMargins(0, 0, 0, 0)
+        wrapper_header.setSpacing(4)
+        wrapper_header.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._wrapper_context_label = QLabel(
+            f"<b>{tr('settings.prompt_chat_context', config=config)}</b>",
+            wrapper_title_row,
+        )
+        self._wrapper_context_label.setSizePolicy(
+            QSizePolicy.Policy.Minimum,
+            QSizePolicy.Policy.Preferred,
+        )
+        wrapper_header.addWidget(self._wrapper_context_label)
+        self.btn_wrapper_context_help = _make_info_button(wrapper_title_row, config)
+        self.btn_wrapper_context_help.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.btn_wrapper_context_help.clicked.connect(self._open_wrapper_context_help)
+        wrapper_header.addWidget(self.btn_wrapper_context_help)
+        wrapper_header.addStretch(1)
+        layout.addWidget(
+            wrapper_title_row,
+            0,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+        )
         layout.addWidget(
             QLabel(muted_hint_html(tr("settings.prompt_chat_context.hint", config=config)), host)
         )
+
+        self._wrapper_import_warning_banner = QWidget(host)
+        self._wrapper_import_warning_banner.setObjectName("settingsStaleBanner")
+        self._wrapper_import_warning_banner.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        warning_layout = QHBoxLayout(self._wrapper_import_warning_banner)
+        warning_layout.setContentsMargins(0, 0, 0, 0)
+        warning_layout.setSpacing(0)
+        self._wrapper_import_warning_text = QLabel(self._wrapper_import_warning_banner)
+        self._wrapper_import_warning_text.setObjectName("settingsStaleBannerText")
+        self._wrapper_import_warning_text.setWordWrap(True)
+        self._wrapper_import_warning_text.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Minimum,
+        )
+        warning_layout.addWidget(self._wrapper_import_warning_text, 1)
+        self._wrapper_import_warning_close = QPushButton(self._wrapper_import_warning_banner)
+        self._wrapper_import_warning_close.setObjectName("settingsStaleBannerClose")
+        self._wrapper_import_warning_close.setFixedSize(28, 28)
+        self._wrapper_import_warning_close.setText(tr("chat.settings_stale.dismiss", config=config))
+        self._wrapper_import_warning_close.clicked.connect(self._dismiss_wrapper_import_warning_banner)
+        warning_layout.addWidget(
+            self._wrapper_import_warning_close,
+            0,
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+        )
+        self._wrapper_import_warning_banner.setVisible(False)
+        self._wrapper_import_warning_banner.setStyleSheet(settings_stale_banner_stylesheet())
+        layout.addWidget(
+            self._wrapper_import_warning_banner,
+            0,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+        )
+
         context_prompt_shell, self.prompt_chat_context_input = create_settings_text_edit(host)
         self.prompt_chat_context_input.setMinimumHeight(100)
         self.prompt_chat_context_input.setPlainText(effective_chat_context_wrapper(config))
+        self.prompt_chat_context_input.textChanged.connect(self._update_wrapper_import_warning_banner)
         layout.addWidget(context_prompt_shell)
 
         layout.addWidget(
@@ -733,6 +817,87 @@ class SettingsDialog(QDialog):
         help_config["language"] = self.language_combo.currentData() or DEFAULT_LANGUAGE
         self._settings_help_dialog = open_settings_help_dialog(self, help_config)
         self._settings_help_dialog.finished.connect(self._on_settings_help_closed)
+
+    def _open_wrapper_context_help(self) -> None:
+        if self._settings_help_dialog is not None and self._settings_help_dialog.isVisible():
+            self._settings_help_dialog.show_detail("prompt_chat_context")
+            self._settings_help_dialog.raise_()
+            self._settings_help_dialog.activateWindow()
+            return
+
+        help_config = self._wrapper_warning_config()
+        self._settings_help_dialog = open_settings_help_dialog(
+            self,
+            help_config,
+            detail_key="prompt_chat_context",
+        )
+        self._settings_help_dialog.finished.connect(self._on_settings_help_closed)
+
+    def _wrapper_warning_config(self) -> dict[str, Any]:
+        config = dict(self.config)
+        config.update(self._ui_config())
+        config["brain_import_templates"] = self.brain_import_templates_checkbox.isChecked()
+        config["brain_import_css"] = self.brain_import_css_checkbox.isChecked()
+        return config
+
+    def _active_wrapper_import_warnings(self) -> list[str]:
+        config = self._wrapper_warning_config()
+        sections: list[str] = []
+        text = self.prompt_chat_context_input.toPlainText()
+        if chat_context_wrapper_missing_placeholders(text):
+            sections.append("required")
+        missing = wrapper_missing_import_placeholders(
+            text,
+            config,
+        )
+        sections.extend(missing)
+        return [section for section in sections if section not in self._wrapper_import_warnings_dismissed]
+
+    def _sync_wrapper_import_warning_banner_size(self) -> None:
+        banner = self._wrapper_import_warning_banner
+        text_label = self._wrapper_import_warning_text
+        close_btn = self._wrapper_import_warning_close
+        banner_width = _WRAPPER_IMPORT_WARNING_BANNER_WIDTH
+        content_width = banner_width - close_btn.width()
+        text_label.setFixedWidth(max(content_width, 1))
+        text_height = text_label.heightForWidth(content_width)
+        banner_height = max(close_btn.height() + 12, text_height + 16)
+        banner.setFixedSize(banner_width, banner_height)
+
+    def _scroll_wrapper_import_warning_to_center(self) -> None:
+        scroll = getattr(self, "_advanced_page_scroll", None)
+        banner = getattr(self, "_wrapper_import_warning_banner", None)
+        if scroll is None or banner is None or not banner.isVisible():
+            return
+        host = scroll.widget()
+        if host is None:
+            return
+        bar = scroll.verticalScrollBar()
+        banner_top = banner.mapTo(host, QPoint(0, 0)).y()
+        banner_center = banner_top + banner.height() // 2
+        target = banner_center - scroll.viewport().height() // 2
+        bar.setValue(max(0, min(target, bar.maximum())))
+
+    def _update_wrapper_import_warning_banner(self) -> None:
+        if not hasattr(self, "_wrapper_import_warning_banner"):
+            return
+        active = self._active_wrapper_import_warnings()
+        if not active:
+            self._wrapper_import_warning_banner.setVisible(False)
+            return
+        was_visible = self._wrapper_import_warning_banner.isVisible()
+        config = self._wrapper_warning_config()
+        self._wrapper_import_warning_text.setText(
+            wrapper_import_warning_text(config, sections=active, scope="settings")
+        )
+        self._sync_wrapper_import_warning_banner_size()
+        self._wrapper_import_warning_banner.setVisible(True)
+        if not was_visible:
+            QTimer.singleShot(0, self._scroll_wrapper_import_warning_to_center)
+
+    def _dismiss_wrapper_import_warning_banner(self) -> None:
+        self._wrapper_import_warnings_dismissed.update(self._active_wrapper_import_warnings())
+        self._update_wrapper_import_warning_banner()
 
     def _on_settings_help_closed(self) -> None:
         self._settings_help_dialog = None
@@ -813,6 +978,9 @@ class SettingsDialog(QDialog):
             tr("settings.brain_import_templates", config=config)
         )
         self.brain_import_css_checkbox.setText(tr("settings.brain_import_css", config=config))
+        self.dynamic_instructions_hint.setText(
+            muted_hint_html(tr("settings.dynamic_instructions.hint", config=config))
+        )
         self.shortcuts_panel.setText(
             panel_content_html(tr("settings.shortcuts.body", config=config))
         )
@@ -825,6 +993,11 @@ class SettingsDialog(QDialog):
         )
         refresh_native_text_edits_in(self)
         self._update_api_key_status()
+        if hasattr(self, "_wrapper_import_warning_banner"):
+            self._wrapper_import_warning_banner.setStyleSheet(settings_stale_banner_stylesheet())
+            self._wrapper_import_warning_close.setText(tr("chat.settings_stale.dismiss", config=config))
+            self.btn_wrapper_context_help.setStyleSheet(info_button_stylesheet())
+            self._update_wrapper_import_warning_banner()
         if self._settings_help_dialog is not None:
             self._settings_help_dialog.apply_theme()
 
@@ -1106,6 +1279,7 @@ class SettingsDialog(QDialog):
 
     def _enter_advanced_mode(self) -> None:
         self.stack.setCurrentIndex(3)
+        self._update_wrapper_import_warning_banner()
         self._set_subpage_mode("advanced")
 
     def _leave_advanced_mode(self) -> None:

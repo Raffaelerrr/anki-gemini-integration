@@ -178,14 +178,24 @@ class SettingsHelpDialog(QDialog):
         self.stack.setCurrentIndex(1)
         self._set_help_page("detail")
 
+    def show_detail(self, setting_key: str) -> None:
+        self._show_detail(setting_key)
+
     def apply_theme(self) -> None:
         self.intro_label.setText(muted_hint_html(tr("settings.help.intro", config=self.config)))
         for button in self._info_buttons:
             button.setStyleSheet(info_button_stylesheet())
 
 
-def open_settings_help_dialog(parent, config: dict[str, Any]) -> SettingsHelpDialog:
+def open_settings_help_dialog(
+    parent,
+    config: dict[str, Any],
+    *,
+    detail_key: str | None = None,
+) -> SettingsHelpDialog:
     dialog = SettingsHelpDialog(parent, config)
+    if detail_key:
+        dialog.show_detail(detail_key)
     dialog.show()
     dialog.raise_()
     dialog.activateWindow()

@@ -326,6 +326,7 @@ class TestI18n(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.i18n = _load_addon_module("i18n")
+        cls.wrapper = _load_addon_module("chat_context_wrapper")
 
     def test_all_keys_have_both_languages(self):
         missing = []
@@ -356,21 +357,18 @@ class TestI18n(unittest.TestCase):
             self.i18n.tr("chat.edit_context", config=en),
             self.i18n.tr("chat.edit_wrapper", config=en),
         )
-        self.assertIn("{context}", self.i18n.tr("chat.edit_wrapper.wrapper_label", config=en))
-        self.assertIn("{request}", self.i18n.tr("chat.edit_wrapper.wrapper_hint", config=en))
-        self.assertIn("{templates}", self.i18n.tr("chat.edit_wrapper.wrapper_label", config=en))
-        self.assertIn("{styling}", self.i18n.tr("chat.edit_wrapper.wrapper_invalid", config=en))
+        self.assertIn("{{context}}", self.i18n.tr("chat.edit_wrapper.wrapper_label", config=en))
+        self.assertIn("{{request}}", self.i18n.tr("chat.edit_wrapper.wrapper_hint", config=en))
+        self.assertIn("expanded", self.i18n.tr("chat.edit_wrapper.wrapper_label", config=en).lower())
+        invalid_msg = self.i18n.tr("chat.edit_wrapper.wrapper_invalid", config=en)
+        self.assertIn("{{context}}", invalid_msg)
+        self.assertIn("{{request}}", invalid_msg)
         basic_label = self.i18n.chat_edit_wrapper_label_text({"language": "en"})
-        self.assertIn("{context}", basic_label)
-        self.assertNotIn("{templates}", basic_label)
-        full_config = {
-            "language": "en",
-            "brain_import_templates": True,
-            "brain_import_css": True,
-        }
-        full_label = self.i18n.chat_edit_wrapper_label_text(full_config)
-        self.assertIn("{templates}", full_label)
-        self.assertIn("{styling}", full_label)
+        self.assertIn("{{context}}", basic_label)
+        full_label = self.i18n.chat_edit_wrapper_label_text(
+            {"language": "en", "brain_import_templates": True, "brain_import_css": True}
+        )
+        self.assertEqual(basic_label, full_label)
         self.assertEqual(self.i18n.tr("chat.preview.refresh", config=en), "Refresh preview")
         self.assertEqual(
             self.i18n.tr("chat.preview.open_window.tooltip", config=en),
@@ -435,25 +433,44 @@ class TestI18n(unittest.TestCase):
         self.assertEqual(self.i18n.effective_chat_system_addon(custom_chat), "Custom chat addon")
         custom_prefix = {"language": "en", "prompt_dynamic_rules_prefix": "Custom dynamic header:\n"}
         self.assertEqual(self.i18n.effective_dynamic_rules_prefix(custom_prefix), "Custom dynamic header:\n")
-        custom_wrapper = {"language": "en", "prompt_chat_context": "Note:\n{context}\nAsk: {request}"}
-        self.assertEqual(
-            self.i18n.format_chat_context_message(
-                custom_wrapper,
-                context="Field [Front]:\nHi",
-                request="Split this?",
-            ),
-            "Note:\nField [Front]:\nHi\nAsk: Split this?",
+        custom_wrapper = {
+            "language": "en",
+            "prompt_chat_context": "Note:\n{{context}}\nAsk: {{request}}",
+        }
+        result = self.i18n.format_chat_context_message(
+            custom_wrapper,
+            context="Field [Front]:\nHi",
+            request="Split this?",
         )
+        self.assertEqual(result, "Note:\nField [Front]:\nHi\nAsk: Split this?")
 
     def test_format_chat_context_message_accepts_explicit_template(self):
         config = {"language": "en", "prompt_chat_context": "ignored"}
+        template = (
+            "Note:\n{{context}}\n\n"
+            "{{#templates}}\nTemplates:\n{{templates}}\n{{/templates}}\n\n"
+            "{{#styling}}\nStyling:\n{{styling}}\n{{/styling}}\n\n"
+            "Ask:\n{{request}}"
+        )
         result = self.i18n.format_chat_context_message(
             config,
             context="Field [Front]:\nHi",
             request="Split this?",
-            template="Note:\n{context}\nAsk: {request}",
+            template=template,
         )
-        self.assertEqual(result, "Note:\nField [Front]:\nHi\nAsk: Split this?")
+        self.assertEqual(
+            result,
+            "Note:\nField [Front]:\nHi\n\nAsk:\nSplit this?",
+        )
+        result_with_templates = self.i18n.format_chat_context_message(
+            {**config, "brain_import_templates": True},
+            context="Field [Front]:\nHi",
+            request="Split this?",
+            templates="tmpl-body",
+            template=template,
+        )
+        self.assertIn("Templates:\n", result_with_templates)
+        self.assertIn("tmpl-body", result_with_templates)
 
     def test_format_chat_context_message_falls_back_without_placeholders(self):
         config = {"language": "en", "prompt_chat_context": "Missing placeholders"}
@@ -467,8 +484,110 @@ class TestI18n(unittest.TestCase):
         self.assertIn("[FULL NOTE CONTEXT TO ANALYZE]", result)
         self.assertNotIn("[CARD TEMPLATES]", result)
 
+    def test_format_chat_context_message_invalid_session_falls_back_to_settings_wrapper(self):
+        config = {
+            "language": "en",
+            "prompt_chat_context": "Settings:\n{{context}}\nQ: {{request}}",
+        }
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="ctx",
+            request="req",
+            template="Broken session wrapper",
+        )
+        self.assertEqual(result, "Settings:\nctx\nQ: req")
+
+    def test_format_chat_context_message_omits_templates_without_placeholder(self):
+        config = {"language": "en", "brain_import_templates": True}
+        template = (
+            "Note:\n{{context}}\n"
+            "{{#templates}}\n[TEMPLATES]\n{{templates}}\n{{/templates}}\n"
+            "Q: {{request}}"
+        )
+        template_without_marker = template.replace("{{templates}}\n", "")
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="ctx",
+            request="req",
+            templates="tmpl-body",
+            template=template_without_marker,
+        )
+        self.assertEqual(result, "Note:\nctx\nQ: req")
+        self.assertNotIn("tmpl-body", result)
+        self.assertNotIn("[TEMPLATES]", result)
+
+    def test_format_chat_context_message_omits_styling_without_placeholder(self):
+        config = {"language": "en", "brain_import_css": True}
+        template = (
+            "Note:\n{{context}}\n"
+            "{{#styling}}\n[STYLE]\n{{styling}}\n{{/styling}}\n"
+            "Q: {{request}}"
+        )
+        template_without_marker = template.replace("{{styling}}\n", "")
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="ctx",
+            request="req",
+            styling=".card { color: red; }",
+            template=template_without_marker,
+        )
+        self.assertEqual(result, "Note:\nctx\nQ: req")
+        self.assertNotIn(".card", result)
+        self.assertNotIn("[STYLE]", result)
+
+    def test_format_chat_context_message_keeps_format_guide_with_styling_placeholder_only(self):
+        config = {"language": "en", "brain_import_css": True}
+        template = (
+            "Note:\n{{context}}\n"
+            "{{#styling}}\n[NOTE TYPE STYLING]\n{{styling}}\n{{/styling}}\n"
+            "Q: {{request}}"
+        )
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="ctx",
+            request="req",
+            styling=".card { color: red; }",
+            template=template,
+        )
+        self.assertIn("[HOW TO READ ANKI CARD TEMPLATES AND STYLING]", result)
+        self.assertIn(".card { color: red; }", result)
+        self.assertLess(result.index("[HOW TO READ ANKI"), result.index(".card"))
+
+    def test_format_chat_context_message_keeps_format_guide_with_templates_placeholder_only(self):
+        config = {"language": "en", "brain_import_templates": True}
+        template = (
+            "Note:\n{{context}}\n"
+            "{{#templates}}\n[CARD TEMPLATES]\n{{templates}}\n{{/templates}}\n"
+            "Q: {{request}}"
+        )
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="ctx",
+            request="req",
+            templates="[FRONT TEMPLATE]:\n{{Front}}",
+            template=template,
+        )
+        self.assertIn("[HOW TO READ ANKI CARD TEMPLATES AND STYLING]", result)
+        self.assertIn("{{Front}}", result)
+        self.assertLess(result.index("[HOW TO READ ANKI"), result.index("{{Front}}"))
+
+    def test_format_chat_context_message_omits_format_guide_without_import_placeholders(self):
+        config = {"language": "en", "brain_import_templates": True, "brain_import_css": True}
+        template = "Note:\n{{context}}\nQ: {{request}}"
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="ctx",
+            request="req",
+            templates="[FRONT TEMPLATE]:\n{{Front}}",
+            styling=".card { color: red; }",
+            template=template,
+        )
+        self.assertNotIn("[HOW TO READ ANKI CARD TEMPLATES AND STYLING]", result)
+        self.assertNotIn("{{Front}}", result)
+        self.assertNotIn(".card", result)
+
     def test_format_chat_context_message_includes_templates_and_styling(self):
-        config = {"language": "en"}
+        config = {"language": "en", "brain_import_templates": True, "brain_import_css": True}
         result = self.i18n.format_chat_context_message(
             config,
             context="Field [Front]:\nHi",
@@ -481,20 +600,19 @@ class TestI18n(unittest.TestCase):
         self.assertIn("{{Front}}", result)
         self.assertIn(".card { color: red; }", result)
 
-    def test_format_chat_context_message_injects_templates_after_context(self):
-        config = {"language": "en"}
+    def test_format_chat_context_message_uses_minimal_custom_wrapper(self):
+        config = {"language": "en", "brain_import_templates": True}
         result = self.i18n.format_chat_context_message(
             config,
             context="ctx",
             request="req",
             templates="tmpl-block",
-            template="Note:\n{context}\nAsk: {request}",
+            template="Note:\n{{context}}\nAsk: {{request}}",
         )
-        self.assertLess(result.index("ctx"), result.index("tmpl-block"))
-        self.assertLess(result.index("tmpl-block"), result.index("req"))
+        self.assertEqual(result, "Note:\nctx\nAsk: req")
 
     def test_format_chat_context_message_includes_templates_format_guide(self):
-        config = {"language": "en"}
+        config = {"language": "en", "brain_import_templates": True}
         result = self.i18n.format_chat_context_message(
             config,
             context="ctx",
@@ -579,27 +697,171 @@ class TestI18n(unittest.TestCase):
         fn = self.i18n.chat_context_wrapper_missing_placeholders
         self.assertFalse(fn(""))
         self.assertFalse(fn("   "))
-        self.assertFalse(fn("Note:\n{context}\nAsk: {request}"))
-        self.assertTrue(fn("Note:\n{context}"))
-        self.assertTrue(fn("Ask: {request}"))
-        self.assertTrue(fn("{contex} and {request}"))
-        self.assertTrue(fn("{context} and {reques}"))
+        self.assertFalse(fn("Note:\n{{context}}\nAsk: {{request}}"))
+        self.assertTrue(fn("Note:\n{{context}}"))
+        self.assertTrue(fn("Ask: {{request}}"))
+        self.assertTrue(fn("Note:\n{context}\nAsk: {request}"))
+
+    def test_chat_context_wrapper_unbalanced_conditionals(self):
+        fn = self.i18n.chat_context_wrapper_has_unbalanced_conditionals
+        self.assertFalse(fn("Note:\n{{context}}\n{{request}}"))
+        self.assertTrue(fn("{{#templates}}\nHi\n{{context}}\n{{request}}"))
+        self.assertFalse(
+            fn(
+                "Note:\n{{context}}\n{{#templates}}\n{{templates}}\n{{/templates}}\n{{request}}"
+            )
+        )
+
+    def test_repair_wrapper_brace_escaping(self):
+        buggy = (
+            "[FULL NOTE CONTEXT TO ANALYZE]:\n{{{{context}}}}\n\n"
+            "{{{{#templates}}}}\n[CARD TEMPLATES]\n{{{{templates}}}}\n{{{{/templates}}}}\n\n"
+            "[STUDENT REQUEST]:\n{{{{request}}}}"
+        )
+        fixed = self.wrapper.repair_wrapper_brace_escaping(buggy)
+        self.assertIn("{{context}}", fixed)
+        self.assertNotIn("{{{{", fixed)
+        expanded = self.wrapper.expand_chat_context_wrapper(
+            {"language": "en", "brain_import_templates": True, "brain_import_css": False},
+            source=buggy,
+        )
+        self.assertNotIn("{{}}", expanded)
+        self.assertIn("{{templates}}", expanded)
+        self.assertIn("[CARD TEMPLATES]", expanded)
+
+    def test_trim_newline_after_standalone_conditional_tags(self):
+        template = (
+            "Note:\n{{context}}\n\n"
+            "{{#templates}}\n"
+            "[CARD TEMPLATES]\n"
+            "{{templates}}\n"
+            "{{/templates}}\n\n"
+            "{{request}}"
+        )
+        expanded = self.wrapper.process_wrapper_conditionals(
+            template,
+            {"language": "en", "brain_import_templates": True},
+            preview=True,
+        )
+        self.assertNotIn("\n\n\n", expanded)
+        self.assertIn("{{context}}\n\n[CARD TEMPLATES]", expanded)
+        # With tag-only lines removed (not extra whitespace), one blank line
+        # after the kept block remains.
+        self.assertIn("{{templates}}\n\n{{request}}", expanded)
+
+        builtin = self.i18n.build_chat_context_wrapper_for_import_settings(
+            {
+                "language": "en",
+                "brain_import_templates": True,
+                "brain_import_css": False,
+            }
+        )
+        self.assertNotIn("\n\n\n", builtin)
+        self.assertIn("{{context}}\n\n[CARD TEMPLATES]", builtin)
+        self.assertIn("{{templates}}\n\n[STUDENT REQUEST]", builtin)
+
+        raw = self.i18n.tr("instructions.chat_context_wrapper", config={"language": "en"})
+        self.assertIn("{{#templates}}\n", raw)
+
+    def test_conditional_blocks_preserve_blank_lines_between_active_blocks(self):
+        template = (
+            "[FULL NOTE CONTEXT TO ANALYZE]:\n"
+            "{{context}}\n\n"
+            "{{#templates}}\n"
+            "[CARD TEMPLATES]\n"
+            "{{templates}}\n"
+            "{{/templates}}\n\n"
+            "{{#styling}}\n"
+            "[NOTE TYPE STYLING]\n"
+            "{{styling}}\n"
+            "{{/styling}}\n\n"
+            "[STUDENT REQUEST]:\n"
+            "{{request}}"
+        )
+        expanded = self.wrapper.process_wrapper_conditionals(
+            template,
+            {"language": "en", "brain_import_templates": True, "brain_import_css": True},
+            templates_content="tmpl-body",
+            styling_content="styling-body",
+            preview=False,
+        )
+        # Tags are removed, but the intentional blank lines between blocks remain.
+        self.assertIn("[CARD TEMPLATES]\n{{templates}}\n\n[NOTE TYPE STYLING]", expanded)
+        self.assertIn("[NOTE TYPE STYLING]\n{{styling}}\n\n[STUDENT REQUEST]", expanded)
+
+    def test_removed_conditional_block_at_end_does_not_leave_trailing_gap(self):
+        template = (
+            "Note:\n{{context}}\n\n"
+            "{{#templates}}\n"
+            "Templates:\n{{templates}}\n"
+            "{{/templates}}"
+        )
+        removed = self.wrapper.process_wrapper_conditionals(
+            template,
+            {"language": "en", "brain_import_templates": True},
+            templates_content="",
+            preview=False,
+        )
+        self.assertEqual(removed, "Note:\n{{context}}")
+
+    def test_process_wrapper_conditionals(self):
+        template = (
+            "Note:\n{{context}}\n"
+            "{{#templates}}\nFollowing are the templates:\n{{templates}}\n{{/templates}}\n"
+            "{{request}}"
+        )
+        config = {"language": "en", "brain_import_templates": False}
+        preview_off = self.wrapper.process_wrapper_conditionals(template, config, preview=True)
+        self.assertNotIn("Following are the templates:", preview_off)
+        preview_on = self.wrapper.process_wrapper_conditionals(
+            template,
+            {"language": "en", "brain_import_templates": True},
+            preview=True,
+        )
+        self.assertIn("Following are the templates:", preview_on)
+        self.assertIn("{{templates}}", preview_on)
+        send_empty = self.wrapper.process_wrapper_conditionals(
+            template,
+            {"language": "en", "brain_import_templates": True},
+            templates_content="",
+            preview=False,
+        )
+        self.assertNotIn("Following are the templates:", send_empty)
+        send_with_content = self.wrapper.process_wrapper_conditionals(
+            template,
+            {"language": "en", "brain_import_templates": True},
+            templates_content="tmpl",
+            preview=False,
+        )
+        self.assertIn("Following are the templates:", send_with_content)
+
+    def test_wrapper_missing_import_placeholders(self):
+        config = {"language": "en", "brain_import_templates": True, "brain_import_css": True}
+        missing = self.i18n.wrapper_missing_import_placeholders(
+            "Note:\n{{context}}\n{{request}}",
+            config,
+        )
+        self.assertEqual(missing, ["templates", "styling"])
+        ok = self.i18n.wrapper_missing_import_placeholders(
+            "Note:\n{{context}}\n{{templates}}\n{{styling}}\n{{request}}",
+            config,
+        )
+        self.assertEqual(ok, [])
 
     def test_build_chat_context_wrapper_for_import_settings(self):
         minimal = {"language": "en"}
         wrapper = self.i18n.build_chat_context_wrapper_for_import_settings(minimal)
-        self.assertIn("{context}", wrapper)
-        self.assertIn("{request}", wrapper)
-        self.assertNotIn("{templates}", wrapper)
-        self.assertNotIn("{styling}", wrapper)
+        self.assertIn("{{context}}", wrapper)
+        self.assertIn("{{request}}", wrapper)
+        self.assertNotIn("{{#templates}}", wrapper)
 
         with_templates = {
             "language": "en",
             "brain_import_templates": True,
         }
         wrapper = self.i18n.build_chat_context_wrapper_for_import_settings(with_templates)
-        self.assertIn("{templates}", wrapper)
-        self.assertNotIn("{styling}", wrapper)
+        self.assertIn("{{templates}}", wrapper)
+        self.assertNotIn("{{#styling}}", wrapper)
 
         full = {
             "language": "en",
@@ -607,8 +869,8 @@ class TestI18n(unittest.TestCase):
             "brain_import_css": True,
         }
         wrapper = self.i18n.build_chat_context_wrapper_for_import_settings(full)
-        self.assertIn("{templates}", wrapper)
-        self.assertIn("{styling}", wrapper)
+        self.assertIn("{{templates}}", wrapper)
+        self.assertIn("{{styling}}", wrapper)
 
     def test_filter_wrapper_for_import_settings(self):
         full = self.i18n.tr("instructions.chat_context_wrapper", config={"language": "en"})
@@ -616,15 +878,16 @@ class TestI18n(unittest.TestCase):
             full,
             {"language": "en"},
         )
-        self.assertIn("{context}", minimal)
-        self.assertNotIn("{templates}", minimal)
-        self.assertNotIn("{styling}", minimal)
+        self.assertIn("{{context}}", minimal)
+        self.assertNotIn("{{#templates}}", minimal)
+        self.assertNotIn("{{#styling}}", minimal)
 
     def test_chat_context_wrapper_for_session_uses_import_settings(self):
         stored = self.i18n.tr("instructions.chat_context_wrapper", config={"language": "en"})
         session = self.i18n.chat_context_wrapper_for_session({"language": "en"})
         self.assertNotEqual(session, stored)
-        self.assertNotIn("{templates}", session)
+        self.assertNotIn("{{#templates}}", session)
+        self.assertNotIn("{{templates}}", session)
 
     def test_estimate_chat_request_tokens(self):
         token_estimate = _load_addon_module("token_estimate")

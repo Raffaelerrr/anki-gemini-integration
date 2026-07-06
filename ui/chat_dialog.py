@@ -25,17 +25,19 @@ from aqt.qt import (
 )
 from aqt.utils import tooltip
 
+from ..chat_context_wrapper import wrapper_has_conditional_blocks
 from ..config import api_key_configured, load_config, save_config
 from ..i18n import (
     chat_context_wrapper_for_session,
     chat_context_wrapper_missing_placeholders,
     chat_edit_wrapper_hint_text,
-    chat_edit_wrapper_invalid_text,
     chat_edit_wrapper_label_text,
     effective_brain_import_message,
     effective_chat_context_wrapper,
     format_chat_context_message,
     is_builtin_chat_context_wrapper,
+    wrapper_import_warning_text,
+    wrapper_missing_import_placeholders,
     tr,
 )
 from ..prompt_inspection import (
@@ -75,7 +77,6 @@ from .theme import (
     refresh_native_text_edits_in,
     strong_label_html,
     settings_stale_banner_stylesheet,
-    wrapper_warning_stylesheet,
 )
 from .widgets import bind_text_edit_auto_height
 
@@ -126,6 +127,7 @@ class ChatWindow(QWidget):
         self._prompt_inspection_window: PromptInspectionWindow | None = None
         self._session_config_fingerprint = ""
         self._settings_stale_banner_dismissed = False
+        self._wrapper_warning_dismissed: set[str] = set()
 
         layout = QVBoxLayout(self)
 
@@ -204,13 +206,29 @@ class ChatWindow(QWidget):
         self.context_edit_wrapper_label = QLabel(self._wrapper_panel)
         wrapper_header.addWidget(self.context_edit_wrapper_label)
         wrapper_header.addStretch(1)
-        self.context_edit_wrapper_warning = QLabel(self._wrapper_panel)
-        self.context_edit_wrapper_warning.setVisible(False)
-        self.context_edit_wrapper_warning.setWordWrap(True)
-        wrapper_header.addWidget(self.context_edit_wrapper_warning)
         panel_layout.addLayout(wrapper_header)
         self.context_edit_wrapper_hint = QLabel(self._wrapper_panel)
         panel_layout.addWidget(self.context_edit_wrapper_hint)
+        self.context_edit_wrapper_warning_banner = QWidget(self._wrapper_panel)
+        self.context_edit_wrapper_warning_banner.setObjectName("settingsStaleBanner")
+        wrapper_warning_layout = QHBoxLayout(self.context_edit_wrapper_warning_banner)
+        wrapper_warning_layout.setContentsMargins(0, 0, 0, 0)
+        wrapper_warning_layout.setSpacing(0)
+        self.context_edit_wrapper_warning = QLabel(self.context_edit_wrapper_warning_banner)
+        self.context_edit_wrapper_warning.setObjectName("settingsStaleBannerText")
+        self.context_edit_wrapper_warning.setWordWrap(True)
+        wrapper_warning_layout.addWidget(self.context_edit_wrapper_warning, 1)
+        self.context_edit_wrapper_warning_close = QPushButton(self.context_edit_wrapper_warning_banner)
+        self.context_edit_wrapper_warning_close.setObjectName("settingsStaleBannerClose")
+        self.context_edit_wrapper_warning_close.setFixedSize(28, 28)
+        self.context_edit_wrapper_warning_close.clicked.connect(self._dismiss_wrapper_warning_banner)
+        wrapper_warning_layout.addWidget(
+            self.context_edit_wrapper_warning_close,
+            0,
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+        )
+        self.context_edit_wrapper_warning_banner.setVisible(False)
+        panel_layout.addWidget(self.context_edit_wrapper_warning_banner)
         wrapper_shell, self.context_edit_wrapper_input = create_ui_text_edit(
             self._wrapper_panel,
         )
@@ -337,7 +355,7 @@ class ChatWindow(QWidget):
     def _apply_chat_theme(self) -> None:
         self.chat_log.document().setDefaultStyleSheet(chat_document_stylesheet())
         self.loading_label.setStyleSheet(loading_label_stylesheet())
-        self.context_edit_wrapper_warning.setStyleSheet(wrapper_warning_stylesheet())
+        self.context_edit_wrapper_warning_banner.setStyleSheet(settings_stale_banner_stylesheet())
         self._settings_stale_banner.setStyleSheet(settings_stale_banner_stylesheet())
         self.note_preview_panel.apply_theme()
         self.templates_edit_panel.apply_theme()
@@ -360,6 +378,9 @@ class ChatWindow(QWidget):
         self.btn_inspect_prompt.setText(tr("chat.inspect_prompt", config=config))
         self.btn_inspect_prompt.setToolTip(tr("chat.inspect_prompt.tooltip", config=config))
         self._settings_stale_banner_close.setText(tr("chat.settings_stale.dismiss", config=config))
+        self.context_edit_wrapper_warning_close.setText(
+            tr("chat.settings_stale.dismiss", config=config)
+        )
         self._sync_prompt_inspection_button(config)
         self._update_settings_stale_banner(config)
         self.chat_log.setPlaceholderText(tr("chat.log_placeholder", config=config))
@@ -620,9 +641,6 @@ class ChatWindow(QWidget):
         self.context_edit_wrapper_hint.setText(
             muted_hint_html(chat_edit_wrapper_hint_text(config))
         )
-        self.context_edit_wrapper_warning.setText(
-            chat_edit_wrapper_invalid_text(config)
-        )
         self.templates_edit_panel.apply_language(config)
         self._update_wrapper_format_warning()
 
@@ -648,11 +666,18 @@ class ChatWindow(QWidget):
             raw = self._context_wrapper_template.strip()
             if is_builtin_chat_context_wrapper(raw):
                 return None
-            return chat_context_wrapper_for_session(config, template_override=raw)
+            return raw
         stored = effective_chat_context_wrapper(config).strip()
         if is_builtin_chat_context_wrapper(stored):
             return None
-        return chat_context_wrapper_for_session(config)
+        return stored
+
+    def _wrapper_warning_sections(self, text: str, config: dict[str, Any]) -> list[str]:
+        sections: list[str] = []
+        if chat_context_wrapper_missing_placeholders(text):
+            sections.append("required")
+        sections.extend(wrapper_missing_import_placeholders(text, config))
+        return sections
 
     def _build_outgoing_payload(self, config: dict[str, Any], user_text: str) -> str:
         payload_text = user_text
@@ -720,6 +745,7 @@ class ChatWindow(QWidget):
     def _on_edit_wrapper_toggled(self, checked: bool) -> None:
         if checked:
             self._sync_note_context_from_preview()
+            self._wrapper_warning_dismissed.clear()
             self._populate_wrapper_editor()
             self._wrapper_panel.setVisible(True)
             self.context_edit_wrapper_input.setFocus()
@@ -735,31 +761,60 @@ class ChatWindow(QWidget):
 
     def _populate_wrapper_editor(self) -> None:
         config = load_config()
+        templates_content = self._templates_for_message(config)
+        styling_content = self._styling_for_message(config)
         self.context_edit_wrapper_input.blockSignals(True)
         if self._context_wrapper_template is not None:
+            raw = self._context_wrapper_template.strip()
+            if wrapper_has_conditional_blocks(raw):
+                wrapper = chat_context_wrapper_for_session(
+                    config,
+                    template_override=raw,
+                    templates_content=templates_content,
+                    styling_content=styling_content,
+                )
+            else:
+                wrapper = raw
+        else:
             wrapper = chat_context_wrapper_for_session(
                 config,
-                template_override=self._context_wrapper_template,
+                templates_content=templates_content,
+                styling_content=styling_content,
             )
-        else:
-            wrapper = chat_context_wrapper_for_session(config)
         self.context_edit_wrapper_input.setPlainText(wrapper)
         self.context_edit_wrapper_input.blockSignals(False)
         self._update_wrapper_format_warning()
 
     def _update_wrapper_format_warning(self) -> None:
         if not self.edit_wrapper_checkbox.isChecked():
-            self.context_edit_wrapper_warning.setVisible(False)
+            self.context_edit_wrapper_warning_banner.setVisible(False)
             return
+        config = load_config()
         text = self.context_edit_wrapper_input.toPlainText()
-        self.context_edit_wrapper_warning.setVisible(
-            chat_context_wrapper_missing_placeholders(text)
+        sections = [
+            section
+            for section in self._wrapper_warning_sections(text, config)
+            if section not in self._wrapper_warning_dismissed
+        ]
+        if not sections:
+            self.context_edit_wrapper_warning_banner.setVisible(False)
+            return
+        self.context_edit_wrapper_warning.setText(
+            wrapper_import_warning_text(config, sections=sections, scope="chat")
         )
+        self.context_edit_wrapper_warning_banner.setVisible(True)
+
+    def _dismiss_wrapper_warning_banner(self) -> None:
+        config = load_config()
+        text = self.context_edit_wrapper_input.toPlainText()
+        self._wrapper_warning_dismissed.update(self._wrapper_warning_sections(text, config))
+        self._update_wrapper_format_warning()
 
     def _on_context_edit_wrapper_changed(self) -> None:
         if not self.edit_wrapper_checkbox.isChecked():
             return
         self._context_wrapper_template = self.context_edit_wrapper_input.toPlainText()
+        self._wrapper_warning_dismissed.clear()
         self._update_wrapper_format_warning()
 
     def _on_send_button_clicked(self) -> None:
@@ -855,7 +910,7 @@ class ChatWindow(QWidget):
             return
 
         if included_context:
-            self.context_edit_wrapper_warning.setVisible(False)
+            self.context_edit_wrapper_warning_banner.setVisible(False)
             self.context_checkbox.setChecked(False)
 
         self.api_history.append({"role": "user", "parts": [{"text": payload_text}]})
