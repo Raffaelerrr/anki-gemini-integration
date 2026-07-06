@@ -97,7 +97,7 @@ def render_field_table(    header_html: str,
     body_class_attr = f" class='{body_class}'" if body_class else ""
     return (
         f"{spacer}"
-        f"<table class='chat-code-block' width='100%' border='0' cellspacing='0' "
+        f"<table class='chat-code-block tex2jax_ignore' width='100%' border='0' cellspacing='0' "
         f"cellpadding='0' bgcolor='{body_bg}'>"
         f"<tr bgcolor='{header_bg}'><td valign='middle' style='padding:6px 8px;'>"
         f"{header_html}</td></tr>"

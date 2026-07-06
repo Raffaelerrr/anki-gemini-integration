@@ -12,7 +12,7 @@ def render_chat_document(messages: list[ChatMessage]) -> str:
         return ""
 
     surface = get_theme_colors().chat_surface_bg
-    parts: list[str] = []
+    parts: list[str] = ['<div id="addon-chat-log">']
     for index, message in enumerate(messages):
         prefix = "<br>" if index else ""
         label = html.escape(message.label)
@@ -24,4 +24,5 @@ def render_chat_document(messages: list[ChatMessage]) -> str:
             f"cellspacing='0' cellpadding='0' bgcolor='{surface}'>"
             f"<tr><td style='padding:0;'>{inner}</td></tr></table>"
         )
+    parts.append("</div>")
     return "".join(parts)

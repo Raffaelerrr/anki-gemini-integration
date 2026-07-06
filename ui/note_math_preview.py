@@ -11,24 +11,29 @@ _MATHJAX_JS = (
     "js/vendor/mathjax/tex-chtml-full.js",
 )
 
-_TYPESET_JS = """
-(function () {
-    var root = document.getElementById("addon-note-preview");
-    if (!root || !window.MathJax || !MathJax.startup || !MathJax.startup.promise) {
+
+def mathjax_typeset_js(root_id: str) -> str:
+    return f"""
+(function () {{
+    var root = document.getElementById({root_id!r});
+    if (!root || !window.MathJax || !MathJax.startup || !MathJax.startup.promise) {{
         return;
-    }
+    }}
     MathJax.startup.promise
-        .then(function () {
-            if (MathJax.typesetClear) {
+        .then(function () {{
+            if (MathJax.typesetClear) {{
                 MathJax.typesetClear();
-            }
+            }}
             return MathJax.typesetPromise([root]);
-        })
-        .catch(function (err) {
-            console.log("addon note preview MathJax failed:", err);
-        });
-})();
+        }})
+        .catch(function (err) {{
+            console.log("addon MathJax failed:", err);
+        }});
+}})();
 """
+
+
+_TYPESET_JS = mathjax_typeset_js("addon-note-preview")
 
 _SCRIPT_TAG_RE = re.compile(r"<script\b[^>]*>.*?</script>", re.IGNORECASE | re.DOTALL)
 _TEX_MACRO_RE = re.compile(r"\\(?:newcommand|renewcommand|def|DeclareMathOperator)\b")

@@ -423,6 +423,8 @@ class TestI18n(unittest.TestCase):
     def test_chat_system_addon_merges_format_and_meta_rule(self):
         en = self.i18n.default_chat_system_addon({"language": "en"})
         self.assertIn("CHAT REPLY FORMATTING RULES", en)
+        self.assertIn("outside code blocks", en)
+        self.assertIn("render in the chat window", en)
         self.assertIn("UPDATE_DYNAMIC_RULES", en)
         self.assertIn("META-SYSTEM RULE", en)
 
@@ -1031,6 +1033,45 @@ class TestChatFormatter(unittest.TestCase):
         self.assertIn("chat-prose", html_out)
         self.assertNotIn("#e0e0e0", html_out)
 
+    def test_format_reply_preserves_inline_math_delimiters_through_markdown(self):
+        text = r"The formula \(E=mc^2\) is famous."
+        html_out = self.fmt.format_gemini_reply_html(
+            text,
+            {},
+            "t1",
+            config={"language": "en"},
+        )
+        self.assertIn(r"\(E=mc^2\)", html_out)
+
+    def test_format_reply_preserves_display_math_delimiters_through_markdown(self):
+        text = (
+            "Integral:\n"
+            r"\[\int_0^\infty e^{-x^2}\, dx = \frac{\sqrt{\pi}}{2}\]"
+        )
+        html_out = self.fmt.format_gemini_reply_html(
+            text,
+            {},
+            "t1",
+            config={"language": "en"},
+        )
+        self.assertIn(r"\[\int_0^\infty", html_out)
+        self.assertIn(r"\frac{\sqrt{\pi}}{2}\]", html_out)
+
+    def test_format_reply_preserves_matrix_line_breaks_in_display_math(self):
+        text = (
+            r"\[\mathbf{A} = \begin{pmatrix}"
+            r"a & b \\"
+            r"c & d"
+            r"\end{pmatrix}\]"
+        )
+        html_out = self.fmt.format_gemini_reply_html(
+            text,
+            {},
+            "t1",
+            config={"language": "en"},
+        )
+        self.assertIn(r"a & b \\", html_out)
+
     def test_short_reply_and_user_message_html_for_chat_lines(self):
         """Full-document chat omits per-reply endcaps; user lines never include them."""
         reply = self.fmt.format_gemini_reply_html(
@@ -1236,6 +1277,20 @@ class TestNoteMathPreview(unittest.TestCase):
     def test_web_math_preview_available_false_without_anki(self):
         self.assertFalse(self.preview.web_math_preview_available())
 
+    def test_mathjax_typeset_js_targets_root_element(self):
+        script = self.preview.mathjax_typeset_js("addon-chat-log")
+        self.assertIn("addon-chat-log", script)
+        self.assertIn("MathJax.typesetPromise", script)
+
+
+class TestChatMathLog(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.chat_math = _load_addon_module("ui.chat_math_log")
+
+    def test_chat_math_log_available_false_without_anki(self):
+        self.assertFalse(self.chat_math.chat_math_log_available())
+
 
 class TestNoteFields(unittest.TestCase):
     @classmethod
@@ -1284,6 +1339,7 @@ class TestChatLogRenderer(unittest.TestCase):
             ]
         )
         self.assertIn("chat-message-wrap", html)
+        self.assertIn('id="addon-chat-log"', html)
         self.assertIn("chat-label-you", html)
         self.assertIn("chat-label-gemini", html)
         self.assertNotIn("chat-html-endcap", html)

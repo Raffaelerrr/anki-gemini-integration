@@ -15,6 +15,38 @@ _FENCE_RE = re.compile(
 )
 _BOLD_MARKER_RE = re.compile(r"\*\*")
 _PARTIAL_HEADING_RE = re.compile(r"^#{1,6}$")
+_MATH_DISPLAY_RE = re.compile(r"\\\[[\s\S]*?\\\]")
+_MATH_INLINE_RE = re.compile(r"\\\([\s\S]*?\\\)")
+_MATH_PLACEHOLDER_RE = re.compile(r"\uE000(\d+)\uE001")
+
+
+def _math_placeholder(index: int) -> str:
+    return f"\uE000{index}\uE001"
+
+
+def _protect_math_for_markdown(text: str) -> tuple[str, list[str]]:
+    protected: list[str] = []
+
+    def stash(match: re.Match[str]) -> str:
+        protected.append(match.group(0))
+        return _math_placeholder(len(protected) - 1)
+
+    text = _MATH_DISPLAY_RE.sub(stash, text)
+    text = _MATH_INLINE_RE.sub(stash, text)
+    return text, protected
+
+
+def _restore_math_for_markdown(text: str, protected: list[str]) -> str:
+    if not protected:
+        return text
+
+    def restore(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        if 0 <= index < len(protected):
+            return protected[index]
+        return match.group(0)
+
+    return _MATH_PLACEHOLDER_RE.sub(restore, text)
 
 
 def _parse_field_label_line(line: str) -> str | None:
@@ -100,7 +132,7 @@ def _qt_compatible_html(rendered: str) -> str:
     rendered = re.sub(r"<em>(.*?)</em>", r"<i>\1</i>", rendered, flags=re.DOTALL)
     rendered = re.sub(
         r"<code>(.*?)</code>",
-        r'<span class="chat-code-inline">\1</span>',
+        r'<span class="chat-code-inline tex2jax_ignore">\1</span>',
         rendered,
         flags=re.DOTALL,
     )
@@ -123,7 +155,7 @@ def _render_prose_fallback(text: str) -> str:
     escaped = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", escaped, flags=re.DOTALL)
     escaped = re.sub(
         r"`([^`]+)`",
-        r'<span class="chat-code-inline">\1</span>',
+        r'<span class="chat-code-inline tex2jax_ignore">\1</span>',
         escaped,
     )
     escaped = re.sub(
@@ -152,8 +184,10 @@ def _render_markdown_prose(text: str) -> str:
     if converter is None:
         return _render_prose_fallback(prose)
 
-    rendered = converter.convert(prose)
+    markdown_input, protected = _protect_math_for_markdown(prose)
+    rendered = converter.convert(markdown_input)
     converter.reset()
+    rendered = _restore_math_for_markdown(rendered, protected)
     rendered = _qt_compatible_html(rendered)
     return f'<div class="chat-prose">{rendered}</div>'
 

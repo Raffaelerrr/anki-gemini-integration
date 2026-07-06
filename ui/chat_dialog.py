@@ -65,6 +65,16 @@ from .card_templates import (
 )
 from .chat_formatter import format_gemini_reply_html, format_streaming_reply_html
 from .chat_log_renderer import render_chat_document
+from .chat_math_log import (
+    chat_log_scroll_to_bottom,
+    chat_log_scroll_to_last_gemini_label,
+    chat_log_scroll_y,
+    chat_log_set_scroll_y,
+    chat_math_log_available,
+    cleanup_chat_log_webview,
+    create_chat_log_webview,
+    load_chat_log_webview,
+)
 from .chat_messages import ChatMessage
 from .imported_note_preview_window import ImportedNotePreviewWindow
 from .note_preview_panel import NotePreviewPanel
@@ -192,10 +202,19 @@ class ChatWindow(QWidget):
         self.note_preview_panel.on_fields_changed = self._sync_note_context_from_preview
         layout.addWidget(self.note_preview_panel, 0)
 
-        self.chat_log = QTextBrowser(self)
-        self.chat_log.setOpenLinks(False)
-        self.chat_log.setReadOnly(True)
-        self.chat_log.anchorClicked.connect(self._on_anchor_clicked)
+        self._uses_web_chat_log = False
+        if chat_math_log_available():
+            try:
+                self.chat_log = create_chat_log_webview(self)
+                self.chat_log.set_bridge_command(self._on_chat_log_bridge_cmd, self)
+                self._uses_web_chat_log = True
+            except Exception:
+                self.chat_log = None
+        if not self._uses_web_chat_log:
+            self.chat_log = QTextBrowser(self)
+            self.chat_log.setOpenLinks(False)
+            self.chat_log.setReadOnly(True)
+            self.chat_log.anchorClicked.connect(self._on_anchor_clicked)
         layout.addWidget(self.chat_log, 1)
 
         self._wrapper_panel = QWidget(self)
@@ -354,7 +373,8 @@ class ChatWindow(QWidget):
             self._prompt_inspection_window.refresh()
 
     def _apply_chat_theme(self) -> None:
-        self.chat_log.document().setDefaultStyleSheet(chat_document_stylesheet())
+        if not self._uses_web_chat_log:
+            self.chat_log.document().setDefaultStyleSheet(chat_document_stylesheet())
         self.loading_label.setStyleSheet(loading_label_stylesheet())
         self.context_edit_wrapper_warning_banner.setStyleSheet(settings_stale_banner_stylesheet())
         self._settings_stale_banner.setStyleSheet(settings_stale_banner_stylesheet())
@@ -384,7 +404,8 @@ class ChatWindow(QWidget):
         )
         self._sync_prompt_inspection_button(config)
         self._update_settings_stale_banner(config)
-        self.chat_log.setPlaceholderText(tr("chat.log_placeholder", config=config))
+        if not self._uses_web_chat_log:
+            self.chat_log.setPlaceholderText(tr("chat.log_placeholder", config=config))
         self.input_field.setPlaceholderText(tr("chat.input_placeholder", config=config))
         if self._request_in_flight:
             self.send_button.setText(tr("chat.stop", config=config))
@@ -442,6 +463,8 @@ class ChatWindow(QWidget):
         self._cancel_in_flight_request()
         self._stop_loading()
         self._close_note_preview_window()
+        if self._uses_web_chat_log:
+            cleanup_chat_log_webview(self.chat_log)
         _chat_window = None
         super().closeEvent(event)
 
@@ -450,6 +473,8 @@ class ChatWindow(QWidget):
         self._cancel_in_flight_request()
         self._stop_loading()
         self._close_note_preview_window()
+        if self._uses_web_chat_log:
+            cleanup_chat_log_webview(self.chat_log)
         self._stream_visible = False
         self._streaming_message_index = None
 
@@ -459,11 +484,25 @@ class ChatWindow(QWidget):
         preserve_scroll: bool = False,
         scroll_anchor: int | None = None,
     ) -> None:
+        document_html = render_chat_document(self._messages)
+        if self._uses_web_chat_log:
+            previous_scroll = chat_log_scroll_y(self.chat_log) if preserve_scroll else 0
+            load_chat_log_webview(
+                self.chat_log,
+                document_html,
+                stylesheet=chat_document_stylesheet(),
+            )
+            if scroll_anchor is not None:
+                chat_log_set_scroll_y(self.chat_log, scroll_anchor)
+            elif preserve_scroll:
+                chat_log_set_scroll_y(self.chat_log, previous_scroll)
+            else:
+                chat_log_scroll_to_bottom(self.chat_log)
+            return
+
         bar = self.chat_log.verticalScrollBar()
         previous_value = bar.value()
-
-        self.chat_log.setHtml(render_chat_document(self._messages))
-
+        self.chat_log.setHtml(document_html)
         if scroll_anchor is not None:
             bar.setValue(min(scroll_anchor, bar.maximum()))
         elif preserve_scroll:
@@ -472,6 +511,9 @@ class ChatWindow(QWidget):
             self.chat_log.moveCursor(self.chat_log.textCursor().MoveOperation.End)
 
     def _scroll_to_streaming_message_start(self) -> None:
+        if self._uses_web_chat_log:
+            chat_log_scroll_to_last_gemini_label(self.chat_log)
+            return
         config = load_config()
         label_text = f"{tr('chat.label.gemini', config=config)}:"
         cursor = QTextCursor(self.chat_log.document())
@@ -517,16 +559,22 @@ class ChatWindow(QWidget):
             )
         )
 
-    def _on_anchor_clicked(self, url: QUrl) -> None:
-        url_str = url.toString()
-        if not url_str.startswith("copy:"):
-            return
-        block_id = url_str[5:]
+    def _copy_codeblock(self, block_id: str) -> None:
         content = self._copy_blocks.get(block_id)
         if content is None:
             return
         QApplication.clipboard().setText(content)
         tooltip(tr("chat.copied"))
+
+    def _on_chat_log_bridge_cmd(self, cmd: str) -> None:
+        if cmd.startswith("addon-chat-copy:"):
+            self._copy_codeblock(cmd[len("addon-chat-copy:") :])
+
+    def _on_anchor_clicked(self, url: QUrl) -> None:
+        url_str = url.toString()
+        if not url_str.startswith("copy:"):
+            return
+        self._copy_codeblock(url_str[5:])
 
     def eventFilter(self, obj, event):
         if obj is self.input_field and event.type() == event.Type.KeyPress:
