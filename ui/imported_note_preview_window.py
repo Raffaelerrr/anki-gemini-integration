@@ -18,6 +18,12 @@ from aqt.qt import (
 from ..config import load_config
 from ..i18n import tr
 from .note_fields import apply_field_rich_edit_theme, load_field_rich_edit
+from .note_math_preview import (
+    cleanup_note_preview_webview,
+    create_note_preview_webview,
+    load_note_preview_webview,
+    web_math_preview_available,
+)
 from .settings_compact_controls import create_ui_text_edit
 from .theme import (
     apply_native_fields_scroll_theme,
@@ -46,6 +52,7 @@ class ImportedNotePreviewWindow(QWidget):
         parent: QWidget | None,
         *,
         field_provider: Callable[[], list[tuple[str, str]]],
+        notetype_id_provider: Callable[[], int | None] | None = None,
     ) -> None:
         super().__init__(
             parent,
@@ -56,6 +63,12 @@ class ImportedNotePreviewWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self._field_provider = field_provider
+        self._notetype_id_provider = notetype_id_provider or (lambda: None)
+        self._uses_web_math = False
+        self._web: QWidget | None = None
+        self._scroll: QScrollArea | None = None
+        self._host: QWidget | None = None
+        self._fields_layout: QVBoxLayout | None = None
         self.resize(520, 480)
 
         root = QVBoxLayout(self)
@@ -69,7 +82,39 @@ class ImportedNotePreviewWindow(QWidget):
         toolbar.addWidget(self._refresh_btn)
         root.addLayout(toolbar)
 
-        self._scroll = QScrollArea(self)
+        self._content_host = QWidget(self)
+        self._content_layout = QVBoxLayout(self._content_host)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
+        self._content_layout.setSpacing(0)
+
+        if web_math_preview_available():
+            self._ensure_web_view()
+        if not self._uses_web_math:
+            self._setup_plain_preview()
+
+        root.addWidget(self._content_host, 1)
+        self.apply_language()
+
+    def _ensure_web_view(self) -> bool:
+        if self._web is not None:
+            self._uses_web_math = True
+            return True
+        if not web_math_preview_available():
+            self._uses_web_math = False
+            return False
+        try:
+            self._web = create_note_preview_webview(self._content_host)
+            self._content_layout.addWidget(self._web, 1)
+            self._uses_web_math = True
+            return True
+        except Exception:
+            self._uses_web_math = False
+            return False
+
+    def _setup_plain_preview(self) -> None:
+        if self._fields_layout is not None:
+            return
+        self._scroll = QScrollArea(self._content_host)
         self._scroll.setWidgetResizable(True)
         self._host = QWidget(self._scroll)
         self._host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -79,10 +124,17 @@ class ImportedNotePreviewWindow(QWidget):
         self._fields_layout.setSpacing(0)
         self._fields_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._scroll.setWidget(self._host)
-        root.addWidget(self._scroll, 1)
-
+        self._content_layout.addWidget(self._scroll, 1)
         apply_native_fields_scroll_theme(self, self._scroll)
-        self.apply_language()
+
+    def _teardown_web_view(self) -> None:
+        if self._web is None:
+            return
+        cleanup_note_preview_webview(self._web)
+        self._content_layout.removeWidget(self._web)
+        self._web.deleteLater()
+        self._web = None
+        self._uses_web_math = False
 
     def apply_language(self, config: dict | None = None) -> None:
         config = config or load_config()
@@ -97,18 +149,45 @@ class ImportedNotePreviewWindow(QWidget):
             self._refresh_btn.setText("↻")
 
     def apply_theme(self) -> None:
-        apply_native_fields_scroll_theme(self, self._scroll)
-        for editor in self._host.findChildren(QTextEdit):
-            apply_field_rich_edit_theme(editor)
+        if self._scroll is not None:
+            apply_native_fields_scroll_theme(self, self._scroll)
+        if self._host is not None:
+            for editor in self._host.findChildren(QTextEdit):
+                apply_field_rich_edit_theme(editor)
+        if self._uses_web_math and self._web is not None:
+            self.refresh()
+
+    def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        self._teardown_web_view()
+        super().closeEvent(event)
 
     def refresh(self) -> None:
         config = load_config()
-        _clear_layout(self._fields_layout)
         fields = [
             (name, value)
             for name, value in self._field_provider()
             if value.strip()
         ]
+        if self._ensure_web_view():
+            load_note_preview_webview(
+                self._web,
+                fields,
+                empty_message=tr("chat.preview.empty", config=config),
+                config=config,
+                notetype_id=self._notetype_id_provider(),
+            )
+            return
+        self._setup_plain_preview()
+        self._refresh_plain_preview(fields, config)
+
+    def _refresh_plain_preview(
+        self,
+        fields: list[tuple[str, str]],
+        config: dict,
+    ) -> None:
+        if self._fields_layout is None or self._host is None:
+            return
+        _clear_layout(self._fields_layout)
         if not fields:
             empty = QLabel(tr("chat.preview.empty", config=config), self._host)
             empty.setWordWrap(True)

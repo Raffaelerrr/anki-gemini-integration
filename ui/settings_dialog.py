@@ -49,6 +49,7 @@ from ..i18n import (
     default_optimize_user_prompt,
     effective_brain_import_message,
     effective_card_templates_format_prompt,
+    effective_mathjax_preview_preamble,
     effective_chat_system_addon,
     effective_dynamic_rules_prefix,
     effective_chat_context_wrapper,
@@ -62,6 +63,7 @@ from ..i18n import (
     is_builtin_system_instruction,
     normalize_brain_import_message_for_save,
     normalize_card_templates_format_prompt_for_save,
+    normalize_mathjax_preview_preamble_for_save,
     normalize_chat_system_addon_for_save,
     normalize_chat_context_wrapper_for_save,
     normalize_dynamic_rules_prefix_for_save,
@@ -800,6 +802,20 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(templates_format_shell)
 
+        layout.addWidget(
+            QLabel(f"<br><b>{tr('settings.mathjax_preview_preamble', config=config)}</b>")
+        )
+        layout.addWidget(
+            QLabel(
+                muted_hint_html(tr("settings.mathjax_preview_preamble.hint", config=config)),
+                host,
+            )
+        )
+        preamble_shell, self.mathjax_preview_preamble_input = create_settings_text_edit(host)
+        self.mathjax_preview_preamble_input.setMinimumHeight(120)
+        self.mathjax_preview_preamble_input.setPlainText(effective_mathjax_preview_preamble(config))
+        layout.addWidget(preamble_shell)
+
         layout.addStretch(1)
         scroll.setWidget(host)
         page_layout = QVBoxLayout(page)
@@ -1202,6 +1218,9 @@ class SettingsDialog(QDialog):
         config["prompt_card_templates_format"] = normalize_card_templates_format_prompt_for_save(
             self.prompt_card_templates_format_input.toPlainText()
         )
+        config["mathjax_preview_preamble"] = normalize_mathjax_preview_preamble_for_save(
+            self.mathjax_preview_preamble_input.toPlainText()
+        )
         for key in DISMISSIBLE_WARNING_KEYS:
             config[key] = bool(config.get(key, False))
         return config
@@ -1442,6 +1461,10 @@ class SettingsDialog(QDialog):
             self.prompt_card_templates_format_input.setPlainText(
                 default_card_templates_format_prompt({"language": lang})
             )
+            return
+
+        if key == "mathjax_preview_preamble":
+            self.mathjax_preview_preamble_input.setPlainText("")
             return
 
     def _apply_selected_defaults(self) -> None:

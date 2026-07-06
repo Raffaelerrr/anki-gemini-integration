@@ -109,6 +109,7 @@ class ChatWindow(QWidget):
         self._imported_fields: list[tuple[str, str]] = []
         self._imported_card_templates: list[CardTemplateData] = []
         self._imported_notetype_css: str = ""
+        self._imported_notetype_id: int | None = None
         self._context_wrapper_template: str | None = None
         self._messages: list[ChatMessage] = []
         self._loading_phase = 0
@@ -407,6 +408,7 @@ class ChatWindow(QWidget):
             self._note_preview_window = ImportedNotePreviewWindow(
                 self,
                 field_provider=self.note_preview_panel.get_fields,
+                notetype_id_provider=lambda: self._imported_notetype_id,
             )
             self._note_preview_window.destroyed.connect(
                 lambda *_: setattr(self, "_note_preview_window", None)
@@ -546,6 +548,7 @@ class ChatWindow(QWidget):
         self._imported_fields = []
         self._imported_card_templates = []
         self._imported_notetype_css = ""
+        self._imported_notetype_id = None
         self._context_wrapper_template = None
         self._messages.clear()
         self._copy_blocks.clear()
@@ -588,6 +591,7 @@ class ChatWindow(QWidget):
             return
 
         self._imported_fields = imported_fields
+        self._imported_notetype_id = note.mid
         raw_templates, raw_css = extract_notetype_context(note)
         import_templates = bool(config.get("brain_import_templates", False))
         import_css = bool(config.get("brain_import_css", False))

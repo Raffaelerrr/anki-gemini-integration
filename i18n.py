@@ -279,6 +279,22 @@ _STRINGS: dict[str, dict[str, str]] = {
             "chained immediately before those sections to explain how to read them."
         ),
     },
+    "settings.mathjax_preview_preamble": {
+        "it": "Preambolo MathJax anteprima nota",
+        "en": "MathJax note preview preamble",
+    },
+    "settings.mathjax_preview_preamble.hint": {
+        "it": (
+            "HTML inserito prima dei campi nella finestra di anteprima nota (chat). "
+            "Usato solo se il tipo di nota importato non fornisce un preambolo nei template. "
+            "Utile per blocchi nascosti con <code>\\newcommand</code> come nei template carte."
+        ),
+        "en": (
+            "HTML inserted before fields in the chat note preview window. "
+            "Used only when the imported note type does not supply a preamble from its templates. "
+            "Useful for hidden <code>\\newcommand</code> blocks like in card templates."
+        ),
+    },
     "settings.system_instruction": {
         "it": "Istruzioni di sistema globali (alta priorità per impostazione predefinita — statiche):",
         "en": "Global system instructions (high priority by default — static):",
@@ -820,6 +836,21 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Explains to Gemini how to read the "
             "<code>[CARD TEMPLATES]</code> and <code>[NOTE TYPE STYLING]</code> sections that follow. "
             "Editable under <b>Advanced…</b>. If empty, nothing extra is sent."
+        ),
+    },
+    "settings.help.mathjax_preview_preamble": {
+        "it": (
+            "HTML opzionale per l'<b>anteprima nota</b> nella chat (finestra separata). "
+            "All'import 🧠, se i template fronte/retro del tipo di nota contengono un preambolo "
+            "MathJax (es. un <code>div</code> nascosto con <code>\\newcommand</code>), "
+            "quello ha priorità. Altrimenti viene usato questo testo. "
+            "Non influisce sui messaggi inviati a Gemini."
+        ),
+        "en": (
+            "Optional HTML for the chat <b>note preview window</b>. "
+            "On 🧠 import, if the note type's front/back templates contain a MathJax preamble "
+            "(e.g. a hidden <code>div</code> with <code>\\newcommand</code>), that takes priority. "
+            "Otherwise this text is used. Does not affect messages sent to Gemini."
         ),
     },
     "settings.help.temperature_optimize": {
@@ -1992,6 +2023,14 @@ def effective_card_templates_format_prompt(config: dict[str, Any] | None = None)
 
 def normalize_card_templates_format_prompt_for_save(text: str) -> str:
     return _normalize_prompt_for_save(text, "instructions.card_templates_format")
+
+
+def effective_mathjax_preview_preamble(config: dict[str, Any] | None = None) -> str:
+    return str((config or {}).get("mathjax_preview_preamble") or "").strip()
+
+
+def normalize_mathjax_preview_preamble_for_save(text: str) -> str:
+    return (text or "").strip()
 
 
 def card_templates_format_addon(

@@ -1173,6 +1173,70 @@ class TestChatDialogHelpers(unittest.TestCase):
         self.assertEqual(fn([("Front", "  ")], config), "")
 
 
+class TestNoteMathPreview(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.preview = _load_addon_module("ui.note_math_preview")
+
+    def test_build_note_preview_body_includes_math_and_field_name(self):
+        body = self.preview.build_note_preview_body(
+            [("Front", r"<p>Energy: \(E=mc^2\)</p>")],
+        )
+        self.assertIn("Front", body)
+        self.assertIn(r"\(E=mc^2\)", body)
+        self.assertIn('id="addon-note-preview"', body)
+
+    def test_build_note_preview_body_includes_preamble_before_fields(self):
+        preamble = (
+            '<div style="display: none;">\n\\(\n'
+            r"\newcommand{\R}{\mathbb{R}}" + "\n\\)\n</div>"
+        )
+        body = self.preview.build_note_preview_body(
+            [("Front", r"\(\R\)")],
+            mathjax_preamble=preamble,
+        )
+        self.assertIn("mathjax-preamble", body)
+        self.assertIn(r"\newcommand{\R}{\mathbb{R}}", body)
+        self.assertLess(body.index("mathjax-preamble"), body.index("Front"))
+
+    def test_extract_template_preamble_sections_finds_hidden_newcommand_block(self):
+        template = (
+            '<div style="display: none;">\n\\(\n'
+            r"\newcommand{\R}{\mathbb{R}}" + "\n"
+            r"\newcommand{\C}{\mathbb{C}}" + "\n\\)\n</div>\n"
+            "{{Front}}"
+        )
+        sections = self.preview.extract_template_preamble_sections(template)
+        self.assertEqual(len(sections), 1)
+        self.assertIn(r"\newcommand{\R}{\mathbb{R}}", sections[0])
+        self.assertIn("display: none", sections[0])
+
+    def test_extract_template_preamble_sections_finds_mathjax_script(self):
+        template = (
+            "<script>\n"
+            "MathJax.config.tex['macros'] = { R: '{\\\\mathbb{R}}' };\n"
+            "</script>\n{{Front}}"
+        )
+        sections = self.preview.extract_template_preamble_sections(template)
+        self.assertEqual(len(sections), 1)
+        self.assertIn("MathJax.config", sections[0])
+
+    def test_resolve_mathjax_preview_preamble_prefers_settings_when_no_notetype(self):
+        preamble = self.preview.resolve_mathjax_preview_preamble(
+            {"mathjax_preview_preamble": "<div>fallback</div>"},
+            notetype_id=None,
+        )
+        self.assertEqual(preamble, "<div>fallback</div>")
+
+    def test_build_note_preview_body_empty_message(self):
+        body = self.preview.build_note_preview_body([], empty_message="Nothing here")
+        self.assertIn("Nothing here", body)
+        self.assertIn("empty-preview", body)
+
+    def test_web_math_preview_available_false_without_anki(self):
+        self.assertFalse(self.preview.web_math_preview_available())
+
+
 class TestNoteFields(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -1308,6 +1372,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(self.config.default_config_value("prompt_dynamic_rules_prefix"), "")
         self.assertEqual(self.config.default_config_value("prompt_chat_context"), "")
         self.assertEqual(self.config.default_config_value("prompt_card_templates_format"), "")
+        self.assertEqual(self.config.default_config_value("mathjax_preview_preamble"), "")
 
     def test_api_key_configured(self):
         fn = self.config.api_key_configured

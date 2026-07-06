@@ -48,6 +48,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "prompt_dynamic_rules_prefix": "",
     "prompt_chat_context": "",
     "prompt_card_templates_format": "",
+    "mathjax_preview_preamble": "",
     "suppress_default_system_instruction_warning": False,
     "suppress_api_key_restore_warning": False,
     "suppress_settings_unsaved_close_warning": False,
@@ -84,6 +85,7 @@ RESTORABLE_SETTING_KEYS: tuple[str, ...] = (
     "prompt_dynamic_rules_prefix",
     "prompt_chat_context",
     "prompt_card_templates_format",
+    "mathjax_preview_preamble",
 )
 
 # Maps config keys to existing settings label i18n keys for the restore list.
@@ -111,6 +113,7 @@ RESTORABLE_SETTING_LABELS: dict[str, str] = {
     "prompt_dynamic_rules_prefix": "settings.prompt_dynamic_rules_prefix",
     "prompt_chat_context": "settings.prompt_chat_context",
     "prompt_card_templates_format": "settings.prompt_card_templates_format",
+    "mathjax_preview_preamble": "settings.mathjax_preview_preamble",
     "system_instruction": "settings.system_instruction",
     "system_instruction_shared": "settings.system_instruction_shared",
     "system_instruction_optimize": "settings.system_instruction_optimize",
