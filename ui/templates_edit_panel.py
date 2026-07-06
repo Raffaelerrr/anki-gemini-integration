@@ -15,17 +15,22 @@ from aqt.qt import (
 )
 
 from ..config import load_config
-from ..i18n import chat_edit_templates_hint_text, tr
+from ..i18n import (
+    chat_edit_templates_detail_text,
+    chat_edit_templates_title_text,
+    tr,
+)
 from .card_templates import CardTemplateData
 from .settings_compact_controls import create_ui_text_edit
 from .theme import (
     apply_native_fields_scroll_theme,
     apply_native_text_edit_surface_theme,
     field_name_label_html,
+    muted_hint_html,
+    strong_label_html,
 )
 from .widgets import PlainNoWheelComboBox, ScrollAwareTextEdit, bind_text_edit_auto_height
 
-_MAX_SCROLL_HEIGHT = 120
 _CARD_BLOCK_SPACING = 12
 _SECTION_GAP = 6
 _CAPTION_TOP_GAP = 4
@@ -65,8 +70,13 @@ class TemplatesEditPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 4)
         layout.setSpacing(4)
 
-        self._hint = QLabel(self)
-        layout.addWidget(self._hint)
+        self._title = QLabel(self)
+        self._title.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(self._title)
+
+        self._detail = QLabel(self)
+        self._detail.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(self._detail)
 
         self._jump_host = QWidget(self)
         jump_layout = QHBoxLayout(self._jump_host)
@@ -82,9 +92,11 @@ class TemplatesEditPanel(QWidget):
 
         self._scroll = QScrollArea(self)
         self._scroll.setWidgetResizable(True)
-        self._scroll.setMinimumHeight(0)
-        self._scroll.setMaximumHeight(_MAX_SCROLL_HEIGHT)
-        self._scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self._scroll.setMinimumHeight(56)
+        self._scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
 
         self._host = QWidget(self._scroll)
         self._host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -95,9 +107,11 @@ class TemplatesEditPanel(QWidget):
         self._fields_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         self._scroll.setWidget(self._host)
-        layout.addWidget(self._scroll)
+        layout.addWidget(self._scroll, 1)
 
         apply_native_fields_scroll_theme(self, self._scroll)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self.setMinimumHeight(56)
         self.setVisible(False)
 
     def apply_theme(self) -> None:
@@ -110,7 +124,8 @@ class TemplatesEditPanel(QWidget):
 
     def apply_language(self, config: dict[str, Any] | None = None) -> None:
         config = config or load_config()
-        self._hint.setText(chat_edit_templates_hint_text(config))
+        self._title.setText(strong_label_html(chat_edit_templates_title_text(config)))
+        self._detail.setText(muted_hint_html(chat_edit_templates_detail_text(config)))
         self._refresh_jump_combo(config)
 
     def clear(self) -> None:

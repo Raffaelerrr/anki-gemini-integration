@@ -1139,6 +1139,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Includi contesto nota nel prossimo messaggio",
         "en": "Include note context in the next message",
     },
+    "chat.include_context.short": {
+        "it": "Includi contesto",
+        "en": "Include context",
+    },
     "chat.edit_context": {
         "it": "Modifica wrapper",
         "en": "Edit wrapper",
@@ -1204,6 +1208,22 @@ _STRINGS: dict[str, dict[str, str]] = {
     "chat.edit_templates": {
         "it": "Modifica template",
         "en": "Edit templates",
+    },
+    "chat.edit_templates.title": {
+        "it": "Template carte e stile CSS del tipo di nota:",
+        "en": "Note type card templates and CSS styling:",
+    },
+    "chat.edit_templates.title.templates_only": {
+        "it": "Template carte del tipo di nota:",
+        "en": "Note type card templates:",
+    },
+    "chat.edit_templates.title.styling_only": {
+        "it": "Stile CSS del tipo di nota:",
+        "en": "Note type CSS styling:",
+    },
+    "chat.edit_templates.detail": {
+        "it": "Non compaiono nell'anteprima nota.",
+        "en": "Not shown in the note preview.",
     },
     "chat.edit_templates.hint": {
         "it": "Template delle carte e stile CSS del tipo di nota. Non compaiono nell'anteprima nota.",
@@ -2187,6 +2207,20 @@ def _assemble_builtin_chat_context_message(
         parts.append(f"{tr('chat.context.section.styling', config=config)}\n{styling}")
     parts.append(f"{tr('chat.context.section.request', config=config)}\n{request}")
     return "\n\n".join(parts)
+
+
+def chat_edit_templates_title_text(config: dict[str, Any] | None = None) -> str:
+    templates = import_templates_enabled(config)
+    css = import_css_enabled(config)
+    if templates and css:
+        return tr("chat.edit_templates.title", config=config)
+    if css and not templates:
+        return tr("chat.edit_templates.title.styling_only", config=config)
+    return tr("chat.edit_templates.title.templates_only", config=config)
+
+
+def chat_edit_templates_detail_text(config: dict[str, Any] | None = None) -> str:
+    return tr("chat.edit_templates.detail", config=config)
 
 
 def chat_edit_templates_hint_text(config: dict[str, Any] | None = None) -> str:

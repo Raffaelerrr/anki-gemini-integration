@@ -374,6 +374,22 @@ class TestI18n(unittest.TestCase):
             self.i18n.tr("chat.preview.open_window.tooltip", config=en),
             "Open the imported note preview in a separate window",
         )
+        templates_title = self.i18n.chat_edit_templates_title_text(
+            {"language": "en", "brain_import_templates": True, "brain_import_css": True}
+        )
+        self.assertIn("templates", templates_title.lower())
+        self.assertEqual(
+            self.i18n.chat_edit_templates_detail_text({"language": "en"}),
+            "Not shown in the note preview.",
+        )
+        self.assertEqual(
+            self.i18n.tr("chat.include_context.short", config=en),
+            "Include context",
+        )
+        self.assertIn(
+            "next message",
+            self.i18n.tr("chat.include_context", config=en).lower(),
+        )
 
     def test_normalize_language(self):
         self.assertEqual(self.i18n.normalize_language("en"), "en")

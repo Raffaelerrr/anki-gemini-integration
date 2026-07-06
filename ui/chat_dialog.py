@@ -14,6 +14,7 @@ from aqt.qt import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTextBrowser,
     QTextCursor,
     QTextEdit,
@@ -64,6 +65,7 @@ from .card_templates import (
     format_card_templates_block,
 )
 from .chat_formatter import format_gemini_reply_html, format_streaming_reply_html
+from .chat_body_splitter import ChatBodySplitter
 from .chat_log_renderer import render_chat_document
 from .chat_math_log import (
     chat_log_scroll_to_bottom,
@@ -79,6 +81,7 @@ from .chat_messages import ChatMessage
 from .imported_note_preview_window import ImportedNotePreviewWindow
 from .note_preview_panel import NotePreviewPanel
 from .templates_edit_panel import TemplatesEditPanel
+from .visibility_icons import VisibilityToggleButton
 from .settings_compact_controls import create_ui_text_edit
 from .theme import (
     chat_document_stylesheet,
@@ -88,8 +91,6 @@ from .theme import (
     strong_label_html,
     settings_stale_banner_stylesheet,
 )
-from .widgets import bind_text_edit_auto_height
-
 
 def _format_note_context(fields: list[tuple[str, str]], config: dict[str, Any]) -> str:
     lines: list[str] = []
@@ -112,7 +113,8 @@ class ChatWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.silentlyClose = True
-        self.resize(520, 520)
+        self.setMinimumSize(640, 680)
+        self.resize(640, 720)
 
         self.api_history: list[dict[str, Any]] = []
         self.note_context: str | None = None
@@ -143,26 +145,43 @@ class ChatWindow(QWidget):
         layout = QVBoxLayout(self)
 
         toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
         self.context_checkbox = QCheckBox(self)
         self.context_checkbox.setChecked(False)
         self.context_checkbox.setEnabled(False)
+        self.context_checkbox.setSizePolicy(
+            QSizePolicy.Policy.Minimum,
+            QSizePolicy.Policy.Fixed,
+        )
         self.context_checkbox.toggled.connect(self._on_context_checkbox_toggled)
         toolbar.addWidget(self.context_checkbox)
 
         self.edit_wrapper_checkbox = QCheckBox(self)
         self.edit_wrapper_checkbox.setChecked(False)
         self.edit_wrapper_checkbox.setEnabled(False)
+        self.edit_wrapper_checkbox.setSizePolicy(
+            QSizePolicy.Policy.Minimum,
+            QSizePolicy.Policy.Fixed,
+        )
         self.edit_wrapper_checkbox.toggled.connect(self._on_edit_wrapper_toggled)
         toolbar.addWidget(self.edit_wrapper_checkbox)
 
         self.edit_templates_checkbox = QCheckBox(self)
         self.edit_templates_checkbox.setChecked(False)
         self.edit_templates_checkbox.setEnabled(False)
+        self.edit_templates_checkbox.setSizePolicy(
+            QSizePolicy.Policy.Minimum,
+            QSizePolicy.Policy.Fixed,
+        )
         self.edit_templates_checkbox.toggled.connect(self._on_edit_templates_toggled)
         toolbar.addWidget(self.edit_templates_checkbox)
 
         self.btn_note_preview = QPushButton(self)
         self.btn_note_preview.setEnabled(False)
+        self.btn_note_preview.setSizePolicy(
+            QSizePolicy.Policy.Minimum,
+            QSizePolicy.Policy.Fixed,
+        )
         self.btn_note_preview.clicked.connect(self._open_note_preview_window)
         toolbar.addWidget(self.btn_note_preview)
 
@@ -173,8 +192,25 @@ class ChatWindow(QWidget):
         toolbar.addWidget(self.btn_inspect_prompt)
 
         self.btn_clear = QPushButton(self)
+        self.btn_clear.setSizePolicy(
+            QSizePolicy.Policy.Minimum,
+            QSizePolicy.Policy.Fixed,
+        )
         self.btn_clear.clicked.connect(self.clear_conversation)
         toolbar.addWidget(self.btn_clear)
+
+        toolbar.addStretch(1)
+
+        self.note_visibility_toggle = VisibilityToggleButton(
+            self,
+            on_click=self._toggle_note_preview_visibility,
+        )
+        self.note_visibility_toggle.hide()
+        toolbar.addWidget(
+            self.note_visibility_toggle,
+            0,
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+        )
         layout.addLayout(toolbar)
 
         self._settings_stale_banner = QWidget(self)
@@ -198,26 +234,36 @@ class ChatWindow(QWidget):
         self._settings_stale_banner.setVisible(False)
         layout.addWidget(self._settings_stale_banner)
 
-        self.note_preview_panel = NotePreviewPanel(self)
+        self._body_splitter = ChatBodySplitter(self, chat_section_index=1)
+        layout.addWidget(self._body_splitter, 1)
+
+        self.note_preview_panel = NotePreviewPanel(self._body_splitter)
+        self.note_preview_panel.bind_visibility_toggle(self.note_visibility_toggle)
         self.note_preview_panel.on_fields_changed = self._sync_note_context_from_preview
-        layout.addWidget(self.note_preview_panel, 0)
+        self.note_preview_panel.on_content_visibility_changed = (
+            self._on_note_preview_content_visibility_changed
+        )
 
         self._uses_web_chat_log = False
         if chat_math_log_available():
             try:
-                self.chat_log = create_chat_log_webview(self)
+                self.chat_log = create_chat_log_webview(self._body_splitter)
                 self.chat_log.set_bridge_command(self._on_chat_log_bridge_cmd, self)
                 self._uses_web_chat_log = True
             except Exception:
                 self.chat_log = None
         if not self._uses_web_chat_log:
-            self.chat_log = QTextBrowser(self)
+            self.chat_log = QTextBrowser(self._body_splitter)
             self.chat_log.setOpenLinks(False)
             self.chat_log.setReadOnly(True)
             self.chat_log.anchorClicked.connect(self._on_anchor_clicked)
-        layout.addWidget(self.chat_log, 1)
+        self.chat_log.setMinimumHeight(120)
+        self.chat_log.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
 
-        self._wrapper_panel = QWidget(self)
+        self._wrapper_panel = QWidget(self._body_splitter)
         panel_layout = QVBoxLayout(self._wrapper_panel)
         panel_layout.setContentsMargins(0, 4, 0, 4)
         panel_layout.setSpacing(4)
@@ -253,15 +299,33 @@ class ChatWindow(QWidget):
             self._wrapper_panel,
         )
         self.context_edit_wrapper_input.setMinimumHeight(70)
-        bind_text_edit_auto_height(self.context_edit_wrapper_input, minimum=70, maximum=110)
+        wrapper_shell.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        self.context_edit_wrapper_input.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         self.context_edit_wrapper_input.textChanged.connect(self._on_context_edit_wrapper_changed)
-        panel_layout.addWidget(wrapper_shell)
+        panel_layout.addWidget(wrapper_shell, 1)
+        self._wrapper_panel.setMinimumHeight(56)
+        self._wrapper_panel.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Expanding,
+        )
         self._wrapper_panel.setVisible(False)
-        layout.addWidget(self._wrapper_panel, 0)
 
-        self.templates_edit_panel = TemplatesEditPanel(self)
+        self.templates_edit_panel = TemplatesEditPanel(self._body_splitter)
         self.templates_edit_panel.on_templates_changed = self._sync_templates_from_panel
-        layout.addWidget(self.templates_edit_panel, 0)
+
+        self._body_splitter.set_sections(
+            self.note_preview_panel,
+            self.chat_log,
+            self._wrapper_panel,
+            self.templates_edit_panel,
+        )
+        QTimer.singleShot(0, self._refresh_body_splitter_sizes)
 
         self.loading_label = QLabel("", self)
         self.loading_label.setVisible(False)
@@ -312,7 +376,15 @@ class ChatWindow(QWidget):
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
         self._configure_chat_default_buttons()
+        QTimer.singleShot(0, self._refresh_body_splitter_sizes)
         self._focus_chat_input()
+
+    def _refresh_body_splitter_sizes(self) -> None:
+        self._body_splitter.refresh_sizes()
+
+    def _on_body_section_visibility_changed(self, opened_index: int | None = None) -> None:
+        self._body_splitter.rebalance_on_visibility_change(opened_index)
+        QTimer.singleShot(0, self._refresh_body_splitter_sizes)
 
     def _capture_session_config(self) -> None:
         config = load_config()
@@ -388,7 +460,8 @@ class ChatWindow(QWidget):
     def _apply_static_texts(self) -> None:
         config = load_config()
         self.setWindowTitle(tr("chat.title", config=config))
-        self.context_checkbox.setText(tr("chat.include_context", config=config))
+        self.context_checkbox.setText(tr("chat.include_context.short", config=config))
+        self.context_checkbox.setToolTip(tr("chat.include_context", config=config))
         self.edit_wrapper_checkbox.setText(tr("chat.edit_wrapper", config=config))
         self.edit_templates_checkbox.setText(tr("chat.edit_templates", config=config))
         self._update_wrapper_static_texts(config)
@@ -442,6 +515,13 @@ class ChatWindow(QWidget):
         self._note_preview_window.raise_()
         self._note_preview_window.activateWindow()
 
+    def _on_note_preview_content_visibility_changed(self, visible: bool) -> None:
+        self._on_body_section_visibility_changed(0 if visible else None)
+
+    def _toggle_note_preview_visibility(self) -> None:
+        panel = self.note_preview_panel
+        panel.set_content_visible(not panel.content_visible())
+
     def _on_context_checkbox_toggled(self, checked: bool) -> None:
         if not checked and self.note_preview_panel.has_content():
             self.note_preview_panel.set_content_visible(False)
@@ -450,6 +530,7 @@ class ChatWindow(QWidget):
         super().resizeEvent(event)
         if self._imported_fields:
             QTimer.singleShot(0, self.note_preview_panel.reflow)
+        QTimer.singleShot(0, self._refresh_body_splitter_sizes)
 
     def apply_theme(self) -> None:
         self._apply_chat_theme()
@@ -611,6 +692,7 @@ class ChatWindow(QWidget):
         self.edit_templates_checkbox.setEnabled(False)
         self.templates_edit_panel.clear()
         self.note_preview_panel.clear()
+        self._on_body_section_visibility_changed()
         self._close_note_preview_window()
         self.btn_note_preview.setEnabled(False)
         self._add_system_message(
@@ -670,6 +752,7 @@ class ChatWindow(QWidget):
 
         self.note_preview_panel.set_fields(imported_fields)
         self.btn_note_preview.setEnabled(True)
+        self._on_body_section_visibility_changed(0)
 
         self.input_field.setPlainText(effective_brain_import_message(config))
         self.input_field.setFocus()
@@ -785,9 +868,11 @@ class ChatWindow(QWidget):
         if checked:
             self._sync_templates_from_panel()
             self.templates_edit_panel.setVisible(True)
+            self._on_body_section_visibility_changed(3)
             return
         self._sync_templates_from_panel()
         self.templates_edit_panel.setVisible(False)
+        self._on_body_section_visibility_changed()
 
     def _collapse_templates_panel(self) -> None:
         if not self.edit_templates_checkbox.isChecked():
@@ -800,11 +885,13 @@ class ChatWindow(QWidget):
             self._wrapper_warning_dismissed.clear()
             self._populate_wrapper_editor()
             self._wrapper_panel.setVisible(True)
+            self._on_body_section_visibility_changed(2)
             self.context_edit_wrapper_input.setFocus()
             return
         wrapper_text = self.context_edit_wrapper_input.toPlainText()
         self._context_wrapper_template = wrapper_text if wrapper_text.strip() else None
         self._wrapper_panel.setVisible(False)
+        self._on_body_section_visibility_changed()
 
     def _collapse_wrapper_panel(self) -> None:
         if not self.edit_wrapper_checkbox.isChecked():

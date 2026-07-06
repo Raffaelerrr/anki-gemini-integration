@@ -22,15 +22,10 @@ from .theme import (
     apply_native_text_edit_surface_theme,
     field_name_label_html,
 )
-from .visibility_icons import VisibilityToggleButton, style_scrollbar_extent
 from .widgets import ScrollAwareTextEdit, _qt_widget_alive, bind_text_edit_auto_height
 
 _LABEL_EDITOR_SPACING = 2
 _FIELD_BLOCK_SPACING = 8
-_MAX_SCROLL_HEIGHT = 220
-_TOGGLE_BTN_SIZE = 28
-_TOGGLE_ROW_PAD_TOP = 2
-_TOGGLE_GAP_ABOVE = 6
 _FIELD_EDITOR_MIN_HEIGHT = 56
 
 
@@ -48,43 +43,23 @@ class NotePreviewPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.on_fields_changed: Callable[[], None] | None = None
+        self.on_content_visibility_changed: Callable[[bool], None] | None = None
         self._field_editors: list[tuple[str, ScrollAwareTextEdit]] = []
         self._field_labels: list[tuple[str, QLabel]] = []
+        self._visibility_toggle: QWidget | None = None
 
         self.setObjectName("nativeFieldsPanel")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 4)
-        layout.setSpacing(_TOGGLE_GAP_ABOVE)
-
-        self._toggle_row = QWidget(self)
-        self._toggle_row.setFixedHeight(_TOGGLE_BTN_SIZE + _TOGGLE_ROW_PAD_TOP)
-        self._toggle_layout = QHBoxLayout(self._toggle_row)
-        self._toggle_layout.setContentsMargins(0, _TOGGLE_ROW_PAD_TOP, 0, 0)
-        self._toggle_layout.setSpacing(0)
-        self._toggle_layout.addStretch(1)
-
-        self._toggle_btn = VisibilityToggleButton(
-            self._toggle_row,
-            size=_TOGGLE_BTN_SIZE,
-            on_click=self._toggle_content_visibility,
-        )
-        self._toggle_layout.addWidget(self._toggle_btn)
-
-        self._scrollbar_spacer = QWidget(self._toggle_row)
-        self._scrollbar_spacer.setFixedWidth(0)
-        self._scrollbar_spacer.setSizePolicy(
-            QSizePolicy.Policy.Fixed,
-            QSizePolicy.Policy.Preferred,
-        )
-        self._toggle_layout.addWidget(self._scrollbar_spacer)
-        self._toggle_row.hide()
-        layout.addWidget(self._toggle_row)
+        layout.setSpacing(0)
 
         self._scroll = QScrollArea(self)
         self._scroll.setWidgetResizable(True)
-        self._scroll.setMinimumHeight(0)
-        self._scroll.setMaximumHeight(_MAX_SCROLL_HEIGHT)
-        self._scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self._scroll.setMinimumHeight(56)
+        self._scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
 
         self._host = QWidget(self._scroll)
         self._host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -96,24 +71,26 @@ class NotePreviewPanel(QWidget):
         self._host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         self._scroll.setWidget(self._host)
 
-        layout.addWidget(self._scroll)
+        layout.addWidget(self._scroll, 1)
 
-        bar = self._scroll.verticalScrollBar()
-        if bar is not None:
-            bar.rangeChanged.connect(self._sync_toggle_row_inset)
-
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self.setMinimumHeight(56)
         self._content_visible = True
         self._has_content = False
-        self._last_visible_scrollbar_gutter = 0
 
         apply_native_fields_scroll_theme(self, self._scroll)
         self.setVisible(False)
 
+    def bind_visibility_toggle(self, button: QWidget) -> None:
+        self._visibility_toggle = button
+
+    def content_visible(self) -> bool:
+        return self._content_visible
+
     def apply_theme(self) -> None:
         apply_native_fields_scroll_theme(self, self._scroll)
-        if self._has_content:
-            self._toggle_btn.update()
+        if self._has_content and self._visibility_toggle is not None:
+            self._visibility_toggle.update()
         for name, label in self._field_labels:
             label.setText(field_name_label_html(name))
         for _, editor in self._field_editors:
@@ -129,9 +106,8 @@ class NotePreviewPanel(QWidget):
         self._field_labels.clear()
         self._has_content = False
         self._content_visible = True
-        self._last_visible_scrollbar_gutter = 0
         self._scroll.show()
-        self._toggle_row.hide()
+        self._hide_visibility_toggle()
         self.setVisible(False)
 
     def get_fields(self) -> list[tuple[str, str]]:
@@ -146,9 +122,6 @@ class NotePreviewPanel(QWidget):
             self.clear()
             return
 
-        self._last_visible_scrollbar_gutter = 0
-        self._scrollbar_spacer.setFixedWidth(0)
-        self._toggle_row.hide()
         self._content_visible = True
         self._scroll.show()
 
@@ -183,24 +156,30 @@ class NotePreviewPanel(QWidget):
         self._has_content = True
         self._update_toggle_button()
         self.setVisible(True)
-        QTimer.singleShot(0, self._reveal_toggle_row)
+        QTimer.singleShot(0, self._reveal_visibility_toggle)
         QTimer.singleShot(0, self.reflow)
         QTimer.singleShot(100, self.reflow)
 
-    def _reveal_toggle_row(self) -> None:
+    def _reveal_visibility_toggle(self) -> None:
         if not _qt_widget_alive(self) or not self._has_content:
             return
         self._reflow_field_heights()
-        self._sync_toggle_row_inset()
-        self._toggle_row.show()
-        self._sync_panel_height()
+        self._show_visibility_toggle()
+        self.updateGeometry()
+
+    def _show_visibility_toggle(self) -> None:
+        if self._visibility_toggle is not None:
+            self._visibility_toggle.show()
+
+    def _hide_visibility_toggle(self) -> None:
+        if self._visibility_toggle is not None:
+            self._visibility_toggle.hide()
 
     def reflow(self) -> None:
         self._reflow_field_heights()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._sync_toggle_row_inset()
         if self._has_content and self._content_visible:
             QTimer.singleShot(0, self.reflow)
 
@@ -216,101 +195,39 @@ class NotePreviewPanel(QWidget):
         if not self._has_content or self._content_visible == visible:
             return
         self._content_visible = visible
-        self._scroll.setVisible(self._content_visible)
+        if self._content_visible:
+            self.setMinimumHeight(56)
+            self._scroll.show()
+            self.setVisible(True)
+        else:
+            self._scroll.hide()
+            self.setMinimumHeight(0)
+            self.setVisible(False)
         self._update_toggle_button()
-        self._sync_toggle_row_inset()
         if self._content_visible:
             QTimer.singleShot(0, self.reflow)
-        else:
-            self._sync_panel_height()
         self.updateGeometry()
+        if self.on_content_visibility_changed is not None:
+            self.on_content_visibility_changed(self._content_visible)
 
     def has_content(self) -> bool:
         return self._has_content
 
-    def _live_scrollbar_gutter(self) -> int:
-        bar = self._scroll.verticalScrollBar()
-        if bar is None or bar.maximum() <= 0:
-            return 0
-        for candidate in (bar.width(), bar.sizeHint().width(), style_scrollbar_extent()):
-            if candidate > 0:
-                return candidate
-        return 0
-
-    def _scrollbar_reserve_width(self) -> int:
-        if not self._has_content:
-            return 0
-        if self._content_visible and self._scroll.isVisible():
-            gutter = self._live_scrollbar_gutter()
-            self._last_visible_scrollbar_gutter = gutter
-            return gutter
-        return self._last_visible_scrollbar_gutter
-
-    def _sync_toggle_row_inset(self) -> None:
-        if not _qt_widget_alive(self._scrollbar_spacer):
-            return
-        width = self._scrollbar_reserve_width()
-        if self._scrollbar_spacer.width() != width:
-            self._scrollbar_spacer.setFixedWidth(width)
-
     def _update_toggle_button(self, config: dict[str, Any] | None = None) -> None:
+        if self._visibility_toggle is None:
+            return
         config = config or load_config()
-        self._toggle_btn.set_content_visible(self._content_visible)
+        set_visible = getattr(self._visibility_toggle, "set_content_visible", None)
+        if callable(set_visible):
+            set_visible(self._content_visible)
         if self._content_visible:
-            self._toggle_btn.setToolTip(tr("chat.preview.hide_imported_note", config=config))
+            self._visibility_toggle.setToolTip(
+                tr("chat.preview.hide_imported_note", config=config)
+            )
         else:
-            self._toggle_btn.setToolTip(tr("chat.preview.show_imported_note", config=config))
-
-    def _content_height(self) -> int:
-        margins = self._fields_layout.contentsMargins()
-        total = margins.top() + margins.bottom()
-        for index in range(self._fields_layout.count()):
-            item = self._fields_layout.itemAt(index)
-            if item is None:
-                continue
-            widget = item.widget()
-            if widget is not None:
-                total += widget.height()
-        return total
-
-    def _sync_scroll_height(self) -> None:
-        if not _qt_widget_alive(self) or not self._has_content or not self._content_visible:
-            return
-        content_h = self._content_height()
-        if content_h <= 0:
-            hint = self._fields_layout.sizeHint().height()
-            margins = self._fields_layout.contentsMargins()
-            content_h = hint + margins.top() + margins.bottom()
-        target = min(max(content_h + 2, 1), _MAX_SCROLL_HEIGHT)
-        if self._scroll.height() != target:
-            self._scroll.setFixedHeight(target)
-        self._sync_toggle_row_inset()
-        self._sync_panel_height()
-
-    def _panel_content_height(self) -> int:
-        layout = self.layout()
-        if layout is None:
-            return 0
-        margins = layout.contentsMargins()
-        total = margins.top() + margins.bottom()
-        if self._toggle_row.isVisible():
-            total += self._toggle_row.height()
-        if self._scroll.isVisible():
-            if self._toggle_row.isVisible():
-                total += layout.spacing()
-            total += self._scroll.height()
-        return total
-
-    def _sync_panel_height(self) -> None:
-        if not _qt_widget_alive(self) or not self._has_content or not self.isVisible():
-            return
-        target = self._panel_content_height()
-        if self.height() != target:
-            self.setFixedHeight(target)
-        self.updateGeometry()
-        parent = self.parentWidget()
-        if parent is not None:
-            parent.updateGeometry()
+            self._visibility_toggle.setToolTip(
+                tr("chat.preview.show_imported_note", config=config)
+            )
 
     def _reflow_field_heights(self) -> None:
         if not _qt_widget_alive(self):
@@ -321,4 +238,4 @@ class NotePreviewPanel(QWidget):
             adjust = getattr(editor, "_auto_height_adjust", None)
             if adjust is not None:
                 adjust()
-        self._sync_scroll_height()
+        self.updateGeometry()
