@@ -352,7 +352,17 @@ class TestI18n(unittest.TestCase):
         en = {"language": "en"}
         it = {"language": "it"}
         self.assertEqual(self.i18n.tr("chat.edit_wrapper", config=en), "Edit wrapper")
+        self.assertEqual(self.i18n.tr("chat.edit_wrapper.short", config=en), "📝 wrapper")
         self.assertEqual(self.i18n.tr("chat.edit_wrapper", config=it), "Modifica wrapper")
+        self.assertEqual(self.i18n.tr("chat.edit_templates.short", config=en), "📝 templates")
+        self.assertEqual(
+            self.i18n.tr("chat.edit_wrapper.tooltip", config=en),
+            "Edit wrapper",
+        )
+        self.assertEqual(
+            self.i18n.tr("chat.edit_templates.tooltip", config=en),
+            "Edit templates",
+        )
         self.assertEqual(
             self.i18n.tr("chat.edit_context", config=en),
             self.i18n.tr("chat.edit_wrapper", config=en),

@@ -367,6 +367,65 @@ QPushButton {
 """
 
 
+def tooltip_stylesheet(*, colors: ThemeColors | None = None) -> str:
+    palette = colors or get_theme_colors()
+    return f"""
+QToolTip {{
+    color: {palette.text};
+    background-color: {palette.chat_surface_bg};
+    border: 1px solid {palette.border};
+    padding: 4px 6px;
+}}
+"""
+
+
+_ACTIVE_TOOLTIP_POPUP: QWidget | None = None
+
+
+def apply_widget_tooltip_palette(widget: QWidget) -> None:
+    palette = get_theme_colors()
+    widget_palette = widget.palette()
+    widget_palette.setColor(QPalette.ColorRole.ToolTipText, QColor(palette.text))
+    widget_palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(palette.chat_surface_bg))
+    widget.setPalette(widget_palette)
+
+
+def show_themed_tooltip(widget: QWidget, global_pos) -> None:
+    from aqt.qt import QLabel, QPoint, Qt
+
+    global _ACTIVE_TOOLTIP_POPUP
+    hide_themed_tooltip()
+
+    text = (widget.toolTip() or "").strip()
+    if not text:
+        return
+
+    colors = get_theme_colors()
+    popup = QLabel(text)
+    popup.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+    popup.setStyleSheet(
+        "QLabel {"
+        f" color: {colors.text};"
+        f" background-color: {colors.chat_surface_bg};"
+        f" border: 1px solid {colors.border};"
+        " padding: 4px 8px;"
+        " }"
+    )
+    popup.adjustSize()
+    popup.move(global_pos + QPoint(0, 12))
+    popup.show()
+    _ACTIVE_TOOLTIP_POPUP = popup
+
+
+def hide_themed_tooltip() -> None:
+    global _ACTIVE_TOOLTIP_POPUP
+    if _ACTIVE_TOOLTIP_POPUP is None:
+        return
+    _ACTIVE_TOOLTIP_POPUP.close()
+    _ACTIVE_TOOLTIP_POPUP.deleteLater()
+    _ACTIVE_TOOLTIP_POPUP = None
+
+
 def visibility_toggle_button_stylesheet(*, size: int = 26, icon_size: int = 14) -> str:
     radius = size // 2
     inner = max(1, size - 2)

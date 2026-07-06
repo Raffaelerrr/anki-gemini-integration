@@ -216,6 +216,9 @@ class NotePreviewPanel(QWidget):
     def _update_toggle_button(self, config: dict[str, Any] | None = None) -> None:
         if self._visibility_toggle is None:
             return
+        from .theme import apply_widget_tooltip_palette
+
+        apply_widget_tooltip_palette(self._visibility_toggle)
         config = config or load_config()
         set_visible = getattr(self._visibility_toggle, "set_content_visible", None)
         if callable(set_visible):

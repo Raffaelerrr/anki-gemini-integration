@@ -136,10 +136,29 @@ class VisibilityToggleButton(QWidget):
         self._content_visible = True
         self._on_click = on_click
         self._size = size
+        self._tooltip_text = ""
         self.setFixedSize(size, size)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet("background: transparent; border: none; margin: 0px;")
+
+    def setToolTip(self, text: str) -> None:
+        self._tooltip_text = text or ""
+
+    def toolTip(self) -> str:
+        return self._tooltip_text
+
+    def enterEvent(self, event) -> None:
+        from .theme import show_themed_tooltip
+        from .widgets import _event_global_pos
+
+        show_themed_tooltip(self, _event_global_pos(event))
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        from .theme import hide_themed_tooltip
+
+        hide_themed_tooltip()
+        super().leaveEvent(event)
 
     def set_content_visible(self, visible: bool) -> None:
         if self._content_visible != visible:

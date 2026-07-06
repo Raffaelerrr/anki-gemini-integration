@@ -1151,6 +1151,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Modifica wrapper",
         "en": "Edit wrapper",
     },
+    "chat.edit_wrapper.short": {
+        "it": "📝 wrapper",
+        "en": "📝 wrapper",
+    },
+    "chat.edit_wrapper.tooltip": {
+        "it": "Modifica wrapper",
+        "en": "Edit wrapper",
+    },
     "chat.edit_wrapper.wrapper_label": {
         "it": "Testo wrapper ({{context}}, {{request}}; espanso per le opzioni import correnti):",
         "en": "Wrapper text ({{context}}, {{request}}; expanded for current import options):",
@@ -1206,6 +1214,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
     },
     "chat.edit_templates": {
+        "it": "Modifica template",
+        "en": "Edit templates",
+    },
+    "chat.edit_templates.short": {
+        "it": "📝 template",
+        "en": "📝 templates",
+    },
+    "chat.edit_templates.tooltip": {
         "it": "Modifica template",
         "en": "Edit templates",
     },
@@ -1282,6 +1298,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "chat.new_conversation": {
         "it": "Nuova conversazione",
         "en": "New conversation",
+    },
+    "chat.new_conversation.short": {
+        "it": "Nuova conv.",
+        "en": "New convo",
     },
     "chat.log_placeholder": {
         "it": "La conversazione apparirà qui...",

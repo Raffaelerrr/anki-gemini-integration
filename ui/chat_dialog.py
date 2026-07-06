@@ -84,12 +84,15 @@ from .templates_edit_panel import TemplatesEditPanel
 from .visibility_icons import VisibilityToggleButton
 from .settings_compact_controls import create_ui_text_edit
 from .theme import (
+    apply_widget_tooltip_palette,
     chat_document_stylesheet,
+    info_button_stylesheet,
     loading_label_stylesheet,
     muted_hint_html,
     refresh_native_text_edits_in,
     strong_label_html,
     settings_stale_banner_stylesheet,
+    tooltip_stylesheet,
 )
 
 def _format_note_context(fields: list[tuple[str, str]], config: dict[str, Any]) -> str:
@@ -164,6 +167,10 @@ class ChatWindow(QWidget):
             QSizePolicy.Policy.Fixed,
         )
         self.edit_wrapper_checkbox.toggled.connect(self._on_edit_wrapper_toggled)
+        self.edit_wrapper_checkbox.setAttribute(
+            Qt.WidgetAttribute.WA_AlwaysShowToolTips,
+            True,
+        )
         toolbar.addWidget(self.edit_wrapper_checkbox)
 
         self.edit_templates_checkbox = QCheckBox(self)
@@ -174,6 +181,10 @@ class ChatWindow(QWidget):
             QSizePolicy.Policy.Fixed,
         )
         self.edit_templates_checkbox.toggled.connect(self._on_edit_templates_toggled)
+        self.edit_templates_checkbox.setAttribute(
+            Qt.WidgetAttribute.WA_AlwaysShowToolTips,
+            True,
+        )
         toolbar.addWidget(self.edit_templates_checkbox)
 
         self.btn_note_preview = QPushButton(self)
@@ -187,6 +198,11 @@ class ChatWindow(QWidget):
 
         self.btn_inspect_prompt = QPushButton(self)
         self.btn_inspect_prompt.setVisible(False)
+        self.btn_inspect_prompt.setFixedSize(28, 28)
+        self.btn_inspect_prompt.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
         self.btn_inspect_prompt.setToolTip(tr("chat.inspect_prompt.tooltip"))
         self.btn_inspect_prompt.clicked.connect(self._open_prompt_inspection)
         toolbar.addWidget(self.btn_inspect_prompt)
@@ -445,11 +461,14 @@ class ChatWindow(QWidget):
             self._prompt_inspection_window.refresh()
 
     def _apply_chat_theme(self) -> None:
+        self.setStyleSheet(tooltip_stylesheet())
+        apply_widget_tooltip_palette(self.note_visibility_toggle)
         if not self._uses_web_chat_log:
             self.chat_log.document().setDefaultStyleSheet(chat_document_stylesheet())
         self.loading_label.setStyleSheet(loading_label_stylesheet())
         self.context_edit_wrapper_warning_banner.setStyleSheet(settings_stale_banner_stylesheet())
         self._settings_stale_banner.setStyleSheet(settings_stale_banner_stylesheet())
+        self.btn_inspect_prompt.setStyleSheet(info_button_stylesheet())
         self.note_preview_panel.apply_theme()
         self.templates_edit_panel.apply_theme()
         if self._note_preview_window is not None:
@@ -462,13 +481,16 @@ class ChatWindow(QWidget):
         self.setWindowTitle(tr("chat.title", config=config))
         self.context_checkbox.setText(tr("chat.include_context.short", config=config))
         self.context_checkbox.setToolTip(tr("chat.include_context", config=config))
-        self.edit_wrapper_checkbox.setText(tr("chat.edit_wrapper", config=config))
-        self.edit_templates_checkbox.setText(tr("chat.edit_templates", config=config))
+        self.edit_wrapper_checkbox.setText(tr("chat.edit_wrapper.short", config=config))
+        self.edit_wrapper_checkbox.setToolTip(tr("chat.edit_wrapper.tooltip", config=config))
+        self.edit_templates_checkbox.setText(tr("chat.edit_templates.short", config=config))
+        self.edit_templates_checkbox.setToolTip(tr("chat.edit_templates.tooltip", config=config))
         self._update_wrapper_static_texts(config)
         self.note_preview_panel.apply_language(config)
         self.btn_note_preview.setText(tr("chat.preview.open_window", config=config))
         self.btn_note_preview.setToolTip(tr("chat.preview.open_window.tooltip", config=config))
-        self.btn_clear.setText(tr("chat.new_conversation", config=config))
+        self.btn_clear.setText(tr("chat.new_conversation.short", config=config))
+        self.btn_clear.setToolTip(tr("chat.new_conversation", config=config))
         self.btn_inspect_prompt.setText(tr("chat.inspect_prompt", config=config))
         self.btn_inspect_prompt.setToolTip(tr("chat.inspect_prompt.tooltip", config=config))
         self._settings_stale_banner_close.setText(tr("chat.settings_stale.dismiss", config=config))
