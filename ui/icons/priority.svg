@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Generator: Adobe Illustrator 13.0.0, SVG Export Plug-In . SVG Version: 6.00 Build 14948)  -->
+<svg
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    xmlns="http://www.w3.org/2000/svg"
+    xmlns:cc="http://web.resource.org/cc/"
+    xmlns:xlink="http://www.w3.org/1999/xlink"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:svg="http://www.w3.org/2000/svg"
+    xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+    xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+    xmlns:ns1="http://sozi.baierouge.fr"
+    id="Layer_1"
+    enable-background="new 0 0 59.053 59.054"
+    xml:space="preserve"
+    viewBox="0 0 59.053 59.054"
+    version="1.1"
+    y="0px"
+    x="0px"
+  >
+<rect
+      transform="matrix(.7071 -.7071 .7071 .7071 -12.231 29.527)"
+      height="40.757"
+      width="40.756"
+      stroke="#000000"
+      y="9.149"
+      x="9.148"
+      fill="#FFFFFF"
+  />
+<rect
+      transform="matrix(.7071 -.7071 .7071 .7071 -12.49 29.709)"
+      height="27.407"
+      width="27.406"
+      stroke="#000000"
+      y="16.228"
+      x="15.914"
+      fill="#FFFF00"
+  />
+<metadata
+    ><rdf:RDF
+      ><cc:Work
+        ><dc:format
+          >image/svg+xml</dc:format
+        ><dc:type
+            rdf:resource="http://purl.org/dc/dcmitype/StillImage"
+        /><cc:license
+            rdf:resource="http://creativecommons.org/licenses/publicdomain/"
+        /><dc:publisher
+          ><cc:Agent
+              rdf:about="http://openclipart.org/"
+            ><dc:title
+              >Openclipart</dc:title
+            ></cc:Agent
+          ></dc:publisher
+        ><dc:title
+          >Priority Road Traffic Sign</dc:title
+        ><dc:date
+          >2009-03-25T16:57:09</dc:date
+        ><dc:description
+          >Traffic sign for a priority road, used in some parts of Eastern Europe.</dc:description
+        ><dc:source
+          >https://openclipart.org/detail/23325/priority-road-traffic-sign-by-mokush</dc:source
+        ><dc:creator
+          ><cc:Agent
+            ><dc:title
+              >mokush</dc:title
+            ></cc:Agent
+          ></dc:creator
+        ><dc:subject
+          ><rdf:Bag
+            ><rdf:li
+              >indicator</rdf:li
+            ><rdf:li
+              >priority</rdf:li
+            ><rdf:li
+              >priority road</rdf:li
+            ><rdf:li
+              >road</rdf:li
+            ><rdf:li
+              >road indicator</rdf:li
+            ><rdf:li
+              >road sign</rdf:li
+            ><rdf:li
+              >traffic</rdf:li
+            ><rdf:li
+              >traffic sign</rdf:li
+            ></rdf:Bag
+          ></dc:subject
+        ></cc:Work
+      ><cc:License
+          rdf:about="http://creativecommons.org/licenses/publicdomain/"
+        ><cc:permits
+            rdf:resource="http://creativecommons.org/ns#Reproduction"
+        /><cc:permits
+            rdf:resource="http://creativecommons.org/ns#Distribution"
+        /><cc:permits
+            rdf:resource="http://creativecommons.org/ns#DerivativeWorks"
+        /></cc:License
+      ></rdf:RDF
+    ></metadata
+  ></svg
+>

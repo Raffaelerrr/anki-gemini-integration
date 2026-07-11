@@ -110,11 +110,28 @@ Automated tests cannot click editor buttons or verify scroll behavior. After UI 
 
 ### Chat (after import / preview changes)
 
-1. Open a note → **🧠** — fields appear in the preview above the chat; edit a field and send with **Include note context** checked.
+1. Open a note → **brain icon** — fields appear in the preview above the chat; edit a field and send with **Include note context** checked.
 2. **Edit wrapper** — wrapper editor appears; invalid placeholders show a warning; uncheck saves the template for the session.
 3. Eye icon — hides/shows the preview without losing edits.
 4. Switch Anki **light/dark** theme — preview labels, text areas, and eye icon remain readable.
 5. Switch add-on language **EN/IT** — checkbox labels, tooltips, and wrapper hints update.
+
+---
+
+## 5. Dev playground (local UI testing, no billing)
+
+**Tools → Anki AI: Dev playground** turns on **dev mock mode**. While active:
+
+- Chat and optimize use fake replies (streaming included).
+- Prompt caches are created in memory only — no Google HTTP calls.
+- Model refresh returns the built-in model list.
+- No API key is required.
+
+Use this to exercise cache-created notices, recreate dialogs, chat import, optimize preview, etc. as often as you like.
+
+Click **Reset mock state** to clear mock remote caches and local cache tracking without touching your real Google caches (when mock mode is off again).
+
+Setting is stored in add-on config as `dev_mock_mode`. Turn it **off** before relying on real Gemini responses.
 
 ---
 

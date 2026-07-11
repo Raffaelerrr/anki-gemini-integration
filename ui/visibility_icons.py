@@ -12,6 +12,8 @@ from aqt.qt import (
     QWidget,
 )
 
+from .theme import ICON_BUTTON_SIZE
+
 _ICONS_DIR = Path(__file__).resolve().parent / "icons"
 _EYE_SVG = "eye.svg"
 _BARRED_EYE_SVG = "barred_eye.svg"
@@ -129,7 +131,7 @@ class VisibilityToggleButton(QWidget):
         self,
         parent: QWidget | None = None,
         *,
-        size: int = 28,
+        size: int = ICON_BUTTON_SIZE,
         on_click=None,
     ) -> None:
         super().__init__(parent)

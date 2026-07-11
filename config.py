@@ -19,7 +19,26 @@ ADDON_MODULE = os.path.basename(ADDON_DIR)
 LEGACY_CONFIG_PATH = os.path.join(ADDON_DIR, "config_gemini.json")
 META_CONFIG_PATH = os.path.join(ADDON_DIR, "meta.json")
 
+CONFIG_VERSION = 2
+
+_OBSOLETE_CONFIG_KEYS: tuple[str, ...] = (
+    "thinking_budget",
+    "model",
+    "chat_token_warning_threshold",
+    "chat_prompt_inspection",
+    "prompt_cache_recreate_confirm_usd",
+    "prompt_cache_min_tokens",
+)
+
+_WRAPPER_RESET_KEYS: tuple[str, ...] = (
+    "prompt_chat_context",
+    "prompt_chat_context_order",
+    "prompt_chat_context_sections",
+    "prompt_card_templates_format",
+)
+
 DEFAULT_CONFIG: dict[str, Any] = {
+    "config_version": CONFIG_VERSION,
     "language": DEFAULT_LANGUAGE,
     "api_key": "",
     "system_instruction": "",
@@ -32,6 +51,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "thinking_budget_optimize": DEFAULT_THINKING_BUDGET_OPTIMIZE,
     "thinking_budget_chat": DEFAULT_THINKING_BUDGET_CHAT,
     "chat_streaming": True,
+    "settings_show_text_newlines": False,
     "temperature_optimize": 0.1,
     "temperature_chat": 0.2,
     "timeout_seconds": 30,
@@ -41,19 +61,47 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "brain_import_message": "",
     "brain_import_templates": False,
     "brain_import_css": False,
-    "chat_prompt_inspection": False,
-    "chat_token_warning_threshold": 3000,
+    "chat_payload_warning_chars": 12000,
     "prompt_optimize_user": "",
     "prompt_chat_addon": "",
     "prompt_dynamic_rules_prefix": "",
     "prompt_chat_context": "",
+    "prompt_chat_context_order": [
+        "context",
+        "format_guide",
+        "templates",
+        "styling",
+        "request",
+    ],
+    "prompt_chat_context_sections": {},
     "prompt_card_templates_format": "",
     "mathjax_preview_preamble": "",
+    "prompt_cache_enabled": False,
+    "prompt_cache_ttl_seconds": 3600,
+    "prompt_cache_min_chars": 8189,
+    "prompt_cache_custom_text": "",
+    "prompt_cache_segments": dict(
+        {
+            "system_instruction": True,
+            "dynamic_rules": False,
+            "chat_system_addon": True,
+            "custom_cache_text": False,
+            "imported_note": False,
+            "card_templates_format_guide": False,
+            "card_templates": False,
+            "notetype_css": False,
+            "context_wrapper": False,
+        }
+    ),
+    "chat_send_empty_fields": False,
+    "chat_modify_prompt_before_send": False,
     "suppress_default_system_instruction_warning": False,
     "suppress_api_key_restore_warning": False,
     "suppress_settings_unsaved_close_warning": False,
     "suppress_settings_save_confirm_warning": True,
     "suppress_settings_cancel_confirm_warning": True,
+    "suppress_prompt_cache_created_optimize_notice": False,
+    "dev_mock_mode": False,
 }
 
 RESTORABLE_SETTING_KEYS: tuple[str, ...] = (
@@ -78,14 +126,20 @@ RESTORABLE_SETTING_KEYS: tuple[str, ...] = (
     "brain_import_message",
     "brain_import_templates",
     "brain_import_css",
-    "chat_prompt_inspection",
-    "chat_token_warning_threshold",
+    "chat_payload_warning_chars",
     "prompt_optimize_user",
     "prompt_chat_addon",
     "prompt_dynamic_rules_prefix",
     "prompt_chat_context",
+    "prompt_chat_context_order",
+    "prompt_chat_context_sections",
     "prompt_card_templates_format",
     "mathjax_preview_preamble",
+    "prompt_cache_enabled",
+    "prompt_cache_ttl_seconds",
+    "prompt_cache_min_chars",
+    "prompt_cache_custom_text",
+    "prompt_cache_segments",
 )
 
 # Maps config keys to existing settings label i18n keys for the restore list.
@@ -106,24 +160,28 @@ RESTORABLE_SETTING_LABELS: dict[str, str] = {
     "brain_import_message": "settings.brain_message",
     "brain_import_templates": "settings.brain_import_templates",
     "brain_import_css": "settings.brain_import_css",
-    "chat_prompt_inspection": "settings.chat_prompt_inspection",
-    "chat_token_warning_threshold": "settings.chat_token_warning_threshold",
+    "chat_payload_warning_chars": "settings.chat_payload_warning_chars",
     "prompt_optimize_user": "settings.prompt_optimize_user",
     "prompt_chat_addon": "settings.prompt_chat_addon",
     "prompt_dynamic_rules_prefix": "settings.prompt_dynamic_rules_prefix",
     "prompt_chat_context": "settings.prompt_chat_context",
+    "prompt_chat_context_order": "settings.prompt_chat_context",
+    "prompt_chat_context_sections": "settings.prompt_chat_context",
     "prompt_card_templates_format": "settings.prompt_card_templates_format",
     "mathjax_preview_preamble": "settings.mathjax_preview_preamble",
-    "system_instruction": "settings.system_instruction",
+    "prompt_cache_enabled": "settings.prompt_cache_enabled",
+    "prompt_cache_ttl_seconds": "settings.prompt_cache_ttl",
+    "prompt_cache_min_chars": "settings.prompt_cache_min_chars",
+    "prompt_cache_custom_text": "settings.prompt_cache_custom_text",
+    "prompt_cache_segments": "settings.prompt_cache_segments",
+    "system_instruction": "settings.restore_label.system_instruction",
     "system_instruction_shared": "settings.system_instruction_shared",
-    "system_instruction_optimize": "settings.system_instruction_optimize",
-    "system_instruction_chat": "settings.system_instruction_chat",
+    "system_instruction_optimize": "settings.restore_label.system_instruction_optimize",
+    "system_instruction_chat": "settings.restore_label.system_instruction_chat",
     "dynamic_instructions": "settings.dynamic_instructions",
 }
 
-SETTING_HELP_KEYS: dict[str, str] = {
-    key: f"settings.help.{key}" for key in RESTORABLE_SETTING_KEYS
-}
+SETTING_HELP_KEYS: dict[str, str] = {key: f"settings.help.{key}" for key in RESTORABLE_SETTING_KEYS}
 
 DISMISSIBLE_WARNING_KEYS: tuple[str, ...] = (
     "suppress_default_system_instruction_warning",
@@ -131,6 +189,7 @@ DISMISSIBLE_WARNING_KEYS: tuple[str, ...] = (
     "suppress_settings_unsaved_close_warning",
     "suppress_settings_save_confirm_warning",
     "suppress_settings_cancel_confirm_warning",
+    "suppress_prompt_cache_created_optimize_notice",
 )
 
 DISMISSIBLE_WARNING_LABELS: dict[str, str] = {
@@ -139,6 +198,7 @@ DISMISSIBLE_WARNING_LABELS: dict[str, str] = {
     "suppress_settings_unsaved_close_warning": "warnings.settings_unsaved_close",
     "suppress_settings_save_confirm_warning": "warnings.settings_save_confirm",
     "suppress_settings_cancel_confirm_warning": "warnings.settings_cancel_confirm",
+    "suppress_prompt_cache_created_optimize_notice": "warnings.prompt_cache_created_optimize",
 }
 
 
@@ -152,37 +212,35 @@ def _merge_defaults(config: dict[str, Any] | None) -> dict[str, Any]:
     stored = config or {}
     merged = dict(DEFAULT_CONFIG)
     merged.update(stored)
-    return _apply_config_migrations(merged, stored)
+    return _normalize_config(merged, stored)
 
 
-def _coerce_thinking_budget(raw: Any, default: int) -> int:
+def _stored_config_version(stored: dict[str, Any] | None) -> int:
     try:
-        return int(raw)
+        return int((stored or {}).get("config_version") or 0)
     except (TypeError, ValueError):
-        return default
+        return 0
 
 
-def _apply_config_migrations(config: dict[str, Any], stored: dict[str, Any] | None = None) -> dict[str, Any]:
+def _normalize_config(config: dict[str, Any], stored: dict[str, Any] | None = None) -> dict[str, Any]:
     stored = stored or {}
-    legacy_model = (config.get("model") or "").strip()
-    if legacy_model:
-        if not (stored.get("model_optimize") or "").strip():
-            config["model_optimize"] = legacy_model
-        if not (stored.get("model_chat") or "").strip():
-            config["model_chat"] = legacy_model
+    for key in _OBSOLETE_CONFIG_KEYS:
+        config.pop(key, None)
 
-    if "thinking_budget" in stored:
-        legacy_budget = stored["thinking_budget"]
-        if "thinking_budget_optimize" not in stored:
-            config["thinking_budget_optimize"] = _coerce_thinking_budget(
-                legacy_budget, DEFAULT_THINKING_BUDGET_OPTIMIZE
-            )
-        if "thinking_budget_chat" not in stored:
-            config["thinking_budget_chat"] = _coerce_thinking_budget(
-                legacy_budget, DEFAULT_THINKING_BUDGET_CHAT
-            )
+    if _stored_config_version(stored) < CONFIG_VERSION:
+        for key in _WRAPPER_RESET_KEYS:
+            config[key] = default_config_value(key)
+        config["config_version"] = CONFIG_VERSION
 
-    config.pop("thinking_budget", None)
+    config["prompt_chat_context"] = ""
+
+    if not isinstance(config.get("prompt_chat_context_sections"), dict):
+        config["prompt_chat_context_sections"] = {}
+    if not isinstance(config.get("prompt_chat_context_order"), list):
+        config["prompt_chat_context_order"] = list(
+            DEFAULT_CONFIG["prompt_chat_context_order"]
+        )
+
     return config
 
 
@@ -228,6 +286,9 @@ def load_config() -> dict[str, Any]:
         stored = _read_meta_config()
     config = _merge_defaults(stored)
 
+    if stored and _stored_config_version(stored) < CONFIG_VERSION:
+        save_config(config)
+
     if not stored.get("api_key") and (legacy := _migrate_legacy_config()):
         config = legacy
         save_config(config)
@@ -243,6 +304,10 @@ def save_config(config: dict[str, Any]) -> None:
 
 
 def api_key_configured(config: dict[str, Any]) -> bool:
+    from .dev_mock import is_dev_mock_enabled
+
+    if is_dev_mock_enabled(config):
+        return True
     key = (config.get("api_key") or "").strip()
     return bool(key) and "INSERISCI_QUI" not in key
 

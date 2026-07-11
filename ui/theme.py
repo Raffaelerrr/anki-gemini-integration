@@ -6,11 +6,16 @@ from dataclasses import dataclass
 from aqt.qt import (
     QColor,
     QFrame,
+    QIcon,
     QPalette,
+    QPlainTextEdit,
+    QPushButton,
     QScrollArea,
+    QSize,
     QSizePolicy,
     Qt,
     QTextEdit,
+    QToolButton,
     QWidget,
 )
 
@@ -147,7 +152,14 @@ def status_color_stylesheet(*, ok: bool, colors: ThemeColors | None = None) -> s
 
 def loading_label_stylesheet(*, colors: ThemeColors | None = None) -> str:
     palette = colors or get_theme_colors()
-    return f"color: {palette.msg_loading}; font-weight: bold; padding: 4px;"
+    return f"color: {palette.msg_loading}; font-weight: bold; padding: 4px 0px;"
+
+
+def wrapper_token_colors(*, colors: ThemeColors | None = None) -> tuple[str, str]:
+    palette = colors or get_theme_colors()
+    if is_night_mode():
+        return "#e5e7eb", "#111827"
+    return "#1f2933", "#f9fafb"
 
 
 def wrapper_warning_stylesheet(*, colors: ThemeColors | None = None) -> str:
@@ -158,6 +170,14 @@ def wrapper_warning_stylesheet(*, colors: ThemeColors | None = None) -> str:
         "font-size: 11px; font-weight: bold; "
         "padding: 4px 10px; border-radius: 4px;"
     )
+
+
+ICON_BUTTON_SIZE = 22
+ICON_BUTTON_ICON_SIZE = ICON_BUTTON_SIZE - 4
+ICON_BUTTON_PLAIN_ICON_SIZE = ICON_BUTTON_SIZE
+EMOJI_TOOLBAR_BUTTON_SIZE = ICON_BUTTON_SIZE + 2
+EMOJI_TOOLBAR_BUTTON_WIDTH = EMOJI_TOOLBAR_BUTTON_SIZE + 4
+ICON_BUTTON_FONT_SIZE = ICON_BUTTON_SIZE - 8
 
 
 def settings_stale_banner_stylesheet(*, colors: ThemeColors | None = None) -> str:
@@ -179,15 +199,15 @@ def settings_stale_banner_stylesheet(*, colors: ThemeColors | None = None) -> st
         f" QPushButton#settingsStaleBannerClose {{"
         " background: transparent;"
         f" color: {fg};"
-        " font-size: 16px;"
+        " font-size: 14px;"
         " font-weight: bold;"
         " border: none;"
-        " padding: 0px 0px 3px 0px;"
+        " padding: 0px 0px 2px 0px;"
         " margin: 6px 8px 6px 0px;"
-        " min-width: 28px;"
-        " max-width: 28px;"
-        " min-height: 28px;"
-        " max-height: 28px;"
+        f" min-width: {ICON_BUTTON_SIZE}px;"
+        f" max-width: {ICON_BUTTON_SIZE}px;"
+        f" min-height: {ICON_BUTTON_SIZE}px;"
+        f" max-height: {ICON_BUTTON_SIZE}px;"
         "}"
         " QPushButton#settingsStaleBannerClose:hover {"
         " background-color: rgba(0, 0, 0, 0.12);"
@@ -251,10 +271,18 @@ def scrollbar_stylesheet(
     return rules
 
 
-def apply_native_page_scroll_theme(scroll: QScrollArea) -> None:
-    """Page-level scroll areas: show both axes when content overflows."""
+def apply_native_page_scroll_theme(
+    scroll: QScrollArea,
+    *,
+    allow_horizontal_scroll: bool = True,
+) -> None:
+    """Page-level scroll areas: vertical scroll; horizontal optional."""
     palette = get_theme_colors()
-    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setHorizontalScrollBarPolicy(
+        Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        if allow_horizontal_scroll
+        else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
     scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     scroll.setStyleSheet(
         "QScrollArea { background: transparent; }"
@@ -262,11 +290,14 @@ def apply_native_page_scroll_theme(scroll: QScrollArea) -> None:
     )
 
 
-def apply_native_text_edit_surface_theme(editor: QTextEdit) -> None:
+def apply_native_text_edit_surface_theme(editor: QTextEdit | QPlainTextEdit) -> None:
     palette = get_theme_colors()
     surface = palette.chat_surface_bg
     surface_color = QColor(surface)
     text_color = QColor(palette.text)
+    is_plain = isinstance(editor, QPlainTextEdit)
+    auto_height = getattr(editor, "_auto_height_adjust", None) is not None
+    widget_name = "QPlainTextEdit" if is_plain else "QTextEdit"
     editor.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     editor.setAutoFillBackground(True)
     editor.setFrameShape(QFrame.Shape.NoFrame)
@@ -276,26 +307,37 @@ def apply_native_text_edit_surface_theme(editor: QTextEdit) -> None:
     epal.setColor(QPalette.ColorRole.Text, text_color)
     editor.setPalette(epal)
     editor.setStyleSheet(
-        "QTextEdit {"
+        f"{widget_name} {{"
         f" background-color: {surface};"
         f" color: {palette.text};"
         " border: 1px solid transparent;"
         " border-radius: 3px;"
         " padding: 4px;"
         "}"
-        "QTextEdit:focus {"
+        f"{widget_name}:focus {{"
         f" border: 1px solid {palette.link};"
         f" background-color: {surface};"
         "}"
         + scrollbar_stylesheet(track_bg=surface, colors=palette)
     )
-    editor.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
-    editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    if is_plain:
+        editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+    elif auto_height:
+        editor.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    else:
+        editor.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+    if not auto_height:
+        editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     editor.setMinimumWidth(0)
-    editor.setSizePolicy(
-        QSizePolicy.Policy.Expanding,
-        editor.sizePolicy().verticalPolicy(),
-    )
+    if auto_height:
+        editor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    else:
+        editor.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            editor.sizePolicy().verticalPolicy(),
+        )
     viewport = editor.viewport()
     if viewport is not None:
         viewport.setAutoFillBackground(True)
@@ -333,10 +375,6 @@ def apply_native_fields_scroll_theme(panel: QWidget, scroll: QScrollArea) -> Non
     )
 
 
-# Backward-compatible alias used by chat context panel.
-apply_context_fields_panel_theme = apply_native_fields_scroll_theme
-
-
 def _fields_scroll_inner_stylesheet(*, border: str | None, radius: int, palette) -> str:
     border_rule = ""
     if border is not None:
@@ -350,21 +388,190 @@ def _fields_scroll_inner_stylesheet(*, border: str | None, radius: int, palette)
     )
 
 
-def info_button_stylesheet() -> str:
-    return """
-QPushButton {
-    font-weight: bold;
-    font-family: "Segoe UI", sans-serif;
-    font-size: 13px;
-    min-width: 28px;
-    max-width: 28px;
-    min-height: 28px;
-    max-height: 28px;
-    padding: 0px;
-    border: 1px solid palette(mid);
-    border-radius: 14px;
-}
-"""
+def configure_circular_icon_button(
+    button: QPushButton | QToolButton,
+    *,
+    text: str | None = None,
+    icon: QIcon | None = None,
+    bordered: bool = True,
+    size: int | None = None,
+    width: int | None = None,
+) -> None:
+    button_size = size or ICON_BUTTON_SIZE
+    button_width = width or button_size
+    button.setFixedSize(button_width, button_size)
+    button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    button.setContentsMargins(0, 0, 0, 0)
+    has_icon = icon is not None and not icon.isNull()
+    if size is not None:
+        icon_dim = button_size - 4 if bordered else button_size
+    else:
+        icon_dim = ICON_BUTTON_ICON_SIZE if bordered else ICON_BUTTON_PLAIN_ICON_SIZE
+    icon_size = QSize(icon_dim, icon_dim)
+    if isinstance(button, QToolButton):
+        button.setAutoRaise(not bordered)
+        button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonIconOnly
+            if has_icon
+            else Qt.ToolButtonStyle.ToolButtonTextOnly
+        )
+    if has_icon:
+        button.setText("")
+        button.setIcon(icon)
+        button.setIconSize(icon_size)
+    elif text is not None:
+        button.setIcon(QIcon())
+        button.setText(text)
+    button.setStyleSheet(
+        info_button_stylesheet(
+            icon_only=has_icon,
+            bordered=bordered,
+            size=size,
+            width=width,
+        )
+    )
+
+
+def configure_checkable_circular_icon_button(
+    button: QPushButton | QToolButton,
+    *,
+    text: str | None = None,
+    icon: QIcon | None = None,
+    bordered: bool = True,
+    size: int | None = None,
+    width: int | None = None,
+    highlight_checked: bool = True,
+) -> None:
+    button.setCheckable(True)
+    has_icon = icon is not None and not icon.isNull()
+    configure_circular_icon_button(
+        button,
+        text=text,
+        icon=icon,
+        bordered=bordered,
+        size=size,
+        width=width,
+    )
+    button.setStyleSheet(
+        checkable_icon_button_stylesheet(
+            icon_only=has_icon,
+            bordered=bordered,
+            size=size,
+            width=width,
+            highlight_checked=highlight_checked,
+        )
+    )
+
+
+def checkable_icon_button_stylesheet(
+    *,
+    icon_only: bool = False,
+    bordered: bool = True,
+    size: int | None = None,
+    width: int | None = None,
+    highlight_checked: bool = True,
+) -> str:
+    base = info_button_stylesheet(
+        icon_only=icon_only,
+        bordered=bordered,
+        size=size,
+        width=width,
+    )
+    if not highlight_checked:
+        checked = (
+            "\nQPushButton:checked, QToolButton:checked,\n"
+            "QPushButton:focus, QToolButton:focus,\n"
+            "QPushButton:checked:focus, QToolButton:checked:focus {\n"
+            "    background: transparent;\n"
+            "    border: none;\n"
+            "    outline: none;\n"
+            "}\n"
+        )
+    elif bordered:
+        checked = (
+            "\nQPushButton:checked, QToolButton:checked {\n"
+            "    background: palette(highlight);\n"
+            "    border: 1px solid palette(highlight);\n"
+            "}\n"
+        )
+    else:
+        checked = (
+            "\nQPushButton:checked, QToolButton:checked {\n"
+            "    background: palette(highlight);\n"
+            "    border-radius: 4px;\n"
+            "}\n"
+        )
+    return base + checked
+
+
+def info_button_stylesheet(
+    *,
+    icon_only: bool = False,
+    bordered: bool = True,
+    size: int | None = None,
+    width: int | None = None,
+) -> str:
+    button_size = size or ICON_BUTTON_SIZE
+    button_width = width or button_size
+    radius = button_size // 2
+    if size is not None:
+        icon_dim = button_size - 4 if bordered else button_size
+    else:
+        icon_dim = ICON_BUTTON_ICON_SIZE if bordered else ICON_BUTTON_PLAIN_ICON_SIZE
+    if bordered:
+        chrome_rule = (
+            f"    border: 1px solid palette(mid);\n"
+            f"    border-radius: {radius}px;\n"
+        )
+        hover_rule = ""
+    else:
+        chrome_rule = (
+            "    border: none;\n"
+            "    background: transparent;\n"
+            "    border-radius: 4px;\n"
+        )
+        hover_rule = (
+            "\nQPushButton:hover, QToolButton:hover {\n"
+            "    background: palette(midlight);\n"
+            "}\n"
+        )
+    if icon_only:
+        icon_rule = (
+            f"    qproperty-iconSize: {icon_dim}px {icon_dim}px;\n"
+            "    padding: 0px;\n"
+        )
+        font_size = ICON_BUTTON_FONT_SIZE
+        font_weight = "bold"
+        text_rule = ""
+    else:
+        emoji_inset = 2
+        font_size = max(12, button_size - 10)
+        font_weight = "normal"
+        icon_rule = f"    padding: {emoji_inset}px;\n"
+        text_rule = "    line-height: 1;\n"
+    font_family = (
+        '"Segoe UI Emoji", "Segoe UI", sans-serif'
+        if not icon_only
+        else '"Segoe UI", sans-serif'
+    )
+    return f"""
+QPushButton, QToolButton {{
+    font-weight: {font_weight};
+    font-family: {font_family};
+    font-size: {font_size}px;
+    min-width: {button_width}px;
+    max-width: {button_width}px;
+    min-height: {button_size}px;
+    max-height: {button_size}px;
+    margin: 0px;
+{chrome_rule}{icon_rule}    text-align: center;
+{text_rule}}}
+QToolButton::menu-indicator {{
+    image: none;
+    width: 0px;
+    height: 0px;
+    subcontrol-position: right center;
+}}{hover_rule}"""
 
 
 def tooltip_stylesheet(*, colors: ThemeColors | None = None) -> str:
@@ -424,6 +631,84 @@ def hide_themed_tooltip() -> None:
     _ACTIVE_TOOLTIP_POPUP.close()
     _ACTIVE_TOOLTIP_POPUP.deleteLater()
     _ACTIVE_TOOLTIP_POPUP = None
+
+
+def chat_edit_menu_button_stylesheet() -> str:
+    return chat_toolbar_button_stylesheet(icon_only=False)
+
+
+def chat_toolbar_button_stylesheet(*, icon_only: bool = True, checkable: bool = False) -> str:
+    colors = get_theme_colors()
+    button_size = ICON_BUTTON_SIZE
+    radius = button_size // 2
+    icon_dim = ICON_BUTTON_ICON_SIZE if icon_only else button_size - 6
+    icon_pad = max(0, (button_size - icon_dim) // 2)
+    if icon_only:
+        icon_rule = (
+            f"    qproperty-iconSize: {icon_dim}px {icon_dim}px;\n"
+            f"    padding: {icon_pad}px;\n"
+        )
+        font_size = ICON_BUTTON_FONT_SIZE
+        font_weight = "bold"
+        text_rule = ""
+        font_family = '"Segoe UI", sans-serif'
+    else:
+        font_size = max(13, button_size - 8)
+        emoji_pad_top = max(0, (button_size - font_size) // 2 - 1)
+        emoji_pad_bottom = max(0, button_size - font_size - emoji_pad_top)
+        icon_rule = (
+            f"    padding-top: {emoji_pad_top}px;\n"
+            f"    padding-bottom: {emoji_pad_bottom}px;\n"
+            "    padding-left: 0px;\n"
+            "    padding-right: 0px;\n"
+        )
+        font_weight = "normal"
+        text_rule = f"    line-height: {font_size}px;\n"
+        font_family = '"Segoe UI Emoji", "Segoe UI", sans-serif'
+    hover_bg = "rgba(255, 255, 255, 0.12)" if is_night_mode() else "rgba(0, 0, 0, 0.06)"
+    base = f"""
+QPushButton, QToolButton {{
+    font-weight: {font_weight};
+    font-family: {font_family};
+    font-size: {font_size}px;
+    min-width: {button_size}px;
+    max-width: {button_size}px;
+    min-height: {button_size}px;
+    max-height: {button_size}px;
+    margin: 0px;
+    border: 1px solid {colors.text_muted};
+    border-radius: {radius}px;
+    background: {colors.panel_bg};
+    text-align: center;
+{icon_rule}{text_rule}}}
+QPushButton:hover, QToolButton:hover {{
+    background: {hover_bg};
+    border-color: {colors.text_strong};
+}}
+QPushButton:disabled, QToolButton:disabled {{
+    border-color: {colors.border};
+    background: transparent;
+    opacity: 0.45;
+}}
+QToolButton::menu-indicator {{
+    image: none;
+    width: 0px;
+    height: 0px;
+    subcontrol-position: right center;
+}}"""
+    if not checkable:
+        return base
+    return base + f"""
+QPushButton:checked, QToolButton:checked,
+QPushButton:checked:focus, QToolButton:checked:focus {{
+    background: {colors.panel_bg};
+    border: 1px solid {colors.text_muted};
+    outline: none;
+}}
+QPushButton:checked:hover, QToolButton:checked:hover {{
+    background: {hover_bg};
+    border-color: {colors.text_strong};
+}}"""
 
 
 def visibility_toggle_button_stylesheet(*, size: int = 26, icon_size: int = 14) -> str:
@@ -493,8 +778,22 @@ def chat_document_stylesheet(*, colors: ThemeColors | None = None) -> str:
 
 
 def refresh_native_text_edits_in(host: QWidget) -> None:
+    from aqt.qt import QTimer
+
+    from ..config import load_config
+    from .settings_compact_controls import apply_settings_text_edit_newlines
+
+    show_newlines = bool(load_config().get("settings_show_text_newlines", False))
     for editor in host.findChildren(QTextEdit):
         apply_native_text_edit_surface_theme(editor)
+        apply_settings_text_edit_newlines(editor, show=show_newlines)
+        editor.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        refresh_tokens = getattr(editor, "refresh_token_theme", None)
+        if refresh_tokens is not None:
+            refresh_tokens()
+        adjust = getattr(editor, "_auto_height_adjust", None)
+        if adjust is not None:
+            QTimer.singleShot(0, adjust)
 
 
 def refresh_addon_theme() -> None:

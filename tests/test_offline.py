@@ -82,9 +82,10 @@ class TestGeminiClient(unittest.TestCase):
         self.assertEqual(self.gc.resolve_model(config, "optimize"), "optimize-model")
         self.assertEqual(self.gc.resolve_model(config, "chat"), "chat-model")
 
-    def test_resolve_model_falls_back_to_legacy(self):
-        config = {"model": "legacy-model"}
-        self.assertEqual(self.gc.resolve_model(config, "optimize"), "legacy-model")
+    def test_resolve_model_uses_default_when_missing(self):
+        config: dict[str, str] = {}
+        self.assertEqual(self.gc.resolve_model(config, "optimize"), "gemini-2.5-flash-lite")
+        self.assertEqual(self.gc.resolve_model(config, "chat"), "gemini-2.5-flash")
 
     def test_build_generation_config_includes_thinking_budget(self):
         config = {"thinking_budget_optimize": 0, "thinking_budget_chat": -1}
@@ -133,7 +134,7 @@ class TestGeminiClient(unittest.TestCase):
             purpose="optimize",
         )
         system_text = payload["systemInstruction"]["parts"][0]["text"]
-        self.assertEqual(system_text, "Rules\nExtra rules:\nBe concise")
+        self.assertEqual(system_text, "Rules\n\nExtra rules:\nBe concise")
 
     def test_build_request_payload_chat_allows_explanations(self):
         config = {"system_instruction": "Rules", "language": "en", "thinking_budget_chat": -1}
@@ -179,6 +180,59 @@ class TestGeminiClient(unittest.TestCase):
         self.assertNotIn("Chat rules", optimize_text)
         self.assertIn("Chat rules", chat_text)
         self.assertNotIn("Optimize rules", chat_text)
+
+    def test_build_request_payload_uses_cached_content(self):
+        config = {"language": "en", "thinking_budget_chat": -1}
+        payload = self.gc.build_request_payload(
+            config=config,
+            user_text="Hello",
+            history=None,
+            temperature=0.2,
+            include_meta_rule=False,
+            purpose="chat",
+            cached_content_name="cachedContents/abc123",
+            live_system_instruction="Live rules only",
+        )
+        self.assertEqual(payload["cachedContent"], "cachedContents/abc123")
+        self.assertEqual(
+            payload["systemInstruction"]["parts"][0]["text"],
+            "Live rules only",
+        )
+
+    def test_prepare_gemini_request_falls_back_when_cache_create_fails(self):
+        pc = _load_addon_module("prompt_cache")
+        pc.clear_prompt_cache_store()
+        config = {
+            "language": "en",
+            "api_key": "test-key",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {
+                "system_instruction": True,
+                "imported_note": True,
+            },
+            "system_instruction": "X" * 9000,
+            "thinking_budget_chat": -1,
+        }
+        session = pc.PromptCacheSessionContext(
+            note_context="Note body",
+            include_note_context=True,
+        )
+        with patch.object(pc, "create_cached_content", side_effect=pc.PromptCacheError("cache failed")):
+            prepared = self.gc.prepare_gemini_request(
+                config=config,
+                user_text="Question?",
+                history=None,
+                temperature=0.2,
+                include_meta_rule=False,
+                purpose="chat",
+                cache_session=session,
+            )
+        payload = prepared.payload
+        self.assertNotIn("cachedContent", payload)
+        user_part = payload["contents"][-1]["parts"][0]["text"]
+        self.assertIn("Note body", user_part)
+        self.assertIn("Question?", user_part)
 
     def test_parse_response_success(self):
         config = {"language": "en"}
@@ -322,6 +376,24 @@ class TestGeminiClient(unittest.TestCase):
         self.assertEqual(models, ["gemini-2.5-flash", "gemini-2.5-pro"])
 
 
+class TestPromptCompose(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.compose = _load_addon_module("prompt_compose")
+
+    def test_join_prompt_blocks_skips_empty_parts(self):
+        self.assertEqual(
+            self.compose.join_prompt_blocks("A", "", "  ", "B"),
+            "A\n\nB",
+        )
+
+    def test_join_prompt_header_body(self):
+        self.assertEqual(
+            self.compose.join_prompt_header_body("Header:", "Body"),
+            "Header:\nBody",
+        )
+
+
 class TestI18n(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -351,34 +423,28 @@ class TestI18n(unittest.TestCase):
     def test_edit_wrapper_strings(self):
         en = {"language": "en"}
         it = {"language": "it"}
-        self.assertEqual(self.i18n.tr("chat.edit_wrapper", config=en), "Edit wrapper")
-        self.assertEqual(self.i18n.tr("chat.edit_wrapper.short", config=en), "📝 wrapper")
-        self.assertEqual(self.i18n.tr("chat.edit_wrapper", config=it), "Modifica wrapper")
-        self.assertEqual(self.i18n.tr("chat.edit_templates.short", config=en), "📝 templates")
+        self.assertEqual(self.i18n.tr("chat.edit_wrapper", config=en), "Edit context wrapper")
+        self.assertEqual(self.i18n.tr("chat.edit_wrapper", config=it), "Modifica wrapper contesto")
         self.assertEqual(
             self.i18n.tr("chat.edit_wrapper.tooltip", config=en),
-            "Edit wrapper",
+            "Edit context wrapper",
         )
         self.assertEqual(
             self.i18n.tr("chat.edit_templates.tooltip", config=en),
             "Edit templates",
         )
-        self.assertEqual(
-            self.i18n.tr("chat.edit_context", config=en),
-            self.i18n.tr("chat.edit_wrapper", config=en),
-        )
-        self.assertIn("{{context}}", self.i18n.tr("chat.edit_wrapper.wrapper_label", config=en))
-        self.assertIn("{{request}}", self.i18n.tr("chat.edit_wrapper.wrapper_hint", config=en))
-        self.assertIn("expanded", self.i18n.tr("chat.edit_wrapper.wrapper_label", config=en).lower())
+        self.assertIn("request placeholder", self.i18n.tr("chat.edit_wrapper.wrapper_hint", config=en))
+        self.assertIn("session", self.i18n.tr("chat.edit_wrapper.wrapper_label", config=en).lower())
         invalid_msg = self.i18n.tr("chat.edit_wrapper.wrapper_invalid", config=en)
         self.assertIn("{{context}}", invalid_msg)
         self.assertIn("{{request}}", invalid_msg)
         basic_label = self.i18n.chat_edit_wrapper_label_text({"language": "en"})
-        self.assertIn("{{context}}", basic_label)
+        self.assertIn("Context wrapper", basic_label)
         full_label = self.i18n.chat_edit_wrapper_label_text(
             {"language": "en", "brain_import_templates": True, "brain_import_css": True}
         )
-        self.assertEqual(basic_label, full_label)
+        self.assertIn("optional sections", full_label.lower())
+        self.assertNotEqual(basic_label, full_label)
         self.assertEqual(self.i18n.tr("chat.preview.refresh", config=en), "Refresh preview")
         self.assertEqual(
             self.i18n.tr("chat.preview.open_window.tooltip", config=en),
@@ -392,12 +458,8 @@ class TestI18n(unittest.TestCase):
             self.i18n.chat_edit_templates_detail_text({"language": "en"}),
             "Not shown in the note preview.",
         )
-        self.assertEqual(
-            self.i18n.tr("chat.include_context.short", config=en),
-            "Include context",
-        )
         self.assertIn(
-            "next message",
+            "excluded",
             self.i18n.tr("chat.include_context", config=en).lower(),
         )
 
@@ -463,45 +525,54 @@ class TestI18n(unittest.TestCase):
         self.assertEqual(self.i18n.effective_dynamic_rules_prefix(custom_prefix), "Custom dynamic header:\n")
         custom_wrapper = {
             "language": "en",
-            "prompt_chat_context": "Note:\n{{context}}\nAsk: {{request}}",
+            "prompt_chat_context_sections": {
+                "context": "Note:\n{{context}}",
+                "request": "Ask: {{request}}",
+            },
         }
         result = self.i18n.format_chat_context_message(
             custom_wrapper,
-            context="Field [Front]:\nHi",
+            context="Field [Front]\nHi",
             request="Split this?",
         )
-        self.assertEqual(result, "Note:\nField [Front]:\nHi\nAsk: Split this?")
+        self.assertEqual(result, "Note:\nField [Front]\nHi\n\nAsk: Split this?")
 
-    def test_format_chat_context_message_accepts_explicit_template(self):
-        config = {"language": "en", "prompt_chat_context": "ignored"}
-        template = (
-            "Note:\n{{context}}\n\n"
-            "{{#templates}}\nTemplates:\n{{templates}}\n{{/templates}}\n\n"
-            "{{#styling}}\nStyling:\n{{styling}}\n{{/styling}}\n\n"
-            "Ask:\n{{request}}"
-        )
+    def test_format_chat_context_message_accepts_session_section_override(self):
+        config = {"language": "en"}
+        section_prefixes = {
+            "context": "Note:\n{{context}}",
+            "templates": "Templates:\n{{templates}}",
+            "styling": "Styling:\n{{styling}}",
+            "request": "Ask:\n{{request}}",
+            "format_guide": "",
+        }
         result = self.i18n.format_chat_context_message(
             config,
-            context="Field [Front]:\nHi",
+            context="Field [Front]\nHi",
             request="Split this?",
-            template=template,
+            section_prefixes=section_prefixes,
         )
         self.assertEqual(
             result,
-            "Note:\nField [Front]:\nHi\n\nAsk:\nSplit this?",
+            "Note:\nField [Front]\nHi\n\nAsk:\nSplit this?",
         )
         result_with_templates = self.i18n.format_chat_context_message(
             {**config, "brain_import_templates": True},
-            context="Field [Front]:\nHi",
+            context="Field [Front]\nHi",
             request="Split this?",
             templates="tmpl-body",
-            template=template,
+            section_prefixes=section_prefixes,
         )
         self.assertIn("Templates:\n", result_with_templates)
         self.assertIn("tmpl-body", result_with_templates)
 
-    def test_format_chat_context_message_falls_back_without_placeholders(self):
-        config = {"language": "en", "prompt_chat_context": "Missing placeholders"}
+    def test_format_chat_context_message_falls_back_without_request_placeholder(self):
+        config = {
+            "language": "en",
+            "prompt_chat_context_sections": {
+                "request": "Missing request marker",
+            },
+        }
         result = self.i18n.format_chat_context_message(
             config,
             context="ctx",
@@ -510,117 +581,105 @@ class TestI18n(unittest.TestCase):
         self.assertIn("ctx", result)
         self.assertIn("req", result)
         self.assertIn("[FULL NOTE CONTEXT TO ANALYZE]", result)
-        self.assertNotIn("[CARD TEMPLATES]", result)
 
     def test_format_chat_context_message_invalid_session_falls_back_to_settings_wrapper(self):
         config = {
             "language": "en",
-            "prompt_chat_context": "Settings:\n{{context}}\nQ: {{request}}",
+            "prompt_chat_context_sections": {
+                "context": "Settings:\n{{context}}",
+                "request": "Q: {{request}}",
+            },
         }
         result = self.i18n.format_chat_context_message(
             config,
             context="ctx",
             request="req",
-            template="Broken session wrapper",
+            section_prefixes={"request": "Broken"},
         )
-        self.assertEqual(result, "Settings:\nctx\nQ: req")
+        self.assertEqual(result, "Settings:\nctx\n\nQ: req")
 
     def test_format_chat_context_message_omits_templates_without_placeholder(self):
         config = {"language": "en", "brain_import_templates": True}
-        template = (
-            "Note:\n{{context}}\n"
-            "{{#templates}}\n[TEMPLATES]\n{{templates}}\n{{/templates}}\n"
-            "Q: {{request}}"
-        )
-        template_without_marker = template.replace("{{templates}}\n", "")
+        section_prefixes = {
+            "context": "Note:\n{{context}}",
+            "templates": "[TEMPLATES]\n",
+            "request": "Q: {{request}}",
+            "format_guide": "",
+        }
         result = self.i18n.format_chat_context_message(
             config,
             context="ctx",
             request="req",
             templates="tmpl-body",
-            template=template_without_marker,
+            section_prefixes=section_prefixes,
         )
-        self.assertEqual(result, "Note:\nctx\nQ: req")
+        self.assertEqual(result, "Note:\nctx\n\nQ: req")
         self.assertNotIn("tmpl-body", result)
         self.assertNotIn("[TEMPLATES]", result)
 
     def test_format_chat_context_message_omits_styling_without_placeholder(self):
         config = {"language": "en", "brain_import_css": True}
-        template = (
-            "Note:\n{{context}}\n"
-            "{{#styling}}\n[STYLE]\n{{styling}}\n{{/styling}}\n"
-            "Q: {{request}}"
-        )
-        template_without_marker = template.replace("{{styling}}\n", "")
+        section_prefixes = {
+            "context": "Note:\n{{context}}",
+            "styling": "[STYLE]\n",
+            "request": "Q: {{request}}",
+            "format_guide": "",
+        }
         result = self.i18n.format_chat_context_message(
             config,
             context="ctx",
             request="req",
             styling=".card { color: red; }",
-            template=template_without_marker,
+            section_prefixes=section_prefixes,
         )
-        self.assertEqual(result, "Note:\nctx\nQ: req")
+        self.assertEqual(result, "Note:\nctx\n\nQ: req")
         self.assertNotIn(".card", result)
         self.assertNotIn("[STYLE]", result)
 
-    def test_format_chat_context_message_keeps_format_guide_with_styling_placeholder_only(self):
-        config = {"language": "en", "brain_import_css": True}
-        template = (
-            "Note:\n{{context}}\n"
-            "{{#styling}}\n[NOTE TYPE STYLING]\n{{styling}}\n{{/styling}}\n"
-            "Q: {{request}}"
-        )
-        result = self.i18n.format_chat_context_message(
-            config,
-            context="ctx",
-            request="req",
-            styling=".card { color: red; }",
-            template=template,
-        )
-        self.assertIn("[HOW TO READ ANKI CARD TEMPLATES AND STYLING]", result)
-        self.assertIn(".card { color: red; }", result)
-        self.assertLess(result.index("[HOW TO READ ANKI"), result.index(".card"))
-
-    def test_format_chat_context_message_keeps_format_guide_with_templates_placeholder_only(self):
+    def test_format_chat_context_message_respects_section_order(self):
         config = {"language": "en", "brain_import_templates": True}
-        template = (
-            "Note:\n{{context}}\n"
-            "{{#templates}}\n[CARD TEMPLATES]\n{{templates}}\n{{/templates}}\n"
-            "Q: {{request}}"
-        )
+        order = ["request", "context", "format_guide", "templates", "styling"]
+        section_prefixes = {
+            "context": "C:\n{{context}}",
+            "templates": "T:\n{{templates}}",
+            "request": "R:\n{{request}}",
+            "format_guide": "",
+        }
         result = self.i18n.format_chat_context_message(
             config,
             context="ctx",
             request="req",
-            templates="[FRONT TEMPLATE]:\n{{Front}}",
-            template=template,
+            templates="tmpl",
+            section_order=order,
+            section_prefixes=section_prefixes,
         )
-        self.assertIn("[HOW TO READ ANKI CARD TEMPLATES AND STYLING]", result)
-        self.assertIn("{{Front}}", result)
-        self.assertLess(result.index("[HOW TO READ ANKI"), result.index("{{Front}}"))
+        self.assertLess(result.index("R:\nreq"), result.index("C:\nctx"))
+        self.assertLess(result.index("[HOW TO READ ANKI"), result.index("T:\ntmpl"))
 
-    def test_format_chat_context_message_omits_format_guide_without_import_placeholders(self):
+    def test_format_chat_context_message_omits_format_guide_without_templates_or_styling(self):
         config = {"language": "en", "brain_import_templates": True, "brain_import_css": True}
-        template = "Note:\n{{context}}\nQ: {{request}}"
+        section_prefixes = {
+            "context": "Note:\n{{context}}",
+            "request": "Q: {{request}}",
+            "format_guide": "",
+        }
         result = self.i18n.format_chat_context_message(
             config,
             context="ctx",
             request="req",
-            templates="[FRONT TEMPLATE]:\n{{Front}}",
-            styling=".card { color: red; }",
-            template=template,
+            templates="",
+            styling="",
+            section_prefixes=section_prefixes,
         )
         self.assertNotIn("[HOW TO READ ANKI CARD TEMPLATES AND STYLING]", result)
-        self.assertNotIn("{{Front}}", result)
-        self.assertNotIn(".card", result)
 
     def test_format_chat_context_message_includes_templates_and_styling(self):
         config = {"language": "en", "brain_import_templates": True, "brain_import_css": True}
         result = self.i18n.format_chat_context_message(
             config,
-            context="Field [Front]:\nHi",
+            context="Field [Front]\nHi",
             request="Split?",
-            templates="[CARD TYPE 1 NAME] Basic\n[FRONT TEMPLATE]:\n{{Front}}",
+            templates="[CARD TYPE 1 NAME] Basic\n[FRONT TEMPLATE]\n{{Front}}",
             styling=".card { color: red; }",
         )
         self.assertIn("[CARD TEMPLATES]", result)
@@ -629,15 +688,64 @@ class TestI18n(unittest.TestCase):
         self.assertIn(".card { color: red; }", result)
 
     def test_format_chat_context_message_uses_minimal_custom_wrapper(self):
-        config = {"language": "en", "brain_import_templates": True}
+        config = {
+            "language": "en",
+            "brain_import_templates": True,
+            "prompt_chat_context_sections": {
+                "context": "Note:\n{{context}}",
+                "templates": "",
+                "request": "Ask: {{request}}",
+            },
+        }
         result = self.i18n.format_chat_context_message(
             config,
             context="ctx",
             request="req",
             templates="tmpl-block",
-            template="Note:\n{{context}}\nAsk: {{request}}",
         )
-        self.assertEqual(result, "Note:\nctx\nAsk: req")
+        self.assertEqual(result, "Note:\nctx\n\nAsk: req")
+
+    def test_apply_wrapper_placeholders_does_not_expand_inside_values(self):
+        templates = "[CARD TYPE 1 NAME] Basic\n[FRONT TEMPLATE]\n{{Front}}"
+        context = "Mention {templates} once in a field."
+        prefix = "[FULL NOTE CONTEXT TO ANALYZE]\n{{context}}"
+        rendered = self.wrapper.apply_wrapper_placeholders(
+            prefix,
+            context=context,
+            request="Split?",
+            templates=templates,
+            styling=".card { color: red; }",
+        )
+        self.assertEqual(rendered.count("[CARD TYPE 1 NAME]"), 0)
+        self.assertIn("Mention {templates} once in a field.", rendered)
+
+    def test_apply_wrapper_placeholders_does_not_duplicate_templates_block(self):
+        templates = "[CARD TYPE 1 NAME] Basic\n[FRONT TEMPLATE]\n{{Front}}"
+        prefix = "[CARD TEMPLATES]\n{{templates}}"
+        rendered = self.wrapper.apply_wrapper_placeholders(
+            prefix,
+            context="",
+            request="",
+            templates=templates,
+            styling="",
+        )
+        self.assertEqual(rendered.count("[CARD TYPE 1 NAME]"), 1)
+
+    def test_format_chat_context_message_does_not_duplicate_templates_on_repeat(self):
+        config = {"language": "en", "brain_import_templates": True, "brain_import_css": True}
+        templates = "[CARD TYPE 1 NAME] Basic\n[FRONT TEMPLATE]\n{{Front}}"
+        styling = ".card { color: red; }"
+        context = "Field [Front]\nHello"
+        for _ in range(2):
+            result = self.i18n.format_chat_context_message(
+                config,
+                context=context,
+                request="Split?",
+                templates=templates,
+                styling=styling,
+            )
+            self.assertEqual(result.count("[CARD TYPE 1 NAME]"), 1)
+            self.assertEqual(result.count("[HOW TO READ ANKI CARD TEMPLATES AND STYLING]"), 1)
 
     def test_format_chat_context_message_includes_templates_format_guide(self):
         config = {"language": "en", "brain_import_templates": True}
@@ -645,7 +753,7 @@ class TestI18n(unittest.TestCase):
             config,
             context="ctx",
             request="req",
-            templates="[FRONT TEMPLATE]:\n{{Front}}",
+            templates="[FRONT TEMPLATE]\n{{Front}}",
         )
         self.assertIn("[HOW TO READ ANKI CARD TEMPLATES AND STYLING]", result)
         self.assertLess(result.index("ctx"), result.index("[HOW TO READ ANKI"))
@@ -704,6 +812,8 @@ class TestI18n(unittest.TestCase):
         self.assertIn("Chat history", formula)
         self.assertIn("Next user message", formula)
         self.assertIn("Wrapped next", inspection.full_text(config))
+        self.assertIn("Wrapped next", inspection.plain_full_text(config))
+        self.assertNotIn("Current draft in the input box", inspection.plain_full_text(config))
 
     def test_format_card_templates_block(self):
         card_templates = _load_addon_module("ui.card_templates")
@@ -718,223 +828,183 @@ class TestI18n(unittest.TestCase):
             config={"language": "en"},
         )
         self.assertIn("[CARD TYPE 1 NAME] Basic", block)
-        self.assertIn("[FRONT TEMPLATE]:", block)
+        self.assertIn("[FRONT TEMPLATE]", block)
         self.assertIn("{{Front}}", block)
 
-    def test_chat_context_wrapper_missing_placeholders(self):
-        fn = self.i18n.chat_context_wrapper_missing_placeholders
-        self.assertFalse(fn(""))
-        self.assertFalse(fn("   "))
-        self.assertFalse(fn("Note:\n{{context}}\nAsk: {{request}}"))
-        self.assertTrue(fn("Note:\n{{context}}"))
-        self.assertTrue(fn("Ask: {{request}}"))
-        self.assertTrue(fn("Note:\n{context}\nAsk: {request}"))
+    def test_wrapper_section_missing_request_placeholder(self):
+        fn = self.wrapper.wrapper_section_missing_placeholders
+        self.assertFalse(fn("request", ""))
+        self.assertFalse(fn("request", "[STUDENT REQUEST]\n{{request}}"))
+        self.assertTrue(fn("request", "[STUDENT REQUEST]\n"))
 
-    def test_chat_context_wrapper_unbalanced_conditionals(self):
-        fn = self.i18n.chat_context_wrapper_has_unbalanced_conditionals
-        self.assertFalse(fn("Note:\n{{context}}\n{{request}}"))
-        self.assertTrue(fn("{{#templates}}\nHi\n{{context}}\n{{request}}"))
-        self.assertFalse(
-            fn(
-                "Note:\n{{context}}\n{{#templates}}\n{{templates}}\n{{/templates}}\n{{request}}"
-            )
+    def test_wrapper_prefix_token_segments(self):
+        tokens = _load_addon_module("wrapper_prefix_tokens")
+        text = "[FULL NOTE CONTEXT TO ANALYZE]\n{{context}}"
+        segments = tokens.parse_wrapper_prefix_segments(text, "context")
+        self.assertEqual(
+            segments,
+            [("text", "[FULL NOTE CONTEXT TO ANALYZE]\n"), ("token", "context")],
         )
+        self.assertEqual(tokens.serialize_wrapper_prefix_segments(segments), text)
+        self.assertEqual(
+            tokens.ensure_newline_before_wrapper_tag(
+                "[FULL NOTE CONTEXT TO ANALYZE]{{context}}",
+                "context",
+            ),
+            text,
+        )
+        self.assertTrue(tokens.wrapper_prefix_has_token(segments, "context"))
+        self.assertEqual(tokens.wrapper_token_display_label("context"), "context")
+        self.assertTrue(tokens.wrapper_prefix_requires_token("request"))
+        self.assertFalse(tokens.wrapper_prefix_requires_token("format_guide"))
 
-    def test_repair_wrapper_brace_escaping(self):
-        buggy = (
-            "[FULL NOTE CONTEXT TO ANALYZE]:\n{{{{context}}}}\n\n"
-            "{{{{#templates}}}}\n[CARD TEMPLATES]\n{{{{templates}}}}\n{{{{/templates}}}}\n\n"
-            "[STUDENT REQUEST]:\n{{{{request}}}}"
+    def test_wrapper_prefix_token_segments_dedupe(self):
+        tokens = _load_addon_module("wrapper_prefix_tokens")
+        raw = tokens.parse_wrapper_prefix_segments(
+            "Header\n{{context}} tail {{context}}",
+            "context",
         )
-        fixed = self.wrapper.repair_wrapper_brace_escaping(buggy)
-        self.assertIn("{{context}}", fixed)
-        self.assertNotIn("{{{{", fixed)
-        expanded = self.wrapper.expand_chat_context_wrapper(
-            {"language": "en", "brain_import_templates": True, "brain_import_css": False},
-            source=buggy,
+        normalized = tokens.normalize_wrapper_prefix_segments(raw, "context")
+        self.assertEqual(
+            normalized,
+            [("text", "Header\n"), ("token", "context"), ("text", " tail ")],
         )
-        self.assertNotIn("{{}}", expanded)
-        self.assertIn("{{templates}}", expanded)
-        self.assertIn("[CARD TEMPLATES]", expanded)
+        self.assertEqual(
+            tokens.serialize_wrapper_prefix_segments(normalized),
+            "Header\n{{context}} tail ",
+        )
+        no_token = tokens.normalize_wrapper_prefix_segments(
+            tokens.parse_wrapper_prefix_segments("A{{context}}B{{context}}", "context"),
+            "context",
+            allow_token=False,
+        )
+        self.assertEqual(no_token, [("text", "AB")])
 
-    def test_trim_newline_after_standalone_conditional_tags(self):
-        template = (
-            "Note:\n{{context}}\n\n"
-            "{{#templates}}\n"
-            "[CARD TEMPLATES]\n"
-            "{{templates}}\n"
-            "{{/templates}}\n\n"
-            "{{request}}"
-        )
-        expanded = self.wrapper.process_wrapper_conditionals(
-            template,
-            {"language": "en", "brain_import_templates": True},
-            preview=True,
-        )
-        self.assertNotIn("\n\n\n", expanded)
-        self.assertIn("{{context}}\n\n[CARD TEMPLATES]", expanded)
-        # With tag-only lines removed (not extra whitespace), one blank line
-        # after the kept block remains.
-        self.assertIn("{{templates}}\n\n{{request}}", expanded)
-
-        builtin = self.i18n.build_chat_context_wrapper_for_import_settings(
-            {
-                "language": "en",
-                "brain_import_templates": True,
-                "brain_import_css": False,
-            }
-        )
-        self.assertNotIn("\n\n\n", builtin)
-        self.assertIn("{{context}}\n\n[CARD TEMPLATES]", builtin)
-        self.assertIn("{{templates}}\n\n[STUDENT REQUEST]", builtin)
-
-        raw = self.i18n.tr("instructions.chat_context_wrapper", config={"language": "en"})
-        self.assertIn("{{#templates}}\n", raw)
-
-    def test_conditional_blocks_preserve_blank_lines_between_active_blocks(self):
-        template = (
-            "[FULL NOTE CONTEXT TO ANALYZE]:\n"
-            "{{context}}\n\n"
-            "{{#templates}}\n"
-            "[CARD TEMPLATES]\n"
-            "{{templates}}\n"
-            "{{/templates}}\n\n"
-            "{{#styling}}\n"
-            "[NOTE TYPE STYLING]\n"
-            "{{styling}}\n"
-            "{{/styling}}\n\n"
-            "[STUDENT REQUEST]:\n"
-            "{{request}}"
-        )
-        expanded = self.wrapper.process_wrapper_conditionals(
-            template,
-            {"language": "en", "brain_import_templates": True, "brain_import_css": True},
-            templates_content="tmpl-body",
-            styling_content="styling-body",
-            preview=False,
-        )
-        # Tags are removed, but the intentional blank lines between blocks remain.
-        self.assertIn("[CARD TEMPLATES]\n{{templates}}\n\n[NOTE TYPE STYLING]", expanded)
-        self.assertIn("[NOTE TYPE STYLING]\n{{styling}}\n\n[STUDENT REQUEST]", expanded)
-
-    def test_removed_conditional_block_at_end_does_not_leave_trailing_gap(self):
-        template = (
-            "Note:\n{{context}}\n\n"
-            "{{#templates}}\n"
-            "Templates:\n{{templates}}\n"
-            "{{/templates}}"
-        )
-        removed = self.wrapper.process_wrapper_conditionals(
-            template,
-            {"language": "en", "brain_import_templates": True},
-            templates_content="",
-            preview=False,
-        )
-        self.assertEqual(removed, "Note:\n{{context}}")
-
-    def test_process_wrapper_conditionals(self):
-        template = (
-            "Note:\n{{context}}\n"
-            "{{#templates}}\nFollowing are the templates:\n{{templates}}\n{{/templates}}\n"
-            "{{request}}"
-        )
-        config = {"language": "en", "brain_import_templates": False}
-        preview_off = self.wrapper.process_wrapper_conditionals(template, config, preview=True)
-        self.assertNotIn("Following are the templates:", preview_off)
-        preview_on = self.wrapper.process_wrapper_conditionals(
-            template,
-            {"language": "en", "brain_import_templates": True},
-            preview=True,
-        )
-        self.assertIn("Following are the templates:", preview_on)
-        self.assertIn("{{templates}}", preview_on)
-        send_empty = self.wrapper.process_wrapper_conditionals(
-            template,
-            {"language": "en", "brain_import_templates": True},
-            templates_content="",
-            preview=False,
-        )
-        self.assertNotIn("Following are the templates:", send_empty)
-        send_with_content = self.wrapper.process_wrapper_conditionals(
-            template,
-            {"language": "en", "brain_import_templates": True},
+    def test_build_cache_safe_wrapper_omits_request(self) -> None:
+        config = {"language": "en"}
+        order, prefixes = self.i18n.effective_wrapper_layout(config)
+        safe = self.wrapper.build_cache_safe_wrapper(
+            config,
+            section_order=order,
+            section_prefixes=prefixes,
+            cache_imported_note=False,
+            cache_format_guide=False,
+            cache_templates=True,
+            cache_styling=True,
+            context_content="Field A\nvalue",
             templates_content="tmpl",
-            preview=False,
+            styling_content="css",
+            format_guide=self.i18n.effective_card_templates_format_prompt(config),
         )
-        self.assertIn("Following are the templates:", send_with_content)
+        self.assertIn("{{context}}", safe)
+        self.assertNotIn("{{request}}", safe)
+        self.assertNotIn("[STUDENT REQUEST]", safe)
+
+    def test_build_cache_safe_wrapper_omits_context_when_note_cached(self) -> None:
+        config = {"language": "en"}
+        order, prefixes = self.i18n.effective_wrapper_layout(config)
+        safe = self.wrapper.build_cache_safe_wrapper(
+            config,
+            section_order=order,
+            section_prefixes=prefixes,
+            cache_imported_note=True,
+            cache_format_guide=False,
+            cache_templates=False,
+            cache_styling=False,
+            context_content="Field A\nvalue",
+            format_guide=self.i18n.effective_card_templates_format_prompt(config),
+        )
+        self.assertNotIn("[FULL NOTE CONTEXT TO ANALYZE]", safe)
+        self.assertNotIn("{{request}}", safe)
+
+    def test_format_chat_context_message_request_only_without_note(self) -> None:
+        config = {"language": "en"}
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="",
+            request="Just a question?",
+            include_context=False,
+        )
+        self.assertIn("[STUDENT REQUEST]", result)
+        self.assertIn("Just a question?", result)
+        self.assertNotIn("[FULL NOTE CONTEXT TO ANALYZE]", result)
+
+    def test_format_chat_context_message_omits_context_when_import_unchecked(self) -> None:
+        config = {"language": "en"}
+        result = self.i18n.format_chat_context_message(
+            config,
+            context="Field [Front]\nHi",
+            request="Explain this?",
+            include_context=False,
+        )
+        self.assertIn("[STUDENT REQUEST]", result)
+        self.assertIn("Explain this?", result)
+        self.assertNotIn("Field [Front]", result)
+        self.assertNotIn("[FULL NOTE CONTEXT TO ANALYZE]", result)
+
+    def test_format_chat_context_message_omits_context_block_when_empty(self) -> None:
+        result = self.i18n.format_chat_context_message(
+            {"language": "en"},
+            context="",
+            request="Hi?",
+            include_context=True,
+        )
+        self.assertIn("[STUDENT REQUEST]", result)
+        self.assertIn("Hi?", result)
+        self.assertNotIn("[FULL NOTE CONTEXT TO ANALYZE]", result)
+
+    def test_build_live_request_message_uses_request_section(self) -> None:
+        config = {"language": "en"}
+        order, prefixes = self.i18n.effective_wrapper_layout(config)
+        live = self.wrapper.build_live_request_message(
+            config,
+            section_order=order,
+            section_prefixes=prefixes,
+            request="My question?",
+        )
+        self.assertIn("[STUDENT REQUEST]", live)
+        self.assertIn("My question?", live)
+        self.assertNotIn("{{context}}", live)
 
     def test_wrapper_missing_import_placeholders(self):
         config = {"language": "en", "brain_import_templates": True, "brain_import_css": True}
-        missing = self.i18n.wrapper_missing_import_placeholders(
-            "Note:\n{{context}}\n{{request}}",
+        missing = self.wrapper.wrapper_missing_import_placeholders(
+            {
+                "context": "Note:\n{{context}}",
+                "request": "Q: {{request}}",
+                "templates": "[TEMPLATES]\n",
+                "styling": "[STYLE]\n",
+            },
             config,
         )
         self.assertEqual(missing, ["templates", "styling"])
-        ok = self.i18n.wrapper_missing_import_placeholders(
-            "Note:\n{{context}}\n{{templates}}\n{{styling}}\n{{request}}",
-            config,
-        )
-        self.assertEqual(ok, [])
 
-    def test_build_chat_context_wrapper_for_import_settings(self):
-        minimal = {"language": "en"}
-        wrapper = self.i18n.build_chat_context_wrapper_for_import_settings(minimal)
-        self.assertIn("{{context}}", wrapper)
-        self.assertIn("{{request}}", wrapper)
-        self.assertNotIn("{{#templates}}", wrapper)
+    def test_build_wrapper_preview_respects_import_settings(self):
+        wrapper = self.i18n.build_wrapper_preview({"language": "en"})
+        self.assertIn("…", wrapper)
+        self.assertIn("[STUDENT REQUEST]", wrapper)
 
-        with_templates = {
-            "language": "en",
-            "brain_import_templates": True,
-        }
-        wrapper = self.i18n.build_chat_context_wrapper_for_import_settings(with_templates)
-        self.assertIn("{{templates}}", wrapper)
-        self.assertNotIn("{{#styling}}", wrapper)
+    def test_is_builtin_wrapper_layout(self):
+        self.assertTrue(self.i18n.is_builtin_wrapper_layout({"language": "en"}))
 
-        full = {
-            "language": "en",
-            "brain_import_templates": True,
-            "brain_import_css": True,
-        }
-        wrapper = self.i18n.build_chat_context_wrapper_for_import_settings(full)
-        self.assertIn("{{templates}}", wrapper)
-        self.assertIn("{{styling}}", wrapper)
-
-    def test_filter_wrapper_for_import_settings(self):
-        full = self.i18n.tr("instructions.chat_context_wrapper", config={"language": "en"})
-        minimal = self.i18n.filter_wrapper_for_import_settings(
-            full,
-            {"language": "en"},
-        )
-        self.assertIn("{{context}}", minimal)
-        self.assertNotIn("{{#templates}}", minimal)
-        self.assertNotIn("{{#styling}}", minimal)
-
-    def test_chat_context_wrapper_for_session_uses_import_settings(self):
-        stored = self.i18n.tr("instructions.chat_context_wrapper", config={"language": "en"})
-        session = self.i18n.chat_context_wrapper_for_session({"language": "en"})
-        self.assertNotEqual(session, stored)
-        self.assertNotIn("{{#templates}}", session)
-        self.assertNotIn("{{templates}}", session)
-
-    def test_estimate_chat_request_tokens(self):
+    def test_estimate_chat_request_chars(self):
         token_estimate = _load_addon_module("token_estimate")
         self.assertEqual(token_estimate.estimate_text_tokens(""), 0)
         self.assertEqual(token_estimate.estimate_text_tokens("abcd"), 1)
         self.assertEqual(
-            token_estimate.estimate_chat_request_tokens(
+            token_estimate.estimate_chat_request_chars(
                 "message",
                 [{"role": "user", "parts": [{"text": "history"}]}],
             ),
-            4,
+            14,
         )
         self.assertEqual(
-            token_estimate.estimate_chat_request_tokens(
+            token_estimate.estimate_chat_request_chars(
                 "message",
                 [{"role": "user", "parts": [{"text": "history"}]}],
                 system_instruction="system",
             ),
-            6,
+            20,
         )
 
     def test_effective_system_instruction_uses_language_default(self):
@@ -1179,6 +1249,68 @@ class TestTheme(unittest.TestCase):
         self.assertIn(self.theme._LIGHT.text_strong, html_out)
 
 
+class TestSvgIcons(unittest.TestCase):
+    def test_stop_sign_svg_exists(self):
+        addon_dir = Path(__file__).resolve().parent.parent
+        path = addon_dir / "ui" / "icons" / "stop.svg"
+        self.assertTrue(path.is_file(), msg=str(path))
+
+    def test_priority_sign_svg_exists(self):
+        addon_dir = Path(__file__).resolve().parent.parent
+        path = addon_dir / "ui" / "icons" / "priority.svg"
+        self.assertTrue(path.is_file(), msg=str(path))
+
+    def test_plus_svg_exists(self):
+        addon_dir = Path(__file__).resolve().parent.parent
+        path = addon_dir / "ui" / "icons" / "plus.svg"
+        self.assertTrue(path.is_file(), msg=str(path))
+
+    def test_brain_svg_exists(self):
+        addon_dir = Path(__file__).resolve().parent.parent
+        path = addon_dir / "ui" / "icons" / "brain.svg"
+        self.assertTrue(path.is_file(), msg=str(path))
+
+    def test_lens_svg_exists(self):
+        addon_dir = Path(__file__).resolve().parent.parent
+        path = addon_dir / "ui" / "icons" / "lens.svg"
+        self.assertTrue(path.is_file(), msg=str(path))
+
+    def test_pencil_svg_exists(self):
+        addon_dir = Path(__file__).resolve().parent.parent
+        path = addon_dir / "ui" / "icons" / "pencil.svg"
+        self.assertTrue(path.is_file(), msg=str(path))
+
+    def test_barred_brain_svg_exists(self):
+        addon_dir = Path(__file__).resolve().parent.parent
+        path = addon_dir / "ui" / "icons" / "barred_brain.svg"
+        self.assertTrue(path.is_file(), msg=str(path))
+
+    def test_chat_svg_exists(self):
+        addon_dir = Path(__file__).resolve().parent.parent
+        path = addon_dir / "ui" / "icons" / "chat.svg"
+        self.assertTrue(path.is_file(), msg=str(path))
+
+    def test_settings_svg_exists(self):
+        addon_dir = Path(__file__).resolve().parent.parent
+        path = addon_dir / "ui" / "icons" / "settings.svg"
+        self.assertTrue(path.is_file(), msg=str(path))
+
+    def test_undo_svg_exists(self):
+        addon_dir = Path(__file__).resolve().parent.parent
+        path = addon_dir / "ui" / "icons" / "undo.svg"
+        self.assertTrue(path.is_file(), msg=str(path))
+
+    def test_robot_svg_exists(self):
+        addon_dir = Path(__file__).resolve().parent.parent
+        path = addon_dir / "ui" / "icons" / "robot.svg"
+        self.assertTrue(path.is_file(), msg=str(path))
+
+    def test_stop_circle_svg_exists(self):
+        addon_dir = Path(__file__).resolve().parent.parent
+        path = addon_dir / "ui" / "icons" / "stop_circle.svg"
+        self.assertTrue(path.is_file(), msg=str(path))
+
+
 class TestModelSelector(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -1226,18 +1358,42 @@ class TestModelSelector(unittest.TestCase):
         self.assertEqual(self.ms.model_selector_value(combo), "gemini-2.5-flash")
 
 
-class TestChatDialogHelpers(unittest.TestCase):
+class TestNoteContextFields(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.chat = _load_addon_module("ui.chat_dialog")
+        cls.fields = _load_addon_module("note_context_fields")
 
-    def test_format_note_context(self):
-        fn = self.chat._format_note_context
+    def test_format_note_context_skips_empty_by_default(self):
         config = {"language": "en"}
-        text = fn([("Front", "Hello"), ("Back", "World")], config)
-        self.assertIn("Field [Front]:\nHello", text)
-        self.assertIn("Field [Back]:\nWorld", text)
-        self.assertEqual(fn([("Front", "  ")], config), "")
+        text = self.fields.format_note_context(
+            [("Front", "Hello"), ("Back", "World")],
+            config,
+        )
+        self.assertIn("Field [Front]\nHello", text)
+        self.assertIn("Field [Back]\nWorld", text)
+        self.assertEqual(self.fields.format_note_context([("Front", "  ")], config), "")
+
+    def test_format_note_context_includes_empty_when_enabled(self):
+        config = {"language": "en", "chat_send_empty_fields": True}
+        text = self.fields.format_note_context([("Front", ""), ("Back", "Hi")], config)
+        self.assertIn("Field [Front]\n(This field is empty)", text)
+        self.assertIn("Field [Back]\nHi", text)
+
+    def test_fields_for_note_preview_shows_placeholder_when_enabled(self):
+        config = {"language": "en", "chat_send_empty_fields": True}
+        preview = self.fields.fields_for_note_preview(
+            [("Front", ""), ("Back", "Hi")],
+            config,
+        )
+        self.assertEqual(preview, [("Front", "(This field is empty)"), ("Back", "Hi")])
+
+    def test_fields_for_note_preview_keeps_empty_values_when_disabled(self):
+        config = {"language": "en"}
+        preview = self.fields.fields_for_note_preview(
+            [("Front", ""), ("Back", "Hi")],
+            config,
+        )
+        self.assertEqual(preview, [("Front", ""), ("Back", "Hi")])
 
 
 class TestNoteMathPreview(unittest.TestCase):
@@ -1252,6 +1408,23 @@ class TestNoteMathPreview(unittest.TestCase):
         self.assertIn("Front", body)
         self.assertIn(r"\(E=mc^2\)", body)
         self.assertIn('id="addon-note-preview"', body)
+        self.assertIn("addon-note-preview-loading", body)
+        self.assertIn("preview-pending", body)
+
+    def test_build_note_preview_body_includes_loading_message(self):
+        body = self.preview.build_note_preview_body(
+            [("Front", "Hello")],
+            loading_message="Rendering preview…",
+        )
+        self.assertIn("Rendering preview…", body)
+        self.assertIn("addon-note-preview-loading", body)
+        self.assertIn("preview-loading-label", body)
+
+    def test_build_note_preview_body_empty_message_has_no_loading_shell(self):
+        body = self.preview.build_note_preview_body([], empty_message="Nothing here")
+        self.assertIn("Nothing here", body)
+        self.assertIn("empty-preview", body)
+        self.assertNotIn("addon-note-preview-loading", body)
 
     def test_build_note_preview_body_includes_preamble_before_fields(self):
         preamble = (
@@ -1299,6 +1472,16 @@ class TestNoteMathPreview(unittest.TestCase):
         body = self.preview.build_note_preview_body([], empty_message="Nothing here")
         self.assertIn("Nothing here", body)
         self.assertIn("empty-preview", body)
+
+    def test_note_preview_typeset_js_reveals_after_typeset(self):
+        script = self.preview.note_preview_typeset_js()
+        self.assertIn("addon-note-preview-loading", script)
+        self.assertIn("preview-pending", script)
+        self.assertIn("preview-ready", script)
+        self.assertIn("scheduleReveal", script)
+        self.assertIn("setTimeout", script)
+        self.assertIn(str(self.preview.NOTE_PREVIEW_LOADING_MIN_MS), script)
+        self.assertIn("MathJax.typesetPromise", script)
 
     def test_web_math_preview_available_false_without_anki(self):
         self.assertFalse(self.preview.web_math_preview_available())
@@ -1405,25 +1588,44 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(defaults["chat_streaming"])
         self.assertFalse(defaults["brain_import_templates"])
         self.assertFalse(defaults["brain_import_css"])
-        self.assertEqual(defaults["chat_token_warning_threshold"], 3000)
-        self.assertFalse(defaults["chat_prompt_inspection"])
+        self.assertEqual(defaults["chat_payload_warning_chars"], 12000)
 
-    def test_apply_config_migrations_from_legacy_model(self):
-        migrated = self.config._apply_config_migrations(
-            {"model": "legacy-model", "model_optimize": "", "model_chat": ""},
-            {"model": "legacy-model", "model_optimize": "", "model_chat": ""},
+    def test_apply_config_normalization_resets_wrapper_on_version_bump(self):
+        stored = {
+            "config_version": 1,
+            "language": "en",
+            "prompt_chat_context_sections": {"context": "Custom:\n{{context}}"},
+            "prompt_chat_context_order": ["request", "context"],
+            "prompt_card_templates_format": "Old guide",
+        }
+        merged = self.config._normalize_config(
+            {**self.config.DEFAULT_CONFIG, **stored},
+            stored,
         )
-        self.assertEqual(migrated["model_optimize"], "legacy-model")
-        self.assertEqual(migrated["model_chat"], "legacy-model")
+        self.assertEqual(merged["config_version"], self.config.CONFIG_VERSION)
+        self.assertEqual(merged["prompt_chat_context_sections"], {})
+        self.assertEqual(
+            merged["prompt_chat_context_order"],
+            self.config.DEFAULT_CONFIG["prompt_chat_context_order"],
+        )
+        self.assertEqual(merged["prompt_card_templates_format"], "")
+        self.assertNotIn("model", merged)
+        self.assertNotIn("thinking_budget", merged)
 
-    def test_apply_config_migrations_from_legacy_thinking_budget(self):
-        migrated = self.config._apply_config_migrations(
-            {"thinking_budget": 1024},
-            {"thinking_budget": 1024},
+    def test_apply_config_normalization_strips_obsolete_keys(self):
+        stored = {
+            "config_version": self.config.CONFIG_VERSION,
+            "model": "old-model",
+            "thinking_budget": 512,
+            "prompt_cache_min_tokens": 2048,
+        }
+        merged = self.config._normalize_config(
+            {**self.config.DEFAULT_CONFIG, **stored},
+            stored,
         )
-        self.assertEqual(migrated["thinking_budget_optimize"], 1024)
-        self.assertEqual(migrated["thinking_budget_chat"], 1024)
-        self.assertNotIn("thinking_budget", migrated)
+        self.assertNotIn("model", merged)
+        self.assertNotIn("thinking_budget", merged)
+        self.assertNotIn("prompt_cache_min_tokens", merged)
 
     def test_restorable_settings_cover_defaults(self):
         self.assertLessEqual(
@@ -1434,11 +1636,17 @@ class TestConfig(unittest.TestCase):
             set(self.config.RESTORABLE_SETTING_KEYS),
             set(self.config.DEFAULT_CONFIG.keys())
             - {
+                "config_version",
+                "chat_send_empty_fields",
+                "chat_modify_prompt_before_send",
                 "suppress_default_system_instruction_warning",
                 "suppress_api_key_restore_warning",
                 "suppress_settings_unsaved_close_warning",
                 "suppress_settings_save_confirm_warning",
                 "suppress_settings_cancel_confirm_warning",
+                "suppress_prompt_cache_created_optimize_notice",
+                "settings_show_text_newlines",
+                "dev_mock_mode",
             },
         )
 
@@ -1811,6 +2019,584 @@ class TestGeminiHttpIntegration(unittest.TestCase):
             )
         self.assertEqual(result, "OK")
         self.assertIn("alt=sse", post.call_args.args[0])
+
+
+class TestPromptCache(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.pc = _load_addon_module("prompt_cache")
+
+    def setUp(self) -> None:
+        self.pc.clear_prompt_cache_store()
+
+    def test_bundle_disabled_by_default(self) -> None:
+        bundle = self.pc.build_prompt_cache_bundle({"language": "en"}, purpose="chat")
+        self.assertIsNone(bundle)
+
+    def test_bundle_respects_minimum_chars(self) -> None:
+        config = {
+            "language": "en",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 199_997,
+            "prompt_cache_segments": {"system_instruction": True},
+            "system_instruction": "Short rules",
+        }
+        bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
+        self.assertIsNone(bundle)
+
+    def test_bundle_includes_enabled_system_instruction(self) -> None:
+        config = {
+            "language": "en",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {"system_instruction": True},
+            "system_instruction": "X" * 9000,
+        }
+        bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
+        self.assertIsNotNone(bundle)
+        self.assertIn("system_instruction", bundle.enabled_segment_ids)
+        self.assertIn("X" * 100, bundle.cached_system_text)
+
+    def test_prompt_cache_segments_auto_enables_context_wrapper(self) -> None:
+        config = {
+            "prompt_cache_segments": {
+                "imported_note": True,
+                "card_templates": False,
+                "notetype_css": False,
+                "context_wrapper": False,
+            }
+        }
+        segments = self.pc.prompt_cache_segments(config)
+        self.assertTrue(segments["context_wrapper"])
+        segments_off = self.pc.prompt_cache_segments(
+            {"prompt_cache_segments": {"imported_note": False}}
+        )
+        self.assertFalse(segments_off["context_wrapper"])
+
+    def test_bundle_omits_context_wrapper_when_note_is_cached_segment(self) -> None:
+        config = {
+            "language": "en",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {
+                "system_instruction": True,
+                "imported_note": True,
+            },
+            "system_instruction": "X" * 9000,
+        }
+        session = self.pc.PromptCacheSessionContext(
+            note_context="Field A\nvalue",
+            include_note_context=True,
+        )
+        bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat", session=session)
+        self.assertIsNotNone(bundle)
+        assert bundle is not None
+        self.assertNotIn("context_wrapper", bundle.enabled_segment_ids)
+        self.assertIn("Field A", bundle.cached_system_text)
+        self.assertNotIn("[STUDENT REQUEST]", bundle.cached_system_text)
+        self.assertNotIn("{{request}}", bundle.cached_system_text)
+
+    def test_bundle_includes_cache_safe_wrapper_when_templates_cached(self) -> None:
+        config = {
+            "language": "en",
+            "brain_import_templates": True,
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {
+                "system_instruction": True,
+                "imported_note": False,
+                "card_templates": True,
+            },
+            "system_instruction": "X" * 9000,
+        }
+        session = self.pc.PromptCacheSessionContext(
+            note_context="Field A\nvalue",
+            templates_block="[FRONT TEMPLATE]\n{{Front}}",
+            include_note_context=True,
+        )
+        bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat", session=session)
+        self.assertIsNotNone(bundle)
+        assert bundle is not None
+        self.assertIn("context_wrapper", bundle.enabled_segment_ids)
+        self.assertIn("card_templates", bundle.enabled_segment_ids)
+        self.assertIn("{{context}}", bundle.cached_system_text)
+        self.assertNotIn("{{request}}", bundle.cached_system_text)
+
+    def test_live_chat_payload_uses_request_only_without_note(self) -> None:
+        config = {"language": "en"}
+        session = self.pc.PromptCacheSessionContext(
+            note_context="",
+            include_note_context=False,
+        )
+        payload = self.pc.build_live_chat_payload(
+            config,
+            "My question?",
+            session=session,
+            bundle=None,
+        )
+        self.assertIn("[STUDENT REQUEST]", payload)
+        self.assertIn("My question?", payload)
+
+    def test_live_chat_payload_uses_plain_question_when_note_cached(self) -> None:
+        config = {"language": "en", "prompt_cache_enabled": True, "prompt_cache_min_chars": 37}
+        session = self.pc.PromptCacheSessionContext(
+            note_context="Field A\nvalue",
+            include_note_context=True,
+        )
+        bundle = self.pc.PromptCacheBundle(
+            fingerprint="fp",
+            cached_system_text="cached",
+            cached_contents=[],
+            live_system_text="",
+            cached_char_count=6,
+            estimated_cached_tokens=100,
+            enabled_segment_ids=("imported_note", "context_wrapper"),
+        )
+        payload = self.pc.build_live_chat_payload(
+            config,
+            "My question?",
+            session=session,
+            bundle=bundle,
+        )
+        self.assertIn("My question?", payload)
+        self.assertIn("[STUDENT REQUEST]", payload)
+        self.assertNotIn("Field A", payload)
+
+    def test_bundle_includes_format_guide_segment_when_enabled(self) -> None:
+        config = {
+            "language": "en",
+            "brain_import_templates": True,
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {
+                "system_instruction": True,
+                "card_templates_format_guide": True,
+            },
+            "system_instruction": "X" * 9000,
+        }
+        session = self.pc.PromptCacheSessionContext(
+            templates_block="[FRONT TEMPLATE]\n{{Front}}",
+            include_note_context=True,
+        )
+        bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat", session=session)
+        self.assertIsNotNone(bundle)
+        self.assertIn("card_templates_format_guide", bundle.enabled_segment_ids)
+        self.assertIn("[HOW TO READ ANKI CARD TEMPLATES AND STYLING]", bundle.cached_system_text)
+
+    def test_live_chat_payload_omits_format_guide_when_cached(self) -> None:
+        config = {
+            "language": "en",
+            "brain_import_templates": True,
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+        }
+        session = self.pc.PromptCacheSessionContext(
+            note_context="Field [Front]\nHello",
+            templates_block="[FRONT TEMPLATE]\n{{Front}}",
+            include_note_context=True,
+        )
+        bundle = self.pc.PromptCacheBundle(
+            fingerprint="fp",
+            cached_system_text="cached",
+            cached_contents=[],
+            live_system_text="",
+            cached_char_count=6,
+            estimated_cached_tokens=100,
+            enabled_segment_ids=(
+                "imported_note",
+                "card_templates_format_guide",
+                "card_templates",
+            ),
+        )
+        payload = self.pc.build_live_chat_payload(
+            config,
+            "My question?",
+            session=session,
+            bundle=bundle,
+        )
+        self.assertNotIn("[HOW TO READ ANKI CARD TEMPLATES AND STYLING]", payload)
+        self.assertNotIn("{{Front}}", payload)
+        self.assertIn("My question?", payload)
+
+    def test_optimize_bundle_uses_split_system_instruction(self) -> None:
+        config = {
+            "language": "en",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {"system_instruction": True},
+            "system_instruction_shared": False,
+            "system_instruction_optimize": "Optimize-only " + ("X" * 9000),
+            "system_instruction_chat": "Chat-only " + ("Y" * 9000),
+        }
+        optimize_bundle = self.pc.build_prompt_cache_bundle(config, purpose="optimize")
+        chat_bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
+        self.assertIsNotNone(optimize_bundle)
+        self.assertIsNotNone(chat_bundle)
+        self.assertIn("Optimize-only", optimize_bundle.cached_system_text)
+        self.assertNotIn("Chat-only", optimize_bundle.cached_system_text)
+        self.assertIn("Chat-only", chat_bundle.cached_system_text)
+        self.assertNotIn("Optimize-only", chat_bundle.cached_system_text)
+
+    def test_ensure_prompt_cache_reports_created(self) -> None:
+        config = {
+            "language": "en",
+            "api_key": "test-key",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {"system_instruction": True},
+            "system_instruction": "X" * 9000,
+        }
+        bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
+        self.assertIsNotNone(bundle)
+        with patch.object(self.pc, "create_cached_content") as create, patch.object(
+            self.pc, "cleanup_orphan_remote_caches"
+        ), patch.object(self.pc, "delete_untracked_addon_caches"), patch.object(
+            self.pc, "_verify_active_remote_cache", return_value=True
+        ):
+            create.return_value = self.pc.ActivePromptCache(
+                name="cachedContents/abc",
+                fingerprint=bundle.fingerprint,
+                model="gemini-2.5-flash",
+                purpose="chat",
+                expire_at=9999999999.0,
+                ttl_seconds=3600,
+                cached_char_count=bundle.cached_char_count,
+            )
+            first = self.pc.ensure_prompt_cache(
+                config=config,
+                purpose="chat",
+                bundle=bundle,
+            )
+            second = self.pc.ensure_prompt_cache(
+                config=config,
+                purpose="chat",
+                bundle=bundle,
+            )
+        self.assertTrue(first.created)
+        self.assertIsNotNone(first.active)
+        self.assertFalse(second.created)
+        self.assertIsNotNone(second.active)
+
+    def test_fingerprint_changes_when_segment_text_changes(self) -> None:
+        base = {
+            "language": "en",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {"system_instruction": True},
+        }
+        first = self.pc.build_prompt_cache_bundle(
+            {**base, "system_instruction": "A" * 9000},
+            purpose="chat",
+        )
+        second = self.pc.build_prompt_cache_bundle(
+            {**base, "system_instruction": "B" * 9000},
+            purpose="chat",
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertNotEqual(first.fingerprint, second.fingerprint)
+
+    def test_rebuild_preserves_custom_cache_content_shape(self) -> None:
+        config = {
+            "language": "en",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {
+                "system_instruction": True,
+                "custom_cache_text": True,
+            },
+            "system_instruction": "A" * 9000,
+            "prompt_cache_custom_text": "Custom rules here.",
+        }
+        original = self.pc.build_prompt_cache_bundle(config, purpose="chat")
+        assert original is not None
+        self.assertTrue(original.cached_system_text.strip())
+        self.assertTrue(original.cached_contents)
+
+        rebuilt = self.pc.rebuild_prompt_cache_bundle(
+            config,
+            purpose="chat",
+            enabled_segment_ids=original.enabled_segment_ids,
+            segment_texts={
+                "system_instruction": "A" * 9000,
+                "custom_cache_text": "Edited custom rules.",
+            },
+            live_system_text="",
+        )
+        self.assertIsNotNone(rebuilt)
+        assert rebuilt is not None
+        self.assertTrue(rebuilt.cached_system_text.strip())
+        self.assertTrue(rebuilt.cached_contents)
+        self.assertEqual(len(rebuilt.cached_contents), 1)
+        self.assertEqual(rebuilt.cached_contents[0]["role"], "user")
+        self.assertIn(
+            "Edited custom rules.",
+            rebuilt.cached_contents[0]["parts"][0]["text"],
+        )
+
+    def test_flattened_cache_upload_text_includes_formatted_sections(self) -> None:
+        config = {
+            "language": "en",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {
+                "system_instruction": True,
+                "custom_cache_text": True,
+            },
+            "system_instruction": "A" * 9000,
+            "prompt_cache_custom_text": "Custom rules here.",
+        }
+        bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
+        assert bundle is not None
+        flat = self.pc.flattened_cache_upload_text(bundle)
+        self.assertIn("=== System instructions ===", flat)
+        self.assertIn("A" * 9000, flat)
+        self.assertIn("=== Custom cache text ===", flat)
+        self.assertIn("Custom rules here.", flat)
+        self.assertLess(flat.index("=== System instructions ==="), flat.index("=== Custom cache text ==="))
+
+    def test_cached_fingerprint_ignores_live_system_text(self) -> None:
+        config = {
+            "language": "en",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {"system_instruction": True},
+            "system_instruction": "A" * 9000,
+        }
+        first = self.pc.rebuild_prompt_cache_bundle(
+            config,
+            purpose="chat",
+            enabled_segment_ids=("system_instruction",),
+            segment_texts={"system_instruction": "A" * 9000},
+            live_system_text="Live A",
+        )
+        second = self.pc.rebuild_prompt_cache_bundle(
+            config,
+            purpose="chat",
+            enabled_segment_ids=("system_instruction",),
+            segment_texts={"system_instruction": "A" * 9000},
+            live_system_text="Live B",
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        assert first is not None and second is not None
+        self.assertEqual(first.fingerprint, second.fingerprint)
+        self.assertNotEqual(first.live_system_text, second.live_system_text)
+
+    def test_will_recreate_only_when_stale_active_exists(self) -> None:
+        store = self.pc.PromptCacheStore(purpose="chat")
+        config = {
+            "language": "en",
+            "model_chat": "gemini-2.5-flash",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {"system_instruction": True},
+            "system_instruction": "A" * 9000,
+        }
+        bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
+        assert bundle is not None
+        self.assertFalse(
+            self.pc.prompt_cache_will_recreate(store, bundle, config, purpose="chat")
+        )
+        store.active = self.pc.ActivePromptCache(
+            name="cachedContents/old",
+            fingerprint="stale",
+            model="gemini-2.5-flash",
+            purpose="chat",
+            expire_at=9_999_999_999.0,
+            ttl_seconds=3600,
+            cached_char_count=bundle.cached_char_count,
+        )
+        self.assertTrue(
+            self.pc.prompt_cache_will_recreate(store, bundle, config, purpose="chat")
+        )
+
+    def test_needs_recreate_confirm_when_stale_active(self) -> None:
+        config = {
+            "language": "en",
+            "model_chat": "gemini-2.5-flash",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_ttl_seconds": 3600,
+            "prompt_cache_segments": {"system_instruction": True},
+            "system_instruction": "A" * 9000,
+        }
+        bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
+        assert bundle is not None
+        store = self.pc.get_prompt_cache_store("chat")
+        store.active = self.pc.ActivePromptCache(
+            name="cachedContents/old",
+            fingerprint="stale",
+            model="gemini-2.5-flash",
+            purpose="chat",
+            expire_at=9_999_999_999.0,
+            ttl_seconds=3600,
+            cached_char_count=bundle.cached_char_count,
+        )
+        self.assertTrue(
+            self.pc.needs_prompt_cache_recreate_confirm(
+                config,
+                bundle,
+                purpose="chat",
+            )
+        )
+
+    def test_needs_no_recreate_confirm_without_stale_active(self) -> None:
+        config = {
+            "language": "en",
+            "model_chat": "gemini-2.5-flash",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {"system_instruction": True},
+            "system_instruction": "A" * 9000,
+        }
+        bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
+        assert bundle is not None
+        self.assertFalse(
+            self.pc.needs_prompt_cache_recreate_confirm(
+                config,
+                bundle,
+                purpose="chat",
+            )
+        )
+
+    def test_purpose_from_display_name(self) -> None:
+        self.assertEqual(self.pc.purpose_from_display_name("anki-ai-chat"), "chat")
+        self.assertEqual(self.pc.purpose_from_display_name("anki-ai-optimize"), "optimize")
+        self.assertIsNone(self.pc.purpose_from_display_name("other"))
+
+    def test_persist_and_hydrate_store(self) -> None:
+        import os
+        import tempfile
+
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        old_path = self.pc.PROMPT_CACHE_STATE_PATH
+        try:
+            self.pc.PROMPT_CACHE_STATE_PATH = path
+            self.pc.clear_prompt_cache_store()
+            store = self.pc.get_prompt_cache_store("chat")
+            active = self.pc.ActivePromptCache(
+                name="cachedContents/test",
+                fingerprint="fp",
+                model="gemini-2.5-flash",
+                purpose="chat",
+                expire_at=9_999_999_999.0,
+                ttl_seconds=3600,
+                cached_char_count=100,
+            )
+            self.pc._set_store_active(store, active)
+            self.pc._stores.clear()
+            self.pc._stores_hydrated = False
+            self.pc._hydrate_stores_from_disk()
+            reloaded = self.pc.get_prompt_cache_store("chat").active
+            self.assertIsNotNone(reloaded)
+            self.assertEqual(reloaded.name, "cachedContents/test")
+        finally:
+            self.pc.PROMPT_CACHE_STATE_PATH = old_path
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    def test_remote_entry_filters_addon_display_names(self) -> None:
+        entry = self.pc._remote_entry_from_api(
+            {
+                "name": "cachedContents/abc",
+                "displayName": "anki-ai-chat",
+                "model": "models/gemini-2.5-flash",
+                "expireTime": "2030-01-01T00:00:00Z",
+            },
+            tracked_names=set(),
+        )
+        self.assertIsNotNone(entry)
+        assert entry is not None
+        self.assertEqual(entry.purpose, "chat")
+        self.assertEqual(entry.model, "gemini-2.5-flash")
+        self.assertFalse(entry.tracked)
+        self.assertIsNone(
+            self.pc._remote_entry_from_api(
+                {"name": "cachedContents/x", "displayName": "other"},
+                tracked_names=set(),
+            )
+        )
+
+
+class TestDevMock(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.dev_mock = _load_addon_module("dev_mock")
+        cls.gc = _load_addon_module("gemini_client")
+        cls.pc = _load_addon_module("prompt_cache")
+        cls.config = _load_addon_module("config")
+
+    def setUp(self) -> None:
+        self.dev_mock.reset_dev_mock_state()
+        self.pc.clear_prompt_cache_store()
+
+    def tearDown(self) -> None:
+        self.dev_mock.reset_dev_mock_state()
+        config = self.config.load_config()
+        config["dev_mock_mode"] = False
+        self.config.save_config(config)
+
+    def test_mock_call_gemini_chat(self) -> None:
+        config = {"language": "en", "dev_mock_mode": True}
+        payload = {"contents": [{"role": "user", "parts": [{"text": "Hello mock"}]}]}
+        reply = self.dev_mock.try_mock_call_gemini(
+            config=config,
+            user_text="Hello mock",
+            payload=payload,
+            purpose="chat",
+        )
+        self.assertIsNotNone(reply)
+        assert reply is not None
+        self.assertIn("[Dev mock", reply)
+
+    def test_mock_prompt_cache_create_without_api_key(self) -> None:
+        config = {
+            "language": "en",
+            "dev_mock_mode": True,
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {"system_instruction": True},
+            "system_instruction": "X" * 9000,
+        }
+        bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
+        self.assertIsNotNone(bundle)
+        result = self.pc.ensure_prompt_cache(config=config, purpose="chat", bundle=bundle)
+        self.assertTrue(result.created)
+        self.assertIsNotNone(result.active)
+        assert result.active is not None
+        self.assertTrue(result.active.name.startswith("cachedContents/dev-mock-"))
+
+    def test_api_key_not_required_when_mock_enabled(self) -> None:
+        config = {"dev_mock_mode": True, "api_key": ""}
+        self.assertTrue(self.config.api_key_configured(config))
+
+    def test_prepare_gemini_request_uses_mock_without_network(self) -> None:
+        config = {
+            "language": "en",
+            "dev_mock_mode": True,
+            "chat_streaming": False,
+        }
+        prepared = self.gc.prepare_gemini_request(
+            config=config,
+            user_text="Ping",
+            history=None,
+            temperature=0.2,
+            include_meta_rule=False,
+            purpose="chat",
+        )
+        with patch.object(self.gc.requests, "post") as post:
+            reply = self.gc.call_gemini(
+                config=config,
+                user_text="Ping",
+                include_meta_rule=False,
+                purpose="chat",
+            )
+        post.assert_not_called()
+        self.assertIn("[Dev mock", reply)
 
 
 if __name__ == "__main__":

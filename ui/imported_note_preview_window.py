@@ -3,12 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from aqt.qt import (
-    QHBoxLayout,
     QLabel,
-    QPushButton,
     QScrollArea,
     QSizePolicy,
-    QStyle,
     Qt,
     QTextEdit,
     QVBoxLayout,
@@ -74,14 +71,6 @@ class ImportedNotePreviewWindow(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
 
-        toolbar = QHBoxLayout()
-        toolbar.addStretch(1)
-        self._refresh_btn = QPushButton(self)
-        self._refresh_btn.setFlat(True)
-        self._refresh_btn.clicked.connect(self.refresh)
-        toolbar.addWidget(self._refresh_btn)
-        root.addLayout(toolbar)
-
         self._content_host = QWidget(self)
         self._content_layout = QVBoxLayout(self._content_host)
         self._content_layout.setContentsMargins(0, 0, 0, 0)
@@ -139,14 +128,6 @@ class ImportedNotePreviewWindow(QWidget):
     def apply_language(self, config: dict | None = None) -> None:
         config = config or load_config()
         self.setWindowTitle(tr("chat.preview.window_title", config=config))
-        self._refresh_btn.setToolTip(tr("chat.preview.refresh", config=config))
-        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
-        if not icon.isNull():
-            self._refresh_btn.setIcon(icon)
-            self._refresh_btn.setText("")
-        else:
-            self._refresh_btn.setIcon(icon)
-            self._refresh_btn.setText("↻")
 
     def apply_theme(self) -> None:
         if self._scroll is not None:
@@ -163,11 +144,7 @@ class ImportedNotePreviewWindow(QWidget):
 
     def refresh(self) -> None:
         config = load_config()
-        fields = [
-            (name, value)
-            for name, value in self._field_provider()
-            if value.strip()
-        ]
+        fields = list(self._field_provider())
         if self._ensure_web_view():
             load_note_preview_webview(
                 self._web,

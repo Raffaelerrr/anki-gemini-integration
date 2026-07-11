@@ -263,9 +263,10 @@ class TemplatesEditPanel(QWidget):
             card_layout.addWidget(label)
 
             front_caption = QLabel(
-                tr("chat.context.front_template", config=config),
+                strong_label_html(tr("chat.context.front_template", config=config)),
                 card_block,
             )
+            front_caption.setTextFormat(Qt.TextFormat.RichText)
             front_caption.setContentsMargins(0, _CAPTION_TOP_GAP, 0, _CAPTION_BOTTOM_GAP)
             front_caption.setStyleSheet("margin: 0px; padding: 0px; background: transparent;")
             card_layout.addWidget(front_caption)
@@ -288,9 +289,10 @@ class TemplatesEditPanel(QWidget):
             _add_spacer_in(card_layout, card_block, _AFTER_EDITOR_GAP)
 
             back_caption = QLabel(
-                tr("chat.context.back_template", config=config),
+                strong_label_html(tr("chat.context.back_template", config=config)),
                 card_block,
             )
+            back_caption.setTextFormat(Qt.TextFormat.RichText)
             back_caption.setContentsMargins(0, _CAPTION_TOP_GAP, 0, _CAPTION_BOTTOM_GAP)
             back_caption.setStyleSheet("margin: 0px; padding: 0px; background: transparent;")
             card_layout.addWidget(back_caption)

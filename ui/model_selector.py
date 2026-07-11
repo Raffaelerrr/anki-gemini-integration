@@ -6,7 +6,10 @@ from aqt.qt import QComboBox, QCompleter, QStringListModel, Qt, QWidget
 
 from ..constants import GEMINI_MODEL_CHOICES
 from ..i18n import tr
-from .settings_compact_controls import create_settings_model_selector_shell
+from .settings_compact_controls import (
+    adjust_settings_compact_control_shell,
+    create_settings_model_selector_shell,
+)
 
 MAX_VISIBLE_MODELS = 12
 _ALL_MODELS_PROP = "_gemini_all_models"
@@ -46,6 +49,9 @@ def set_model_selector_value(combo: QComboBox, value: str) -> None:
         all_models.insert(0, value)
         combo.setProperty(_ALL_MODELS_PROP, all_models)
     _repopulate_combo(combo, filter_model_choices(all_models, ""), edit_text=value)
+    shell = getattr(combo, "_settings_control_shell", None)
+    if shell is not None:
+        adjust_settings_compact_control_shell(shell)
 
 
 def merge_model_choice_lists(*lists: list[str]) -> list[str]:
@@ -70,6 +76,9 @@ def update_model_selector_choices(combo: QComboBox, models: list[str]) -> None:
         all_models.insert(0, current)
     combo.setProperty(_ALL_MODELS_PROP, all_models)
     _repopulate_combo(combo, filter_model_choices(all_models, ""), edit_text=current)
+    shell = getattr(combo, "_settings_control_shell", None)
+    if shell is not None:
+        adjust_settings_compact_control_shell(shell)
 
 
 def create_model_selector(

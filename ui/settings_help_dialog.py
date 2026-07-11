@@ -17,14 +17,25 @@ from aqt.qt import (
 )
 
 from ..config import RESTORABLE_SETTING_KEYS, RESTORABLE_SETTING_LABELS, SETTING_HELP_KEYS
+from ..constants import (
+    GEMINI_AI_STUDIO_BILLING_URL,
+    GEMINI_AI_STUDIO_USAGE_URL,
+    GEMINI_API_BILLING_DOCS_URL,
+)
 from ..i18n import tr
-from .theme import apply_native_page_scroll_theme, info_button_stylesheet, muted_hint_html
+from .settings_compact_controls import apply_settings_icon_row_height
+from .theme import (
+    apply_native_page_scroll_theme,
+    configure_circular_icon_button,
+    info_button_stylesheet,
+    muted_hint_html,
+)
 
 
 def _make_info_button(parent: QWidget, config: dict[str, Any]) -> QPushButton:
-    button = QPushButton("i", parent)
+    button = QPushButton(parent)
+    configure_circular_icon_button(button, text="i")
     button.setToolTip(tr("settings.help.info_tooltip", config=config))
-    button.setStyleSheet(info_button_stylesheet())
     button.setAutoDefault(False)
     button.setDefault(False)
     return button
@@ -65,7 +76,15 @@ class SettingsHelpDialog(QDialog):
         close_row.addWidget(self.btn_close)
         root.addLayout(close_row)
 
-        self._default_buttons = (self.btn_overview, self.btn_chat_live, self.btn_back, self.btn_close)
+        self._default_buttons = (
+            self.btn_overview,
+            self.btn_chat_live,
+            self.btn_chat_toolbar,
+            self.btn_track_costs,
+            self.btn_addon_sizes,
+            self.btn_back,
+            self.btn_close,
+        )
         self._set_help_page("list")
 
     def _build_list_page(self) -> QWidget:
@@ -88,6 +107,24 @@ class SettingsHelpDialog(QDialog):
         self.btn_chat_live.clicked.connect(self._show_chat_live_settings)
         outer.addWidget(self.btn_chat_live)
 
+        self.btn_chat_toolbar = QPushButton(tr("settings.help.chat_toolbar_icons.link", config=self.config), page)
+        self.btn_chat_toolbar.setAutoDefault(False)
+        self.btn_chat_toolbar.setDefault(False)
+        self.btn_chat_toolbar.clicked.connect(self._show_chat_toolbar_icons)
+        outer.addWidget(self.btn_chat_toolbar)
+
+        self.btn_track_costs = QPushButton(tr("settings.help.track_api_costs.link", config=self.config), page)
+        self.btn_track_costs.setAutoDefault(False)
+        self.btn_track_costs.setDefault(False)
+        self.btn_track_costs.clicked.connect(self._show_track_api_costs)
+        outer.addWidget(self.btn_track_costs)
+
+        self.btn_addon_sizes = QPushButton(tr("settings.help.addon_payload_sizes.link", config=self.config), page)
+        self.btn_addon_sizes.setAutoDefault(False)
+        self.btn_addon_sizes.setDefault(False)
+        self.btn_addon_sizes.clicked.connect(self._show_addon_payload_sizes)
+        outer.addWidget(self.btn_addon_sizes)
+
         outer.addWidget(QLabel("<br>"))
 
         scroll = QScrollArea(page)
@@ -101,16 +138,21 @@ class SettingsHelpDialog(QDialog):
 
         for key in RESTORABLE_SETTING_KEYS:
             label_key = RESTORABLE_SETTING_LABELS.get(key, key)
-            row = QHBoxLayout()
-            label = QLabel(tr(label_key, config=self.config), host)
+            row_widget = QWidget(host)
+            apply_settings_icon_row_height(row_widget, allow_multiline=True)
+            row = QHBoxLayout(row_widget)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(4)
+            label = QLabel(tr(label_key, config=self.config), row_widget)
             label.setWordWrap(True)
-            row.addWidget(label, stretch=1)
+            row_align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            row.addWidget(label, stretch=1, alignment=row_align)
 
-            btn_info = _make_info_button(host, self.config)
+            btn_info = _make_info_button(row_widget, self.config)
             btn_info.clicked.connect(lambda _checked=False, setting_key=key: self._show_detail(setting_key))
             self._info_buttons.append(btn_info)
-            row.addWidget(btn_info)
-            layout.addLayout(row)
+            row.addWidget(btn_info, 0, row_align)
+            layout.addWidget(row_widget)
 
         layout.addStretch(1)
         scroll.setWidget(host)
@@ -167,6 +209,44 @@ class SettingsHelpDialog(QDialog):
             f"<b>{tr('settings.help.chat_live_settings.title', config=self.config)}</b>"
         )
         self.detail_body.setHtml(tr("settings.help.chat_live_settings", config=self.config))
+        self.stack.setCurrentIndex(1)
+        self._set_help_page("detail")
+
+    def _show_chat_toolbar_icons(self) -> None:
+        self.detail_title.setText(
+            f"<b>{tr('settings.help.chat_toolbar_icons.title', config=self.config)}</b>"
+        )
+        self.detail_body.setHtml(tr("settings.help.chat_toolbar_icons", config=self.config))
+        self.stack.setCurrentIndex(1)
+        self._set_help_page("detail")
+
+    def _show_track_api_costs(self) -> None:
+        self.detail_title.setText(
+            f"<b>{tr('settings.help.track_api_costs.title', config=self.config)}</b>"
+        )
+        self.detail_body.setHtml(
+            tr(
+                "settings.help.track_api_costs",
+                config=self.config,
+                billing_url=GEMINI_AI_STUDIO_BILLING_URL,
+                usage_url=GEMINI_AI_STUDIO_USAGE_URL,
+                docs_url=GEMINI_API_BILLING_DOCS_URL,
+            )
+        )
+        self.stack.setCurrentIndex(1)
+        self._set_help_page("detail")
+
+    def _show_addon_payload_sizes(self) -> None:
+        self.detail_title.setText(
+            f"<b>{tr('settings.help.addon_payload_sizes.title', config=self.config)}</b>"
+        )
+        self.detail_body.setHtml(
+            tr(
+                "settings.help.addon_payload_sizes",
+                config=self.config,
+                billing_url=GEMINI_AI_STUDIO_BILLING_URL,
+            )
+        )
         self.stack.setCurrentIndex(1)
         self._set_help_page("detail")
 

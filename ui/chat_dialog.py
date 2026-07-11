@@ -7,14 +7,17 @@ from typing import Any
 from aqt import mw
 from aqt.qt import (
     QApplication,
-    QCheckBox,
     QCloseEvent,
     QShowEvent,
     QHBoxLayout,
+    QIcon,
     QLabel,
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QSize,
+    QMenu,
+    QToolButton,
     QTextBrowser,
     QTextCursor,
     QTextEdit,
@@ -26,28 +29,36 @@ from aqt.qt import (
 )
 from aqt.utils import tooltip
 
-from ..chat_context_wrapper import wrapper_has_conditional_blocks
-from ..config import api_key_configured, load_config, save_config
 from ..i18n import (
-    chat_context_wrapper_for_session,
-    chat_context_wrapper_missing_placeholders,
-    chat_edit_wrapper_hint_text,
-    chat_edit_wrapper_label_text,
     effective_brain_import_message,
-    effective_chat_context_wrapper,
     format_chat_context_message,
-    is_builtin_chat_context_wrapper,
-    wrapper_import_warning_text,
-    wrapper_missing_import_placeholders,
+    is_builtin_card_templates_format_prompt,
+    is_builtin_wrapper_layout,
+    normalize_wrapper_sections_for_save,
     tr,
 )
+from ..note_context_fields import fields_for_note_preview, format_note_context
+from ..config import api_key_configured, load_config, save_config
+from ..prompt_cache import (
+    PromptCacheSessionContext,
+    build_live_chat_payload,
+    build_prompt_cache_bundle,
+    clear_prompt_cache,
+)
+from .chat_templates_edit_window import ChatTemplatesEditWindow
+from .chat_wrapper_edit_window import ChatWrapperEditWindow
 from ..prompt_inspection import (
     build_chat_prompt_inspection,
     chat_session_config_changed,
     chat_session_config_fingerprint,
 )
-from ..token_estimate import estimate_chat_request_tokens
-from .prompt_inspection_dialog import PromptInspectionWindow
+from ..token_estimate import estimate_chat_request_chars
+from .prompt_cache_confirm import confirm_prompt_cache_recreate_if_needed
+from .pre_send_prompt_dialog import (
+    PreSendPromptContext,
+    confirm_pre_send_prompt,
+    open_prompt_preview,
+)
 from ..gemini_client import (
     GeminiAuthError,
     GeminiCancelledError,
@@ -56,6 +67,7 @@ from ..gemini_client import (
     call_gemini,
     extract_dynamic_rules,
     merge_system_instructions,
+    resolve_model,
     stream_gemini,
     trim_history,
 )
@@ -77,31 +89,32 @@ from .chat_math_log import (
     create_chat_log_webview,
     load_chat_log_webview,
 )
+from .chat_note_edit_window import ChatNoteEditWindow
 from .chat_messages import ChatMessage
 from .imported_note_preview_window import ImportedNotePreviewWindow
-from .note_preview_panel import NotePreviewPanel
-from .templates_edit_panel import TemplatesEditPanel
-from .visibility_icons import VisibilityToggleButton
-from .settings_compact_controls import create_ui_text_edit
+from .settings_compact_controls import create_ui_text_edit, refresh_settings_text_edit_newlines
+from .svg_icons import (
+    LoadingStatusIcon,
+    barred_brain_icon,
+    brain_icon,
+    eye_icon,
+    lens_icon,
+    pencil_icon,
+    plus_icon,
+    priority_sign_icon,
+    robot_svg_path,
+    stop_circle_svg_path,
+    stop_sign_icon,
+)
 from .theme import (
-    apply_widget_tooltip_palette,
+    ICON_BUTTON_SIZE,
     chat_document_stylesheet,
-    info_button_stylesheet,
+    chat_toolbar_button_stylesheet,
     loading_label_stylesheet,
-    muted_hint_html,
     refresh_native_text_edits_in,
-    strong_label_html,
     settings_stale_banner_stylesheet,
     tooltip_stylesheet,
 )
-
-def _format_note_context(fields: list[tuple[str, str]], config: dict[str, Any]) -> str:
-    lines: list[str] = []
-    for name, value in fields:
-        if not value.strip():
-            continue
-        lines.append(f"{tr('chat.context.field', config=config, name=name)}\n{value}")
-    return "\n\n".join(lines)
 
 
 class ChatWindow(QWidget):
@@ -125,9 +138,10 @@ class ChatWindow(QWidget):
         self._imported_card_templates: list[CardTemplateData] = []
         self._imported_notetype_css: str = ""
         self._imported_notetype_id: int | None = None
-        self._context_wrapper_template: str | None = None
+        self._session_wrapper_override: dict[str, Any] | None = None
         self._messages: list[ChatMessage] = []
         self._loading_phase = 0
+        self._loading_rotation_degrees = 0
         self._copy_blocks: dict[str, str] = {}
         self._copy_counter = 0
         self._streaming_message_index: int | None = None
@@ -140,93 +154,122 @@ class ChatWindow(QWidget):
         self._restorable_user_text = ""
         self._request_token = 0
         self._note_preview_window: ImportedNotePreviewWindow | None = None
-        self._prompt_inspection_window: PromptInspectionWindow | None = None
+        self._note_edit_window: ChatNoteEditWindow | None = None
+        self._wrapper_edit_window: ChatWrapperEditWindow | None = None
+        self._templates_edit_window: ChatTemplatesEditWindow | None = None
+        self._prompt_preview_dialog = None
         self._session_config_fingerprint = ""
         self._settings_stale_banner_dismissed = False
-        self._wrapper_warning_dismissed: set[str] = set()
 
         layout = QVBoxLayout(self)
 
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
-        self.context_checkbox = QCheckBox(self)
-        self.context_checkbox.setChecked(False)
-        self.context_checkbox.setEnabled(False)
-        self.context_checkbox.setSizePolicy(
-            QSizePolicy.Policy.Minimum,
+        self.btn_include_context = QPushButton(self)
+        self.btn_include_context.setCheckable(True)
+        self.btn_include_context.setChecked(False)
+        self.btn_include_context.setEnabled(False)
+        self.btn_include_context.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
+        self.btn_include_context.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
             QSizePolicy.Policy.Fixed,
         )
-        self.context_checkbox.toggled.connect(self._on_context_checkbox_toggled)
-        toolbar.addWidget(self.context_checkbox)
-
-        self.edit_wrapper_checkbox = QCheckBox(self)
-        self.edit_wrapper_checkbox.setChecked(False)
-        self.edit_wrapper_checkbox.setEnabled(False)
-        self.edit_wrapper_checkbox.setSizePolicy(
-            QSizePolicy.Policy.Minimum,
-            QSizePolicy.Policy.Fixed,
-        )
-        self.edit_wrapper_checkbox.toggled.connect(self._on_edit_wrapper_toggled)
-        self.edit_wrapper_checkbox.setAttribute(
+        self.btn_include_context.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_include_context.setAttribute(
             Qt.WidgetAttribute.WA_AlwaysShowToolTips,
             True,
         )
-        toolbar.addWidget(self.edit_wrapper_checkbox)
+        self.btn_include_context.toggled.connect(self._on_include_context_toggled)
+        toolbar.addWidget(self.btn_include_context)
 
-        self.edit_templates_checkbox = QCheckBox(self)
-        self.edit_templates_checkbox.setChecked(False)
-        self.edit_templates_checkbox.setEnabled(False)
-        self.edit_templates_checkbox.setSizePolicy(
-            QSizePolicy.Policy.Minimum,
+        self.btn_edit_menu = QToolButton(self)
+        self.btn_edit_menu.setObjectName("chatEditMenu")
+        self.btn_edit_menu.setEnabled(False)
+        self.btn_edit_menu.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.btn_edit_menu.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.btn_edit_menu.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
+        self.btn_edit_menu.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
             QSizePolicy.Policy.Fixed,
         )
-        self.edit_templates_checkbox.toggled.connect(self._on_edit_templates_toggled)
-        self.edit_templates_checkbox.setAttribute(
+        self.btn_edit_menu.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_edit_menu.setAttribute(
             Qt.WidgetAttribute.WA_AlwaysShowToolTips,
             True,
         )
-        toolbar.addWidget(self.edit_templates_checkbox)
+        self._edit_menu = QMenu(self)
+        self._edit_note_action = self._edit_menu.addAction("")
+        self._edit_note_action.triggered.connect(self._open_note_edit_window)
+        self._edit_wrapper_action = self._edit_menu.addAction("")
+        self._edit_wrapper_action.triggered.connect(self._open_wrapper_edit_window)
+        self._edit_templates_action = self._edit_menu.addAction("")
+        self._edit_templates_action.triggered.connect(self._open_templates_edit_window)
+        self.btn_edit_menu.setMenu(self._edit_menu)
+        toolbar.addWidget(self.btn_edit_menu)
 
         self.btn_note_preview = QPushButton(self)
         self.btn_note_preview.setEnabled(False)
+        self.btn_note_preview.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
         self.btn_note_preview.setSizePolicy(
-            QSizePolicy.Policy.Minimum,
             QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.btn_note_preview.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_note_preview.setAttribute(
+            Qt.WidgetAttribute.WA_AlwaysShowToolTips,
+            True,
         )
         self.btn_note_preview.clicked.connect(self._open_note_preview_window)
         toolbar.addWidget(self.btn_note_preview)
 
         self.btn_inspect_prompt = QPushButton(self)
-        self.btn_inspect_prompt.setVisible(False)
-        self.btn_inspect_prompt.setFixedSize(28, 28)
+        self.btn_inspect_prompt.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
         self.btn_inspect_prompt.setSizePolicy(
             QSizePolicy.Policy.Fixed,
             QSizePolicy.Policy.Fixed,
         )
-        self.btn_inspect_prompt.setToolTip(tr("chat.inspect_prompt.tooltip"))
-        self.btn_inspect_prompt.clicked.connect(self._open_prompt_inspection)
+        self.btn_inspect_prompt.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_inspect_prompt.setAttribute(
+            Qt.WidgetAttribute.WA_AlwaysShowToolTips,
+            True,
+        )
+        self.btn_inspect_prompt.clicked.connect(self._open_prompt_preview)
         toolbar.addWidget(self.btn_inspect_prompt)
 
-        self.btn_clear = QPushButton(self)
-        self.btn_clear.setSizePolicy(
-            QSizePolicy.Policy.Minimum,
+        initial_stop_before_send = bool(
+            load_config().get("chat_modify_prompt_before_send", False)
+        )
+        self.stop_before_send_btn = QPushButton(self)
+        self.stop_before_send_btn.setCheckable(True)
+        self.stop_before_send_btn.setChecked(initial_stop_before_send)
+        self.stop_before_send_btn.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
+        self.stop_before_send_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.stop_before_send_btn.toggled.connect(self._on_modify_prompt_toggled)
+        self.stop_before_send_btn.setSizePolicy(
             QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.stop_before_send_btn.setAttribute(
+            Qt.WidgetAttribute.WA_AlwaysShowToolTips,
+            True,
+        )
+        toolbar.addWidget(self.stop_before_send_btn)
+
+        self.btn_clear = QPushButton(self)
+        self.btn_clear.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
+        self.btn_clear.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.btn_clear.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear.setAttribute(
+            Qt.WidgetAttribute.WA_AlwaysShowToolTips,
+            True,
         )
         self.btn_clear.clicked.connect(self.clear_conversation)
         toolbar.addWidget(self.btn_clear)
 
         toolbar.addStretch(1)
-
-        self.note_visibility_toggle = VisibilityToggleButton(
-            self,
-            on_click=self._toggle_note_preview_visibility,
-        )
-        self.note_visibility_toggle.hide()
-        toolbar.addWidget(
-            self.note_visibility_toggle,
-            0,
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
-        )
         layout.addLayout(toolbar)
 
         self._settings_stale_banner = QWidget(self)
@@ -240,7 +283,7 @@ class ChatWindow(QWidget):
         stale_layout.addWidget(self._settings_stale_banner_text, 1)
         self._settings_stale_banner_close = QPushButton(self._settings_stale_banner)
         self._settings_stale_banner_close.setObjectName("settingsStaleBannerClose")
-        self._settings_stale_banner_close.setFixedSize(28, 28)
+        self._settings_stale_banner_close.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
         self._settings_stale_banner_close.clicked.connect(self._dismiss_settings_stale_banner)
         stale_layout.addWidget(
             self._settings_stale_banner_close,
@@ -250,15 +293,8 @@ class ChatWindow(QWidget):
         self._settings_stale_banner.setVisible(False)
         layout.addWidget(self._settings_stale_banner)
 
-        self._body_splitter = ChatBodySplitter(self, chat_section_index=1)
+        self._body_splitter = ChatBodySplitter(self, chat_section_index=0)
         layout.addWidget(self._body_splitter, 1)
-
-        self.note_preview_panel = NotePreviewPanel(self._body_splitter)
-        self.note_preview_panel.bind_visibility_toggle(self.note_visibility_toggle)
-        self.note_preview_panel.on_fields_changed = self._sync_note_context_from_preview
-        self.note_preview_panel.on_content_visibility_changed = (
-            self._on_note_preview_content_visibility_changed
-        )
 
         self._uses_web_chat_log = False
         if chat_math_log_available():
@@ -279,73 +315,20 @@ class ChatWindow(QWidget):
             QSizePolicy.Policy.Expanding,
         )
 
-        self._wrapper_panel = QWidget(self._body_splitter)
-        panel_layout = QVBoxLayout(self._wrapper_panel)
-        panel_layout.setContentsMargins(0, 4, 0, 4)
-        panel_layout.setSpacing(4)
-        wrapper_header = QHBoxLayout()
-        wrapper_header.setContentsMargins(0, 0, 0, 0)
-        self.context_edit_wrapper_label = QLabel(self._wrapper_panel)
-        wrapper_header.addWidget(self.context_edit_wrapper_label)
-        wrapper_header.addStretch(1)
-        panel_layout.addLayout(wrapper_header)
-        self.context_edit_wrapper_hint = QLabel(self._wrapper_panel)
-        panel_layout.addWidget(self.context_edit_wrapper_hint)
-        self.context_edit_wrapper_warning_banner = QWidget(self._wrapper_panel)
-        self.context_edit_wrapper_warning_banner.setObjectName("settingsStaleBanner")
-        wrapper_warning_layout = QHBoxLayout(self.context_edit_wrapper_warning_banner)
-        wrapper_warning_layout.setContentsMargins(0, 0, 0, 0)
-        wrapper_warning_layout.setSpacing(0)
-        self.context_edit_wrapper_warning = QLabel(self.context_edit_wrapper_warning_banner)
-        self.context_edit_wrapper_warning.setObjectName("settingsStaleBannerText")
-        self.context_edit_wrapper_warning.setWordWrap(True)
-        wrapper_warning_layout.addWidget(self.context_edit_wrapper_warning, 1)
-        self.context_edit_wrapper_warning_close = QPushButton(self.context_edit_wrapper_warning_banner)
-        self.context_edit_wrapper_warning_close.setObjectName("settingsStaleBannerClose")
-        self.context_edit_wrapper_warning_close.setFixedSize(28, 28)
-        self.context_edit_wrapper_warning_close.clicked.connect(self._dismiss_wrapper_warning_banner)
-        wrapper_warning_layout.addWidget(
-            self.context_edit_wrapper_warning_close,
-            0,
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
-        )
-        self.context_edit_wrapper_warning_banner.setVisible(False)
-        panel_layout.addWidget(self.context_edit_wrapper_warning_banner)
-        wrapper_shell, self.context_edit_wrapper_input = create_ui_text_edit(
-            self._wrapper_panel,
-        )
-        self.context_edit_wrapper_input.setMinimumHeight(70)
-        wrapper_shell.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
-        )
-        self.context_edit_wrapper_input.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
-        )
-        self.context_edit_wrapper_input.textChanged.connect(self._on_context_edit_wrapper_changed)
-        panel_layout.addWidget(wrapper_shell, 1)
-        self._wrapper_panel.setMinimumHeight(56)
-        self._wrapper_panel.setSizePolicy(
-            QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Expanding,
-        )
-        self._wrapper_panel.setVisible(False)
-
-        self.templates_edit_panel = TemplatesEditPanel(self._body_splitter)
-        self.templates_edit_panel.on_templates_changed = self._sync_templates_from_panel
-
-        self._body_splitter.set_sections(
-            self.note_preview_panel,
-            self.chat_log,
-            self._wrapper_panel,
-            self.templates_edit_panel,
-        )
+        self._body_splitter.set_sections(self.chat_log)
         QTimer.singleShot(0, self._refresh_body_splitter_sizes)
 
-        self.loading_label = QLabel("", self)
-        self.loading_label.setVisible(False)
-        layout.addWidget(self.loading_label)
+        self.loading_row = QWidget(self)
+        loading_row_layout = QHBoxLayout(self.loading_row)
+        loading_row_layout.setContentsMargins(0, 0, 0, 0)
+        loading_row_layout.setSpacing(3)
+        self.loading_icon = LoadingStatusIcon(self.loading_row)
+        self.loading_text_label = QLabel("", self.loading_row)
+        loading_row_layout.addWidget(self.loading_icon)
+        loading_row_layout.addWidget(self.loading_text_label)
+        loading_row_layout.addStretch()
+        self.loading_row.setVisible(False)
+        layout.addWidget(self.loading_row)
 
         input_layout = QHBoxLayout()
         input_shell, self.input_field = create_ui_text_edit(
@@ -402,6 +385,10 @@ class ChatWindow(QWidget):
         self._body_splitter.rebalance_on_visibility_change(opened_index)
         QTimer.singleShot(0, self._refresh_body_splitter_sizes)
 
+    def _on_include_context_toggled(self, _checked: bool) -> None:
+        self._apply_include_context_icon()
+        self._on_body_section_visibility_changed()
+
     def _capture_session_config(self) -> None:
         config = load_config()
         self._session_config_fingerprint = chat_session_config_fingerprint(config)
@@ -422,82 +409,168 @@ class ChatWindow(QWidget):
                 tr("chat.settings_stale.message", config=config)
             )
 
-    def _sync_prompt_inspection_button(self, config: dict[str, Any] | None = None) -> None:
-        config = config or load_config()
-        self.btn_inspect_prompt.setVisible(bool(config.get("chat_prompt_inspection", False)))
+    def _toolbar_icon_size(self) -> int:
+        return ICON_BUTTON_SIZE - 4
 
-    def build_chat_prompt_inspection(self):
+    def _set_toolbar_icon(
+        self,
+        button: QPushButton | QToolButton,
+        icon: QIcon,
+    ) -> None:
+        icon_size = self._toolbar_icon_size()
+        if isinstance(button, QToolButton):
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        button.setIcon(icon)
+        button.setIconSize(QSize(icon_size, icon_size))
+        button.setText("")
+
+    def _apply_include_context_icon(self) -> None:
+        icon_size = self._toolbar_icon_size()
+        if self.btn_include_context.isChecked():
+            icon = brain_icon(icon_size)
+        else:
+            icon = barred_brain_icon(icon_size)
+        self._set_toolbar_icon(self.btn_include_context, icon)
+
+    def _apply_chat_toolbar_icons(self) -> None:
+        icon_size = self._toolbar_icon_size()
+        self._apply_include_context_icon()
+        self._set_toolbar_icon(self.btn_edit_menu, pencil_icon(icon_size))
+        self._set_toolbar_icon(self.btn_inspect_prompt, lens_icon(icon_size))
+        self._set_toolbar_icon(self.btn_note_preview, eye_icon(icon_size))
+        self._set_toolbar_icon(self.btn_clear, plus_icon(icon_size))
+        self._apply_stop_before_send_icon()
+
+    def _apply_chat_toolbar_styles(self) -> None:
+        icon_style = chat_toolbar_button_stylesheet(icon_only=True)
+        checkable_style = chat_toolbar_button_stylesheet(icon_only=True, checkable=True)
+        self.btn_include_context.setStyleSheet(checkable_style)
+        self.btn_edit_menu.setStyleSheet(icon_style)
+        self.btn_inspect_prompt.setStyleSheet(icon_style)
+        self.btn_note_preview.setStyleSheet(icon_style)
+        self.btn_clear.setStyleSheet(icon_style)
+        self.stop_before_send_btn.setStyleSheet(checkable_style)
+
+    def _stop_before_send_icon(self, *, checked: bool) -> QIcon:
+        icon_size = self._toolbar_icon_size()
+        if checked:
+            return stop_sign_icon(icon_size)
+        return priority_sign_icon(icon_size)
+
+    def _apply_stop_before_send_icon(self) -> None:
+        self._set_toolbar_icon(
+            self.stop_before_send_btn,
+            self._stop_before_send_icon(checked=self.stop_before_send_btn.isChecked()),
+        )
+
+    def _on_modify_prompt_toggled(self, checked: bool) -> None:
+        self._apply_stop_before_send_icon()
+        config = load_config()
+        config["chat_modify_prompt_before_send"] = bool(checked)
+        save_config(config)
+
+    def build_pre_send_context(self) -> PreSendPromptContext:
         config = load_config()
         user_text = self.input_field.toPlainText().strip()
-        draft = user_text or tr("prompt.inspect.empty_draft", config=config)
-        if self.context_checkbox.isChecked() and self.note_context:
-            payload = self._build_outgoing_payload(config, draft)
+        included_context = bool(self.btn_include_context.isChecked() and self.note_context)
+        cache_session = self._prompt_cache_session(config, included_context=included_context)
+        bundle = build_prompt_cache_bundle(config, purpose="chat", session=cache_session)
+        if bundle is not None:
+            payload_text = build_live_chat_payload(
+                config,
+                user_text or tr("prompt.inspect.empty_next_message", config=config),
+                session=cache_session,
+                bundle=bundle,
+            )
+        elif included_context:
+            draft = user_text or tr("prompt.inspect.empty_draft", config=config)
+            payload_text = self._build_outgoing_payload(config, draft)
         else:
-            payload = user_text or tr("prompt.inspect.empty_next_message", config=config)
-        return build_chat_prompt_inspection(
+            payload_text = user_text or tr("prompt.inspect.empty_next_message", config=config)
+        system_instruction = merge_system_instructions(
+            config,
+            include_meta_rule=True,
+            purpose="chat",
+        )
+        inspection = build_chat_prompt_inspection(
             config,
             history=list(self.api_history),
             next_user_text=user_text,
-            outgoing_payload=payload,
+            outgoing_payload=payload_text,
+        )
+        return PreSendPromptContext(
+            inspection=inspection,
+            outgoing_payload=payload_text,
+            system_instruction=system_instruction,
+            bundle=bundle,
+            model=resolve_model(config, "chat"),
+            cache_session=cache_session,
         )
 
-    def _open_prompt_inspection(self) -> None:
-        config = load_config()
-        inspection = self.build_chat_prompt_inspection()
-        if self._prompt_inspection_window is None:
-            self._prompt_inspection_window = PromptInspectionWindow(
-                self,
-                title=tr("prompt.inspect.chat.title", config=config),
-                refresh_callback=self.build_chat_prompt_inspection,
-            )
-        self._prompt_inspection_window.show_inspection(inspection, config)
+    def _open_prompt_preview(self) -> None:
+        context = self.build_pre_send_context()
+        self._prompt_preview_dialog = open_prompt_preview(
+            self,
+            context=context,
+            refresh_context=self.build_pre_send_context,
+            existing=self._prompt_preview_dialog,
+        )
 
     def apply_settings_refresh(self) -> None:
         config = load_config()
         self.apply_language()
-        self._sync_prompt_inspection_button(config)
         self._update_settings_stale_banner(config)
-        if self._prompt_inspection_window is not None and self._prompt_inspection_window.isVisible():
-            self._prompt_inspection_window.refresh()
+        show_newlines = bool(config.get("settings_show_text_newlines", False))
+        refresh_settings_text_edit_newlines(self, show_newlines)
+        if self._note_edit_window is not None:
+            self._note_edit_window.apply_newline_visibility(show_newlines)
+        if (
+            self._prompt_preview_dialog is not None
+            and self._prompt_preview_dialog.isVisible()
+        ):
+            self._prompt_preview_dialog.apply_context(self.build_pre_send_context())
 
     def _apply_chat_theme(self) -> None:
         self.setStyleSheet(tooltip_stylesheet())
-        apply_widget_tooltip_palette(self.note_visibility_toggle)
         if not self._uses_web_chat_log:
             self.chat_log.document().setDefaultStyleSheet(chat_document_stylesheet())
-        self.loading_label.setStyleSheet(loading_label_stylesheet())
-        self.context_edit_wrapper_warning_banner.setStyleSheet(settings_stale_banner_stylesheet())
+        loading_style = loading_label_stylesheet()
+        self.loading_text_label.setStyleSheet(loading_style)
         self._settings_stale_banner.setStyleSheet(settings_stale_banner_stylesheet())
-        self.btn_inspect_prompt.setStyleSheet(info_button_stylesheet())
-        self.note_preview_panel.apply_theme()
-        self.templates_edit_panel.apply_theme()
+        self._apply_chat_toolbar_styles()
+        self._apply_chat_toolbar_icons()
+        if self._note_edit_window is not None:
+            self._note_edit_window.apply_theme()
+        if self._wrapper_edit_window is not None:
+            self._wrapper_edit_window.apply_theme()
+        if self._templates_edit_window is not None:
+            self._templates_edit_window.apply_theme()
         if self._note_preview_window is not None:
             self._note_preview_window.apply_theme()
         refresh_native_text_edits_in(self)
+        if self.loading_row.isVisible():
+            self._apply_loading_display()
         self._render_chat_log(preserve_scroll=False)
 
     def _apply_static_texts(self) -> None:
         config = load_config()
         self.setWindowTitle(tr("chat.title", config=config))
-        self.context_checkbox.setText(tr("chat.include_context.short", config=config))
-        self.context_checkbox.setToolTip(tr("chat.include_context", config=config))
-        self.edit_wrapper_checkbox.setText(tr("chat.edit_wrapper.short", config=config))
-        self.edit_wrapper_checkbox.setToolTip(tr("chat.edit_wrapper.tooltip", config=config))
-        self.edit_templates_checkbox.setText(tr("chat.edit_templates.short", config=config))
-        self.edit_templates_checkbox.setToolTip(tr("chat.edit_templates.tooltip", config=config))
-        self._update_wrapper_static_texts(config)
-        self.note_preview_panel.apply_language(config)
-        self.btn_note_preview.setText(tr("chat.preview.open_window", config=config))
+        self.btn_include_context.setToolTip(tr("chat.include_context", config=config))
+        self.btn_edit_menu.setToolTip(tr("chat.edit.menu.tooltip", config=config))
+        self._refresh_edit_menu_actions(config)
         self.btn_note_preview.setToolTip(tr("chat.preview.open_window.tooltip", config=config))
-        self.btn_clear.setText(tr("chat.new_conversation.short", config=config))
         self.btn_clear.setToolTip(tr("chat.new_conversation", config=config))
-        self.btn_inspect_prompt.setText(tr("chat.inspect_prompt", config=config))
         self.btn_inspect_prompt.setToolTip(tr("chat.inspect_prompt.tooltip", config=config))
-        self._settings_stale_banner_close.setText(tr("chat.settings_stale.dismiss", config=config))
-        self.context_edit_wrapper_warning_close.setText(
-            tr("chat.settings_stale.dismiss", config=config)
+        self.stop_before_send_btn.setToolTip(
+            tr("chat.modify_prompt_before_send.tooltip", config=config)
         )
-        self._sync_prompt_inspection_button(config)
+        self.stop_before_send_btn.blockSignals(True)
+        self.stop_before_send_btn.setChecked(
+            bool(config.get("chat_modify_prompt_before_send", False))
+        )
+        self.stop_before_send_btn.blockSignals(False)
+        self._apply_chat_toolbar_icons()
+        self._settings_stale_banner_close.setText(tr("chat.settings_stale.dismiss", config=config))
         self._update_settings_stale_banner(config)
         if not self._uses_web_chat_log:
             self.chat_log.setPlaceholderText(tr("chat.log_placeholder", config=config))
@@ -506,10 +579,34 @@ class ChatWindow(QWidget):
             self.send_button.setText(tr("chat.stop", config=config))
         else:
             self.send_button.setText(tr("chat.send", config=config))
-        if self.loading_label.isVisible():
-            self._update_loading_animation()
+        if self.loading_row.isVisible():
+            self._apply_loading_display()
         if self._note_preview_window is not None:
             self._note_preview_window.apply_language(config)
+        if self._note_edit_window is not None:
+            self._note_edit_window.apply_language(config)
+        if self._wrapper_edit_window is not None:
+            self._wrapper_edit_window.apply_language(config)
+        if self._templates_edit_window is not None:
+            self._templates_edit_window.apply_language(config)
+
+    def _refresh_edit_menu_actions(self, config: dict[str, Any] | None = None) -> None:
+        config = config or load_config()
+        has_note = bool(self._imported_fields)
+        can_edit_templates = bool(self._imported_card_templates) or bool(
+            self._imported_notetype_css.strip()
+        )
+        self._edit_note_action.setText(tr("chat.edit_note", config=config))
+        self._edit_wrapper_action.setText(tr("chat.edit_wrapper", config=config))
+        self._edit_templates_action.setText(tr("chat.edit_templates", config=config))
+        self._edit_note_action.setEnabled(has_note)
+        self._edit_wrapper_action.setEnabled(has_note)
+        self._edit_templates_action.setEnabled(can_edit_templates)
+        self.btn_edit_menu.setEnabled(has_note)
+
+    def _preview_fields_provider(self) -> list[tuple[str, str]]:
+        config = load_config()
+        return fields_for_note_preview(self._imported_fields, config)
 
     def _close_note_preview_window(self) -> None:
         if self._note_preview_window is None:
@@ -518,12 +615,12 @@ class ChatWindow(QWidget):
         self._note_preview_window = None
 
     def _open_note_preview_window(self) -> None:
-        if not self.note_preview_panel.has_content():
+        if not self._imported_fields:
             return
         if self._note_preview_window is None:
             self._note_preview_window = ImportedNotePreviewWindow(
                 self,
-                field_provider=self.note_preview_panel.get_fields,
+                field_provider=self._preview_fields_provider,
                 notetype_id_provider=lambda: self._imported_notetype_id,
             )
             self._note_preview_window.destroyed.connect(
@@ -537,21 +634,12 @@ class ChatWindow(QWidget):
         self._note_preview_window.raise_()
         self._note_preview_window.activateWindow()
 
-    def _on_note_preview_content_visibility_changed(self, visible: bool) -> None:
-        self._on_body_section_visibility_changed(0 if visible else None)
-
-    def _toggle_note_preview_visibility(self) -> None:
-        panel = self.note_preview_panel
-        panel.set_content_visible(not panel.content_visible())
-
-    def _on_context_checkbox_toggled(self, checked: bool) -> None:
-        if not checked and self.note_preview_panel.has_content():
-            self.note_preview_panel.set_content_visible(False)
+    def _refresh_note_preview_if_open(self) -> None:
+        if self._note_preview_window is not None and self._note_preview_window.isVisible():
+            self._note_preview_window.refresh()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if self._imported_fields:
-            QTimer.singleShot(0, self.note_preview_panel.reflow)
         QTimer.singleShot(0, self._refresh_body_splitter_sizes)
 
     def apply_theme(self) -> None:
@@ -566,6 +654,7 @@ class ChatWindow(QWidget):
         self._cancel_in_flight_request()
         self._stop_loading()
         self._close_note_preview_window()
+        self._close_session_edit_windows()
         if self._uses_web_chat_log:
             cleanup_chat_log_webview(self.chat_log)
         _chat_window = None
@@ -576,6 +665,7 @@ class ChatWindow(QWidget):
         self._cancel_in_flight_request()
         self._stop_loading()
         self._close_note_preview_window()
+        self._close_session_edit_windows()
         if self._uses_web_chat_log:
             cleanup_chat_log_webview(self.chat_log)
         self._stream_visible = False
@@ -700,21 +790,17 @@ class ChatWindow(QWidget):
         self._imported_card_templates = []
         self._imported_notetype_css = ""
         self._imported_notetype_id = None
-        self._context_wrapper_template = None
+        self._session_wrapper_override = None
         self._messages.clear()
         self._copy_blocks.clear()
         self._stream_visible = False
         self._streaming_message_index = None
-        self.context_checkbox.setChecked(False)
-        self.context_checkbox.setEnabled(False)
-        self.edit_wrapper_checkbox.setChecked(False)
-        self.edit_wrapper_checkbox.setEnabled(False)
-        self._wrapper_panel.setVisible(False)
-        self.edit_templates_checkbox.setChecked(False)
-        self.edit_templates_checkbox.setEnabled(False)
-        self.templates_edit_panel.clear()
-        self.note_preview_panel.clear()
+        self.btn_include_context.setChecked(False)
+        self.btn_include_context.setEnabled(False)
+        self.btn_edit_menu.setEnabled(False)
+        self._close_session_edit_windows()
         self._on_body_section_visibility_changed()
+        clear_prompt_cache(config=config, purpose="chat")
         self._close_note_preview_window()
         self.btn_note_preview.setEnabled(False)
         self._add_system_message(
@@ -727,14 +813,9 @@ class ChatWindow(QWidget):
     def import_note_from_editor(self, editor) -> None:
         config = load_config()
         note = editor.note
-        imported_fields: list[tuple[str, str]] = []
+        imported_fields: list[tuple[str, str]] = list(note.items())
 
-        for name, value in note.items():
-            if not value.strip():
-                continue
-            imported_fields.append((name, value))
-
-        if not imported_fields:
+        if not any(value.strip() for _, value in imported_fields):
             self._add_system_message(
                 tr("chat.note_empty", config=config),
                 kind="error",
@@ -745,116 +826,106 @@ class ChatWindow(QWidget):
         self._imported_fields = imported_fields
         self._imported_notetype_id = note.mid
         raw_templates, raw_css = extract_notetype_context(note)
-        import_templates = bool(config.get("brain_import_templates", False))
-        import_css = bool(config.get("brain_import_css", False))
-        self._imported_card_templates = raw_templates if import_templates else []
-        self._imported_notetype_css = raw_css if import_css else ""
-        self.note_context = _format_note_context(imported_fields, config)
-        self._context_wrapper_template = None
-        self.context_checkbox.setEnabled(True)
-        self.context_checkbox.setChecked(True)
-        self.edit_wrapper_checkbox.setEnabled(True)
-        self._collapse_wrapper_panel()
+        self._imported_card_templates = raw_templates
+        self._imported_notetype_css = raw_css
+        self.note_context = format_note_context(imported_fields, config)
+        self._session_wrapper_override = None
+        clear_prompt_cache(config=config, purpose="chat")
+        self.btn_include_context.setEnabled(True)
+        self.btn_include_context.setChecked(True)
+        self._close_session_edit_windows()
         self._refresh_import_controls(config)
-        if import_templates and raw_templates:
-            self.templates_edit_panel.set_templates(
-                raw_templates,
-                styling=raw_css if import_css else "",
-                include_styling=import_css,
-            )
-        elif import_css and raw_css.strip():
-            self.templates_edit_panel.set_styling_only(raw_css)
-        else:
-            self.templates_edit_panel.clear()
         self._add_system_message(
             tr("chat.note_imported", config=config),
             kind="system",
             label=tr("chat.label.system", config=config),
         )
 
-        self.note_preview_panel.set_fields(imported_fields)
         self.btn_note_preview.setEnabled(True)
-        self._on_body_section_visibility_changed(0)
+        self._on_body_section_visibility_changed()
 
         self.input_field.setPlainText(effective_brain_import_message(config))
         self.input_field.setFocus()
 
     def _refresh_import_controls(self, config: dict[str, Any]) -> None:
-        import_templates = bool(config.get("brain_import_templates", False))
-        import_css = bool(config.get("brain_import_css", False))
-        can_edit_templates = (import_templates and bool(self._imported_card_templates)) or (
-            import_css and bool(self._imported_notetype_css.strip())
+        can_edit_templates = bool(self._imported_card_templates) or bool(
+            self._imported_notetype_css.strip()
         )
-        self.edit_templates_checkbox.setEnabled(can_edit_templates)
         if not can_edit_templates:
-            self._collapse_templates_panel()
-            self.templates_edit_panel.clear()
-        self._update_wrapper_static_texts(config)
+            self._close_templates_edit_window()
+        self._refresh_edit_menu_actions(config)
 
-    def _update_wrapper_static_texts(self, config: dict[str, Any]) -> None:
-        self.context_edit_wrapper_label.setText(
-            strong_label_html(chat_edit_wrapper_label_text(config))
-        )
-        self.context_edit_wrapper_hint.setText(
-            muted_hint_html(chat_edit_wrapper_hint_text(config))
-        )
-        self.templates_edit_panel.apply_language(config)
-        self._update_wrapper_format_warning()
-
-    def _sync_note_context_from_preview(self) -> None:
-        if not self._imported_fields and not self.note_preview_panel.get_fields():
-            return
-        config = load_config()
-        self._imported_fields = self.note_preview_panel.get_fields()
-        non_empty = [(name, value) for name, value in self._imported_fields if value.strip()]
-        if not non_empty:
+    def _rebuild_note_context(self) -> None:
+        if not self._imported_fields:
             self.note_context = None
             return
-        self.note_context = _format_note_context(non_empty, config)
+        config = load_config()
+        context = format_note_context(self._imported_fields, config)
+        self.note_context = context or None
 
-    def _sync_templates_from_panel(self) -> None:
-        if not self.templates_edit_panel.has_editable_sections():
-            return
-        self._imported_card_templates = self.templates_edit_panel.get_templates()
-        self._imported_notetype_css = self.templates_edit_panel.get_styling()
+    def _commit_open_session_editors(self) -> None:
+        if self._note_edit_window is not None and self._note_edit_window.isVisible():
+            self._note_edit_window.commit()
+        if self._wrapper_edit_window is not None and self._wrapper_edit_window.isVisible():
+            self._wrapper_edit_window.commit()
+        if self._templates_edit_window is not None and self._templates_edit_window.isVisible():
+            self._templates_edit_window.commit()
 
-    def _session_wrapper_for_send(self, config: dict[str, Any]) -> str | None:
-        if self._context_wrapper_template is not None:
-            raw = self._context_wrapper_template.strip()
-            if is_builtin_chat_context_wrapper(raw):
-                return None
-            return raw
-        stored = effective_chat_context_wrapper(config).strip()
-        if is_builtin_chat_context_wrapper(stored):
-            return None
-        return stored
+    def _wrapper_editor_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        if self._session_wrapper_override is None:
+            return config
+        merged = dict(config)
+        merged["prompt_chat_context_order"] = self._session_wrapper_override.get("order")
+        merged["prompt_chat_context_sections"] = self._session_wrapper_override.get("sections", {})
+        format_guide = self._session_wrapper_override.get("format_guide")
+        if format_guide is not None:
+            merged["prompt_card_templates_format"] = format_guide
+        return merged
 
-    def _wrapper_warning_sections(self, text: str, config: dict[str, Any]) -> list[str]:
-        sections: list[str] = []
-        if chat_context_wrapper_missing_placeholders(text):
-            sections.append("required")
-        sections.extend(wrapper_missing_import_placeholders(text, config))
-        return sections
+    def _session_wrapper_kwargs(self, config: dict[str, Any]) -> dict[str, Any]:
+        if self._session_wrapper_override is None:
+            return {}
+        return {
+            "section_order": list(self._session_wrapper_override.get("order") or []),
+            "section_prefixes": dict(self._session_wrapper_override.get("sections") or {}),
+            "format_guide": self._session_wrapper_override.get("format_guide"),
+        }
+
+    def _prompt_cache_session(
+        self,
+        config: dict[str, Any],
+        *,
+        included_context: bool,
+    ) -> PromptCacheSessionContext:
+        override = self._session_wrapper_override
+        return PromptCacheSessionContext(
+            note_context=self.note_context or "",
+            templates_block=self._templates_for_message(config),
+            styling_block=self._styling_for_message(config),
+            include_note_context=included_context,
+            wrapper_section_order=list(override["order"]) if override else None,
+            wrapper_section_prefixes=dict(override.get("sections") or {}) if override else None,
+            wrapper_format_guide=override.get("format_guide") if override else None,
+        )
 
     def _build_outgoing_payload(self, config: dict[str, Any], user_text: str) -> str:
-        payload_text = user_text
-        if self.context_checkbox.isChecked() and self.note_context:
-            self._sync_note_context_from_preview()
-            self._sync_templates_from_panel()
-            session_template = self._session_wrapper_for_send(config)
-            payload_text = format_chat_context_message(
-                config,
-                context=self.note_context,
-                request=user_text,
-                templates=self._templates_for_message(config),
-                styling=self._styling_for_message(config),
-                template=session_template,
-            )
-        return payload_text
+        included = bool(self.btn_include_context.isChecked() and self.note_context)
+        if included:
+            self._commit_open_session_editors()
+            self._rebuild_note_context()
+        return format_chat_context_message(
+            config,
+            context=self.note_context or "",
+            request=user_text,
+            templates=self._templates_for_message(config) if included else "",
+            styling=self._styling_for_message(config) if included else "",
+            include_context=included,
+            **self._session_wrapper_kwargs(config),
+        )
 
-    def _confirm_large_chat_payload(self, config: dict[str, Any], token_count: int) -> bool:
-        threshold = int(config.get("chat_token_warning_threshold", 3000))
-        if token_count <= threshold:
+    def _confirm_large_chat_payload(self, config: dict[str, Any], char_count: int) -> bool:
+        threshold = int(config.get("chat_payload_warning_chars", 12000))
+        if char_count <= threshold:
             return True
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
@@ -863,7 +934,7 @@ class ChatWindow(QWidget):
             tr(
                 "chat.large_payload.message",
                 config=config,
-                count=token_count,
+                count=char_count,
                 threshold=threshold,
             )
         )
@@ -886,97 +957,131 @@ class ChatWindow(QWidget):
             return ""
         return self._imported_notetype_css.strip()
 
-    def _on_edit_templates_toggled(self, checked: bool) -> None:
-        if checked:
-            self._sync_templates_from_panel()
-            self.templates_edit_panel.setVisible(True)
-            self._on_body_section_visibility_changed(3)
-            return
-        self._sync_templates_from_panel()
-        self.templates_edit_panel.setVisible(False)
-        self._on_body_section_visibility_changed()
-
-    def _collapse_templates_panel(self) -> None:
-        if not self.edit_templates_checkbox.isChecked():
-            return
-        self.edit_templates_checkbox.setChecked(False)
-
-    def _on_edit_wrapper_toggled(self, checked: bool) -> None:
-        if checked:
-            self._sync_note_context_from_preview()
-            self._wrapper_warning_dismissed.clear()
-            self._populate_wrapper_editor()
-            self._wrapper_panel.setVisible(True)
-            self._on_body_section_visibility_changed(2)
-            self.context_edit_wrapper_input.setFocus()
-            return
-        wrapper_text = self.context_edit_wrapper_input.toPlainText()
-        self._context_wrapper_template = wrapper_text if wrapper_text.strip() else None
-        self._wrapper_panel.setVisible(False)
-        self._on_body_section_visibility_changed()
-
-    def _collapse_wrapper_panel(self) -> None:
-        if not self.edit_wrapper_checkbox.isChecked():
-            return
-        self.edit_wrapper_checkbox.setChecked(False)
-
-    def _populate_wrapper_editor(self) -> None:
+    def _open_templates_edit_window(self) -> None:
         config = load_config()
-        templates_content = self._templates_for_message(config)
-        styling_content = self._styling_for_message(config)
-        self.context_edit_wrapper_input.blockSignals(True)
-        if self._context_wrapper_template is not None:
-            raw = self._context_wrapper_template.strip()
-            if wrapper_has_conditional_blocks(raw):
-                wrapper = chat_context_wrapper_for_session(
-                    config,
-                    template_override=raw,
-                    templates_content=templates_content,
-                    styling_content=styling_content,
-                )
-            else:
-                wrapper = raw
-        else:
-            wrapper = chat_context_wrapper_for_session(
-                config,
-                templates_content=templates_content,
-                styling_content=styling_content,
+        if self._templates_edit_window is None:
+            self._templates_edit_window = ChatTemplatesEditWindow(
+                self,
+                on_save=self._apply_templates_edit,
+                on_include_changed=lambda: self._refresh_import_controls(load_config()),
             )
-        self.context_edit_wrapper_input.setPlainText(wrapper)
-        self.context_edit_wrapper_input.blockSignals(False)
-        self._update_wrapper_format_warning()
-
-    def _update_wrapper_format_warning(self) -> None:
-        if not self.edit_wrapper_checkbox.isChecked():
-            self.context_edit_wrapper_warning_banner.setVisible(False)
-            return
-        config = load_config()
-        text = self.context_edit_wrapper_input.toPlainText()
-        sections = [
-            section
-            for section in self._wrapper_warning_sections(text, config)
-            if section not in self._wrapper_warning_dismissed
-        ]
-        if not sections:
-            self.context_edit_wrapper_warning_banner.setVisible(False)
-            return
-        self.context_edit_wrapper_warning.setText(
-            wrapper_import_warning_text(config, sections=sections, scope="chat")
+            self._templates_edit_window.destroyed.connect(
+                lambda *_: setattr(self, "_templates_edit_window", None)
+            )
+        self._templates_edit_window.load(
+            self._imported_card_templates,
+            self._imported_notetype_css,
         )
-        self.context_edit_wrapper_warning_banner.setVisible(True)
+        self._templates_edit_window.apply_language(config)
+        self._templates_edit_window.apply_theme()
+        self._templates_edit_window.show()
+        self._templates_edit_window.raise_()
+        self._templates_edit_window.activateWindow()
 
-    def _dismiss_wrapper_warning_banner(self) -> None:
-        config = load_config()
-        text = self.context_edit_wrapper_input.toPlainText()
-        self._wrapper_warning_dismissed.update(self._wrapper_warning_sections(text, config))
-        self._update_wrapper_format_warning()
-
-    def _on_context_edit_wrapper_changed(self) -> None:
-        if not self.edit_wrapper_checkbox.isChecked():
+    def _close_templates_edit_window(self) -> None:
+        if self._templates_edit_window is None:
             return
-        self._context_wrapper_template = self.context_edit_wrapper_input.toPlainText()
-        self._wrapper_warning_dismissed.clear()
-        self._update_wrapper_format_warning()
+        self._templates_edit_window.close()
+        self._templates_edit_window = None
+
+    def _apply_templates_edit(
+        self,
+        templates: list[CardTemplateData],
+        styling: str,
+    ) -> None:
+        self._imported_card_templates = list(templates)
+        self._imported_notetype_css = styling
+
+    def _open_wrapper_edit_window(self) -> None:
+        config = load_config()
+        if self._wrapper_edit_window is None:
+            self._wrapper_edit_window = ChatWrapperEditWindow(
+                self,
+                on_save=self._apply_wrapper_edit,
+            )
+            self._wrapper_edit_window.destroyed.connect(
+                lambda *_: setattr(self, "_wrapper_edit_window", None)
+            )
+        self._wrapper_edit_window.load_from_config(self._wrapper_editor_config(config))
+        self._wrapper_edit_window.apply_language(config)
+        self._wrapper_edit_window.apply_theme()
+        self._wrapper_edit_window.show()
+        self._wrapper_edit_window.raise_()
+        self._wrapper_edit_window.activateWindow()
+
+    def _close_wrapper_edit_window(self) -> None:
+        if self._wrapper_edit_window is None:
+            return
+        self._wrapper_edit_window.close()
+        self._wrapper_edit_window = None
+
+    def _open_note_edit_window(self) -> None:
+        if not self._imported_fields:
+            return
+        if self._note_edit_window is None:
+            self._note_edit_window = ChatNoteEditWindow(
+                self,
+                on_save=self._apply_note_edit,
+            )
+            self._note_edit_window.destroyed.connect(
+                lambda *_: setattr(self, "_note_edit_window", None)
+            )
+        self._note_edit_window.load_fields(self._imported_fields)
+        config = load_config()
+        self._note_edit_window.apply_language(config)
+        self._note_edit_window.apply_theme()
+        self._note_edit_window.show()
+        self._note_edit_window.raise_()
+        self._note_edit_window.activateWindow()
+
+    def _close_note_edit_window(self) -> None:
+        if self._note_edit_window is None:
+            return
+        self._note_edit_window.close()
+        self._note_edit_window = None
+
+    def _apply_note_edit(
+        self,
+        fields: list[tuple[str, str]],
+        send_empty_fields: bool,
+    ) -> None:
+        config = load_config()
+        config["chat_send_empty_fields"] = bool(send_empty_fields)
+        save_config(config)
+        self._imported_fields = list(fields)
+        self._rebuild_note_context()
+        self._refresh_note_preview_if_open()
+
+    def _close_session_edit_windows(self) -> None:
+        self._close_note_edit_window()
+        self._close_wrapper_edit_window()
+        self._close_templates_edit_window()
+
+    def _apply_wrapper_edit(
+        self,
+        order: list[str],
+        sections: dict[str, str],
+        format_guide: str,
+    ) -> None:
+        config = load_config()
+        stored_sections = normalize_wrapper_sections_for_save(sections, config=config)
+        stored_format = format_guide.strip()
+        format_builtin = is_builtin_card_templates_format_prompt(stored_format)
+        if (
+            is_builtin_wrapper_layout(
+                config,
+                section_order=order,
+                section_prefixes=stored_sections,
+            )
+            and (format_builtin or not stored_format)
+        ):
+            self._session_wrapper_override = None
+            return
+        self._session_wrapper_override = {
+            "order": order,
+            "sections": dict(sections),
+            "format_guide": format_guide,
+        }
 
     def _on_send_button_clicked(self) -> None:
         if self._request_in_flight:
@@ -1020,6 +1125,27 @@ class ChatWindow(QWidget):
         self.btn_clear.setEnabled(True)
         self._configure_chat_default_buttons()
 
+    def _notify_prompt_cache_created(self, active) -> None:
+        if self._closing:
+            return
+        config = load_config()
+        from ..prompt_cache import prompt_cache_created_stats
+
+        chars, minutes = prompt_cache_created_stats(active)
+        self._add_system_message(
+            tr(
+                "chat.prompt_cache.created",
+                config=config,
+                chars=chars,
+                minutes=minutes,
+            ),
+            kind="system",
+            label=tr("chat.label.system", config=config),
+        )
+
+    def _schedule_prompt_cache_created_notice(self, active) -> None:
+        mw.taskman.run_on_main(lambda cache=active: self._notify_prompt_cache_created(cache))
+
     def send_message(self) -> None:
         if self._request_in_flight:
             return
@@ -1029,21 +1155,45 @@ class ChatWindow(QWidget):
             return
 
         config = load_config()
-        included_context = bool(self.context_checkbox.isChecked() and self.note_context)
-        payload_text = self._build_outgoing_payload(config, user_text)
-        max_turns = int(config.get("max_history_turns", 20))
-        history_for_request = trim_history(self.api_history, max_turns)
-        system_instruction = merge_system_instructions(
+        pre_send_context = self.build_pre_send_context()
+        included_context = bool(self.btn_include_context.isChecked() and self.note_context)
+        payload_text = pre_send_context.outgoing_payload
+        system_instruction = pre_send_context.system_instruction
+        bundle = pre_send_context.bundle
+        cache_session = pre_send_context.cache_session
+        pre_send_overrides = None
+        if bool(config.get("chat_modify_prompt_before_send", False)):
+            pre_send_overrides = confirm_pre_send_prompt(
+                self,
+                context=pre_send_context,
+            )
+            if pre_send_overrides is None:
+                return
+            payload_text = pre_send_overrides.outgoing_payload
+            system_instruction = pre_send_overrides.system_instruction
+            if pre_send_overrides.bundle is not None:
+                bundle = pre_send_overrides.bundle
+        cache_choice = confirm_prompt_cache_recreate_if_needed(
+            self,
             config,
-            include_meta_rule=True,
+            bundle,
             purpose="chat",
         )
-        token_count = estimate_chat_request_tokens(
+        if cache_choice == "abort":
+            return
+        allow_cache_create = cache_choice != "skip_cache"
+        if bundle is not None and not allow_cache_create:
+            payload_text = self._build_outgoing_payload(config, user_text)
+            if pre_send_overrides is not None:
+                payload_text = pre_send_overrides.outgoing_payload
+        max_turns = int(config.get("max_history_turns", 20))
+        history_for_request = trim_history(self.api_history, max_turns)
+        char_count = estimate_chat_request_chars(
             payload_text,
             history_for_request,
             system_instruction=system_instruction,
         )
-        if not self._confirm_large_chat_payload(config, token_count):
+        if not self._confirm_large_chat_payload(config, char_count):
             return
 
         safe_html = html.escape(user_text).replace("\n", "<br>")
@@ -1058,8 +1208,7 @@ class ChatWindow(QWidget):
         self._restorable_user_text = user_text
         self.input_field.clear()
         self._begin_request()
-        self._collapse_wrapper_panel()
-        self._collapse_templates_panel()
+        self._close_session_edit_windows()
 
         if not api_key_configured(config):
             self._add_system_message(
@@ -1071,8 +1220,7 @@ class ChatWindow(QWidget):
             return
 
         if included_context:
-            self.context_edit_wrapper_warning_banner.setVisible(False)
-            self.context_checkbox.setChecked(False)
+            self.btn_include_context.setChecked(False)
 
         self.api_history.append({"role": "user", "parts": [{"text": payload_text}]})
         history_for_request = trim_history(self.api_history[:-1], max_turns)
@@ -1084,13 +1232,21 @@ class ChatWindow(QWidget):
         request_token = self._request_token
         request_kwargs = {
             "config": config,
-            "user_text": payload_text,
+            "user_text": user_text,
             "history": history_for_request,
             "temperature": temperature,
             "include_meta_rule": True,
+            "cache_session": cache_session,
+            "allow_prompt_cache_create": allow_cache_create,
+            "on_prompt_cache_created": self._schedule_prompt_cache_created_notice,
             "should_cancel": cancel_check,
             "register_response": register_response,
         }
+        if pre_send_overrides is not None:
+            request_kwargs["override_outgoing_payload"] = payload_text
+            request_kwargs["override_system_instruction"] = system_instruction
+            if allow_cache_create:
+                request_kwargs["override_bundle"] = bundle
 
         if use_streaming:
             self._stream_visible = False
@@ -1310,21 +1466,22 @@ class ChatWindow(QWidget):
     def _start_loading(self) -> None:
         self._loading_mode = "typing"
         self._loading_phase = 0
-        self.loading_label.setVisible(True)
+        self._loading_rotation_degrees = 0
+        self.loading_row.setVisible(True)
         self._update_loading_animation()
         self.loading_timer.start(400)
 
     def _start_stopping(self) -> None:
         self._loading_mode = "stopping"
         self._loading_phase = 0
-        self.loading_label.setVisible(True)
+        self.loading_row.setVisible(True)
         self._update_loading_animation()
         if not self.loading_timer.isActive():
             self.loading_timer.start(400)
 
     def _stop_loading(self) -> None:
         self.loading_timer.stop()
-        self.loading_label.setVisible(False)
+        self.loading_row.setVisible(False)
         self._loading_mode = None
 
     def _loading_base_text(self) -> str:
@@ -1332,10 +1489,24 @@ class ChatWindow(QWidget):
             return tr("chat.stopping")
         return tr("chat.loading")
 
+    def _apply_loading_display(self) -> None:
+        dots = "." * self._loading_phase if self._loading_phase else ""
+        self.loading_text_label.setText(f"{self._loading_base_text()}{dots}")
+        if self._loading_mode == "stopping":
+            self.loading_icon.set_loading_icon(stop_circle_svg_path())
+        else:
+            self.loading_icon.set_loading_icon(
+                robot_svg_path(),
+                rotation_degrees=self._loading_rotation_degrees,
+            )
+
     def _update_loading_animation(self) -> None:
         self._loading_phase = (self._loading_phase % 3) + 1
-        dots = "." * self._loading_phase
-        self.loading_label.setText(f"{self._loading_base_text()}{dots}")
+        self._apply_loading_display()
+        if self._loading_mode == "typing":
+            self._loading_rotation_degrees = (
+                self._loading_rotation_degrees + 90
+            ) % 360
 
 
 _chat_window: ChatWindow | None = None

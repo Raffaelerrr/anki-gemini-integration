@@ -5,6 +5,7 @@ import math
 import re
 import time
 import urllib.parse
+from dataclasses import dataclass
 from typing import Any, Callable, Literal, Mapping
 
 import requests
@@ -27,8 +28,16 @@ from .i18n import (
     effective_system_instruction,
     tr,
 )
+from .prompt_compose import join_prompt_blocks, join_prompt_header_body, strip_prompt_part
 
 Purpose = Literal["optimize", "chat"]
+
+
+@dataclass(frozen=True)
+class PreparedGeminiRequest:
+    payload: dict[str, Any]
+    prompt_cache_created: bool = False
+    created_cache: Any | None = None
 
 
 class GeminiError(Exception):
@@ -64,28 +73,31 @@ def merge_system_instructions(
     include_meta_rule: bool = False,
     purpose: Purpose = "chat",
 ) -> str:
-    instruction = effective_system_instruction(config, purpose=purpose)
+    blocks: list[str] = [effective_system_instruction(config, purpose=purpose)]
     dynamic = (config.get("dynamic_instructions") or "").strip()
     if dynamic:
-        instruction += effective_dynamic_rules_prefix(config)
-        instruction += dynamic
+        prefix = effective_dynamic_rules_prefix(config)
+        blocks.append(join_prompt_header_body(prefix, dynamic))
     if include_meta_rule:
-        instruction += effective_chat_system_addon(config)
-    return instruction
+        addon = effective_chat_system_addon(config)
+        if addon.strip():
+            blocks.append(addon)
+    return join_prompt_blocks(*blocks)
 
 
 def build_optimize_user_text(config: dict[str, Any], user_text: str) -> str:
     prefix = effective_optimize_user_prompt(config)
-    return f"{prefix}\n\n{user_text}"
+    if not strip_prompt_part(prefix):
+        return user_text
+    if not strip_prompt_part(user_text):
+        return prefix
+    return join_prompt_blocks(prefix, user_text)
 
 
 def resolve_model(config: dict[str, Any], purpose: Purpose) -> str:
     specific = (config.get(f"model_{purpose}") or "").strip()
     if specific:
         return specific
-    legacy = (config.get("model") or "").strip()
-    if legacy:
-        return legacy
     return DEFAULT_MODEL_OPTIMIZE if purpose == "optimize" else DEFAULT_MODEL_CHAT
 
 
@@ -121,26 +133,140 @@ def build_request_payload(
     temperature: float,
     include_meta_rule: bool,
     purpose: Purpose,
+    cached_content_name: str | None = None,
+    live_system_instruction: str | None = None,
 ) -> dict[str, Any]:
     contents = list(history or [])
     if purpose == "optimize":
         user_text = build_optimize_user_text(config, user_text)
     contents.append({"role": "user", "parts": [{"text": user_text}]})
-    return {
+
+    if live_system_instruction is None:
+        live_system_instruction = merge_system_instructions(
+            config,
+            include_meta_rule=include_meta_rule,
+            purpose=purpose,
+        )
+
+    payload: dict[str, Any] = {
         "contents": contents,
-        "systemInstruction": {
-            "parts": [
-                {
-                    "text": merge_system_instructions(
-                        config,
-                        include_meta_rule=include_meta_rule,
-                        purpose=purpose,
-                    )
-                }
-            ]
-        },
         "generationConfig": build_generation_config(config, temperature, purpose),
     }
+    if cached_content_name:
+        payload["cachedContent"] = cached_content_name
+        if live_system_instruction.strip():
+            payload["systemInstruction"] = {
+                "parts": [{"text": live_system_instruction}],
+            }
+    else:
+        payload["systemInstruction"] = {
+            "parts": [{"text": live_system_instruction}],
+        }
+    return payload
+
+
+def prepare_gemini_request(
+    *,
+    config: dict[str, Any],
+    user_text: str,
+    history: list[dict[str, Any]] | None,
+    temperature: float,
+    include_meta_rule: bool,
+    purpose: Purpose,
+    cache_session: Any | None = None,
+    allow_prompt_cache_create: bool = True,
+    override_outgoing_payload: str | None = None,
+    override_system_instruction: str | None = None,
+    override_bundle: Any | None = None,
+) -> PreparedGeminiRequest:
+    from .prompt_cache import (
+        PromptCacheBundle,
+        PromptCacheSessionContext,
+        build_live_chat_payload,
+        build_live_system_instruction,
+        build_prompt_cache_bundle,
+        ensure_prompt_cache,
+    )
+
+    session = cache_session if isinstance(cache_session, PromptCacheSessionContext) else None
+    bundle = (
+        override_bundle
+        if isinstance(override_bundle, PromptCacheBundle)
+        else build_prompt_cache_bundle(config, purpose=purpose, session=session)
+    )
+    ensure_result = ensure_prompt_cache(
+        config=config,
+        purpose=purpose,
+        bundle=bundle,
+        allow_create=allow_prompt_cache_create,
+    )
+    active = ensure_result.active
+
+    outgoing_text = override_outgoing_payload if override_outgoing_payload is not None else user_text
+    if override_outgoing_payload is None and bundle is not None and purpose == "chat" and session is not None:
+        outgoing_text = build_live_chat_payload(
+            config,
+            user_text,
+            session=session,
+            bundle=bundle if active is not None else None,
+        )
+
+    if active is not None and bundle is not None:
+        if override_system_instruction is not None:
+            live_system = override_system_instruction
+        else:
+            live_system = build_live_system_instruction(
+                config,
+                purpose=purpose,
+                include_meta_rule=include_meta_rule,
+                bundle=bundle,
+            )
+        return PreparedGeminiRequest(
+            payload=build_request_payload(
+                config=config,
+                user_text=outgoing_text,
+                history=history,
+                temperature=temperature,
+                include_meta_rule=include_meta_rule,
+                purpose=purpose,
+                cached_content_name=active.name,
+                live_system_instruction=live_system,
+            ),
+            prompt_cache_created=ensure_result.created,
+            created_cache=active if ensure_result.created else None,
+        )
+
+    live_system = override_system_instruction
+    if live_system is None:
+        live_system = merge_system_instructions(
+            config,
+            include_meta_rule=include_meta_rule,
+            purpose=purpose,
+        )
+
+    return PreparedGeminiRequest(
+        payload=build_request_payload(
+            config=config,
+            user_text=outgoing_text,
+            history=history,
+            temperature=temperature,
+            include_meta_rule=include_meta_rule,
+            purpose=purpose,
+            live_system_instruction=live_system,
+        ),
+    )
+
+
+def _notify_prompt_cache_created_if_needed(
+    prepared: PreparedGeminiRequest,
+    on_prompt_cache_created: Callable[[Any], None] | None,
+) -> None:
+    if (
+        prepared.prompt_cache_created
+        and prepared.created_cache is not None
+        and on_prompt_cache_created is not None
+    ):
+        on_prompt_cache_created(prepared.created_cache)
 
 
 def _parse_response_payload(data: dict[str, Any], config: dict[str, Any]) -> str:
@@ -457,8 +583,14 @@ def call_gemini(
     temperature: float | None = None,
     include_meta_rule: bool = False,
     purpose: Purpose = "chat",
+    cache_session: Any | None = None,
+    allow_prompt_cache_create: bool = True,
+    on_prompt_cache_created: Callable[[Any], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     register_response: Callable[[requests.Response | None], None] | None = None,
+    override_outgoing_payload: str | None = None,
+    override_system_instruction: str | None = None,
+    override_bundle: Any | None = None,
 ) -> str:
     api_key = (config.get("api_key") or "").strip()
     model = resolve_model(config, purpose)
@@ -466,14 +598,35 @@ def call_gemini(
     max_retries = int(config.get("max_retries") or 2)
     temp = temperature if temperature is not None else float(config.get("temperature_chat") or 0.2)
 
-    payload = build_request_payload(
+    prepared = prepare_gemini_request(
         config=config,
         user_text=user_text,
         history=history,
         temperature=temp,
         include_meta_rule=include_meta_rule,
         purpose=purpose,
+        cache_session=cache_session,
+        allow_prompt_cache_create=allow_prompt_cache_create,
+        override_outgoing_payload=override_outgoing_payload,
+        override_system_instruction=override_system_instruction,
+        override_bundle=override_bundle,
     )
+    _notify_prompt_cache_created_if_needed(prepared, on_prompt_cache_created)
+    payload = prepared.payload
+
+    from .dev_mock import try_mock_call_gemini
+
+    mock_reply = try_mock_call_gemini(
+        config=config,
+        user_text=user_text,
+        payload=payload,
+        purpose=purpose,
+        should_cancel=should_cancel,
+        register_response=register_response,
+    )
+    if mock_reply is not None:
+        return mock_reply
+
     headers = _request_headers(api_key)
 
     if should_cancel is not None:
@@ -524,9 +677,15 @@ def stream_gemini(
     history: list[dict[str, Any]] | None = None,
     temperature: float | None = None,
     include_meta_rule: bool = False,
+    cache_session: Any | None = None,
+    allow_prompt_cache_create: bool = True,
+    on_prompt_cache_created: Callable[[Any], None] | None = None,
     on_chunk: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     register_response: Callable[[requests.Response | None], None] | None = None,
+    override_outgoing_payload: str | None = None,
+    override_system_instruction: str | None = None,
+    override_bundle: Any | None = None,
 ) -> str:
     api_key = (config.get("api_key") or "").strip()
     model = resolve_model(config, "chat")
@@ -536,14 +695,35 @@ def stream_gemini(
 
     url = build_api_url(model, stream=True)
     headers = _request_headers(api_key)
-    payload = build_request_payload(
+    prepared = prepare_gemini_request(
         config=config,
         user_text=user_text,
         history=history,
         temperature=temp,
         include_meta_rule=include_meta_rule,
         purpose="chat",
+        cache_session=cache_session,
+        allow_prompt_cache_create=allow_prompt_cache_create,
+        override_outgoing_payload=override_outgoing_payload,
+        override_system_instruction=override_system_instruction,
+        override_bundle=override_bundle,
     )
+    _notify_prompt_cache_created_if_needed(prepared, on_prompt_cache_created)
+    payload = prepared.payload
+
+    from .dev_mock import try_mock_call_gemini
+
+    mock_reply = try_mock_call_gemini(
+        config=config,
+        user_text=user_text,
+        payload=payload,
+        purpose="chat",
+        should_cancel=should_cancel,
+        register_response=register_response,
+        on_chunk=on_chunk,
+    )
+    if mock_reply is not None:
+        return mock_reply
 
     return _run_streaming_request(
         config=config,
@@ -602,6 +782,11 @@ def sort_model_ids(models: list[str]) -> list[str]:
 
 
 def list_gemini_models(*, config: dict[str, Any]) -> list[str]:
+    from .dev_mock import is_dev_mock_enabled, mock_model_ids
+
+    if is_dev_mock_enabled(config):
+        return sort_model_ids(mock_model_ids())
+
     api_key = (config.get("api_key") or "").strip()
     if not api_key:
         raise GeminiAuthError(tr("gemini.auth_error", config=config))

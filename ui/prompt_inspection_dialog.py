@@ -16,8 +16,13 @@ from aqt.qt import (
 from ..config import load_config
 from ..i18n import tr
 from ..prompt_inspection import PromptInspection
-from .settings_compact_controls import create_ui_text_edit
-from .theme import apply_native_text_edit_surface_theme, muted_hint_html, strong_label_html
+from .settings_compact_controls import (
+    configure_addon_text_edit,
+    create_prompt_scroll_page,
+    create_ui_text_edit,
+    refresh_settings_text_edit_layouts,
+)
+from .theme import apply_native_page_scroll_theme, muted_hint_html, strong_label_html
 
 
 class PromptInspectionWindow(QWidget):
@@ -64,11 +69,19 @@ class PromptInspectionWindow(QWidget):
         self._meta_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         root.addWidget(self._meta_label)
 
-        body_shell, self._body = create_ui_text_edit(self)
+        self._scroll, scroll_layout, scroll_host = create_prompt_scroll_page(self)
+        apply_native_page_scroll_theme(self._scroll, allow_horizontal_scroll=False)
+        root.addWidget(self._scroll, 1)
+
+        self._body = create_ui_text_edit(
+            scroll_host,
+            scroll_free=True,
+            auto_height=True,
+            minimum=44,
+        )[1]
         self._body.setReadOnly(True)
-        apply_native_text_edit_surface_theme(self._body)
-        self._body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        root.addWidget(body_shell, 1)
+        self._body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        scroll_layout.addWidget(self._body)
 
         self.apply_language()
 
@@ -87,8 +100,11 @@ class PromptInspectionWindow(QWidget):
                 )
             )
         )
+        self._formula_label.setTextFormat(Qt.TextFormat.RichText)
         self._meta_label.setText(muted_hint_html(inspection.metadata_text(config)))
-        self._body.setPlainText(inspection.full_text(config))
+        self._meta_label.setTextFormat(Qt.TextFormat.RichText)
+        self._body.setPlainText(inspection.plain_full_text(config))
+        self._schedule_body_layout_refresh()
 
     def refresh(self) -> None:
         if self._refresh_callback is None:
@@ -98,8 +114,16 @@ class PromptInspectionWindow(QWidget):
 
     def show_inspection(self, inspection: PromptInspection, config: dict | None = None) -> None:
         config = config or load_config()
+        show_newlines = bool(config.get("settings_show_text_newlines", False))
+        configure_addon_text_edit(self._body, show_newlines=show_newlines, scroll_free=True)
         self.apply_language(config)
         self.set_inspection(inspection, config)
         self.show()
         self.raise_()
         self.activateWindow()
+        self._scroll.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _schedule_body_layout_refresh(self) -> None:
+        from aqt.qt import QTimer
+
+        QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))

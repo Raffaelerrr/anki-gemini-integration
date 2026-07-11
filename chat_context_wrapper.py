@@ -1,70 +1,14 @@
 from __future__ import annotations
 
-import re
-from typing import Any, Callable
+from .prompt_compose import join_prompt_blocks
 
-REQUIRED_WRAPPER_SECTIONS = ("context", "request")
-CONDITIONAL_WRAPPER_SECTIONS = ("templates", "styling")
-
-_CONDITIONAL_TAG_RE = re.compile(
-    r"\{\{#(templates|styling)\}\}|\{\{/(templates|styling)\}\}"
-)
-_CONDITIONAL_BLOCK_RE: dict[str, re.Pattern[str]] = {}
-_CONDITIONAL_BLOCK_RE_INACTIVE: dict[str, re.Pattern[str]] = {}
-
-
-def _conditional_block_pattern(section: str) -> re.Pattern[str]:
-    cached = _CONDITIONAL_BLOCK_RE.get(section)
-    if cached is not None:
-        return cached
-    open_tag = re.escape(wrapper_open_tag(section))
-    close_tag = re.escape(wrapper_close_tag(section))
-    pattern = re.compile(open_tag + r"(.*?)" + close_tag, re.DOTALL)
-    _CONDITIONAL_BLOCK_RE[section] = pattern
-    return pattern
-
-
-def _conditional_block_pattern_inactive(section: str) -> re.Pattern[str]:
-    """Pattern for when a conditional block is removed.
-
-    Besides removing the open tag, inner content, and close tag, it also
-    consumes the blank separator lines that belong to the removed block.
-    If the block ends the wrapper, the trailing newline is optional.
-    """
-    cached = _CONDITIONAL_BLOCK_RE_INACTIVE.get(section)
-    if cached is not None:
-        return cached
-    open_tag = re.escape(wrapper_open_tag(section))
-    close_tag = re.escape(wrapper_close_tag(section))
-    pattern = re.compile(
-        open_tag + r"(.*?)" + close_tag + r"[ \t]*(?:\n(?:[ \t]*\n)*)?",
-        re.DOTALL,
-    )
-    _CONDITIONAL_BLOCK_RE_INACTIVE[section] = pattern
-    return pattern
-
-
-def wrapper_open_tag(section: str) -> str:
-    return f"{{{{#{section}}}}}"
-
-
-def wrapper_close_tag(section: str) -> str:
-    return f"{{{{/{section}}}}}"
+WRAPPER_SECTION_IDS = ("context", "format_guide", "templates", "styling", "request")
+DEFAULT_WRAPPER_SECTION_ORDER = WRAPPER_SECTION_IDS
+PLACEHOLDER_SECTIONS = ("context", "templates", "styling", "request")
 
 
 def wrapper_content_tag(section: str) -> str:
     return f"{{{{{section}}}}}"
-
-
-def repair_wrapper_brace_escaping(text: str) -> str:
-    """Collapse mistaken quadruple-brace wrapper tags from a past i18n escaping bug."""
-    if "{{{{" not in text:
-        return text
-    return text.replace("{{{{", "{{").replace("}}}}", "}}")
-
-
-def wrapper_has_conditional_blocks(text: str | None) -> bool:
-    return bool(text and _CONDITIONAL_TAG_RE.search(text))
 
 
 def import_templates_enabled(config: dict[str, Any] | None) -> bool:
@@ -73,160 +17,6 @@ def import_templates_enabled(config: dict[str, Any] | None) -> bool:
 
 def import_css_enabled(config: dict[str, Any] | None) -> bool:
     return bool((config or {}).get("brain_import_css", False))
-
-
-def chat_context_wrapper_missing_placeholders(text: str | None) -> bool:
-    stripped = (text or "").strip()
-    if not stripped:
-        return False
-    return any(
-        wrapper_content_tag(section) not in stripped
-        for section in REQUIRED_WRAPPER_SECTIONS
-    )
-
-
-def chat_context_wrapper_has_unbalanced_conditionals(text: str | None) -> bool:
-    stripped = (text or "").strip()
-    if not stripped:
-        return False
-    stack: list[str] = []
-    for match in _CONDITIONAL_TAG_RE.finditer(stripped):
-        if match.group(1):
-            stack.append(match.group(1))
-            continue
-        section = match.group(2)
-        if not stack or stack[-1] != section:
-            return True
-        stack.pop()
-    return bool(stack)
-
-
-def chat_context_wrapper_should_fallback(text: str | None) -> bool:
-    stripped = (text or "").strip()
-    if not stripped:
-        return False
-    return (
-        chat_context_wrapper_missing_placeholders(stripped)
-        or chat_context_wrapper_has_unbalanced_conditionals(stripped)
-    )
-
-
-def wrapper_includes_section(text: str | None, section: str) -> bool:
-    return wrapper_content_tag(section) in (text or "")
-
-
-def wrapper_includes_any_import_section(text: str | None) -> bool:
-    return wrapper_includes_section(text, "templates") or wrapper_includes_section(text, "styling")
-
-
-def _card_templates_format_guide_for_message(
-    resolved: str,
-    config: dict[str, Any] | None,
-    *,
-    templates_out: str,
-    styling_out: str,
-    card_templates_format_addon: Callable[..., str],
-) -> str:
-    if not wrapper_includes_any_import_section(resolved):
-        return ""
-    return card_templates_format_addon(
-        config,
-        templates=templates_out,
-        styling=styling_out,
-    )
-
-
-def wrapper_missing_import_placeholders(
-    text: str | None,
-    config: dict[str, Any] | None,
-) -> list[str]:
-    stripped = (text or "").strip()
-    if not stripped:
-        return []
-    missing: list[str] = []
-    if import_templates_enabled(config) and wrapper_content_tag("templates") not in stripped:
-        missing.append("templates")
-    if import_css_enabled(config) and wrapper_content_tag("styling") not in stripped:
-        missing.append("styling")
-    return missing
-
-
-def _section_active(
-    section: str,
-    config: dict[str, Any] | None,
-    content: str,
-    *,
-    preview: bool,
-    wrapper_text: str,
-) -> bool:
-    if not wrapper_includes_section(wrapper_text, section):
-        return False
-    if section == "templates":
-        enabled = import_templates_enabled(config)
-    else:
-        enabled = import_css_enabled(config)
-    if not enabled:
-        return False
-    if preview:
-        return True
-    return bool((content or "").strip())
-
-
-def process_wrapper_conditionals(
-    text: str,
-    config: dict[str, Any] | None,
-    *,
-    templates_content: str = "",
-    styling_content: str = "",
-    preview: bool = False,
-    wrapper_text: str | None = None,
-) -> str:
-    source = wrapper_text if wrapper_text is not None else text
-    result = text
-    for section in CONDITIONAL_WRAPPER_SECTIONS:
-        content = templates_content if section == "templates" else styling_content
-        active = _section_active(
-            section,
-            config,
-            content,
-            preview=preview,
-            wrapper_text=source,
-        )
-        result = _apply_conditional_blocks(result, section, active=active)
-    return _collapse_blank_lines(result, max_blank_lines=2)
-
-
-def _apply_conditional_blocks(text: str, section: str, *, active: bool) -> str:
-    pattern = _conditional_block_pattern(section) if active else _conditional_block_pattern_inactive(section)
-
-    def replacer(match: re.Match[str]) -> str:
-        if not active:
-            return ""
-        inner = match.group(1)
-        # If the open/close tags were on their own lines, the boundary newlines end
-        # up inside `inner` (because we don't include \n in the tag match).
-        # Strip one leading and one trailing newline to match "delete tag-only lines".
-        if inner.startswith("\n"):
-            inner = inner[1:]
-        if inner.endswith("\n"):
-            inner = inner[:-1]
-        return inner
-
-    return pattern.sub(replacer, text)
-
-
-def _collapse_blank_lines(text: str, *, max_blank_lines: int) -> str:
-    collapsed: list[str] = []
-    blank_run = 0
-    for line in text.splitlines():
-        if not line.strip():
-            blank_run += 1
-            if blank_run <= max_blank_lines:
-                collapsed.append(line)
-            continue
-        blank_run = 0
-        collapsed.append(line)
-    return "\n".join(collapsed).strip()
 
 
 def apply_wrapper_placeholders(
@@ -244,93 +34,321 @@ def apply_wrapper_placeholders(
         ("templates", templates),
         ("styling", styling),
     ):
-        result = result.replace(wrapper_content_tag(section), value)
-    # Legacy single-brace placeholders from older custom wrappers.
-    result = result.replace("{context}", context)
-    result = result.replace("{request}", request)
-    result = result.replace("{templates}", templates)
-    result = result.replace("{styling}", styling)
+        tag = wrapper_content_tag(section)
+        if tag in result:
+            result = result.replace(tag, value)
     return result
 
 
-def _inject_before_marker(body: str, marker: str, insert: str) -> str:
-    if not insert.strip():
-        return body
-    if not marker:
-        return f"{body.rstrip()}\n\n{insert}"
-    index = body.find(marker)
-    if index < 0:
-        return f"{body.rstrip()}\n\n{insert}"
-    return f"{body[:index].rstrip()}\n\n{insert}\n\n{body[index:]}"
+def normalize_wrapper_section_order(order: list[str] | tuple[str, ...] | None) -> list[str]:
+    seen: list[str] = []
+    for section_id in order or ():
+        if section_id in WRAPPER_SECTION_IDS and section_id not in seen:
+            seen.append(section_id)
+    for section_id in WRAPPER_SECTION_IDS:
+        if section_id not in seen:
+            seen.append(section_id)
+    return seen
 
 
-def expand_chat_context_wrapper(
+def wrapper_section_active(
+    section_id: str,
     config: dict[str, Any] | None,
     *,
-    source: str,
-    templates_content: str = "",
-    styling_content: str = "",
-) -> str:
-    stripped = repair_wrapper_brace_escaping((source or "").strip())
+    include_context: bool,
+    context: str,
+    templates: str,
+    styling: str,
+    format_guide: str,
+    omit_format_guide: bool,
+    preview: bool = False,
+    active_context: str | None = None,
+    active_templates: str | None = None,
+    active_styling: str | None = None,
+    section_prefixes: dict[str, str] | None = None,
+) -> bool:
+    context_probe = active_context if active_context is not None else context
+    templates_probe = active_templates if active_templates is not None else templates
+    styling_probe = active_styling if active_styling is not None else styling
+    prefixes = section_prefixes or {}
+
+    def _prefix_allows_content(target_id: str) -> bool:
+        if target_id not in PLACEHOLDER_SECTIONS:
+            return True
+        prefix = (prefixes.get(target_id) or "").strip()
+        if not prefix:
+            return True
+        return wrapper_content_tag(target_id) in prefix
+
+    if section_id == "context":
+        if not include_context:
+            return False
+        prefix = (prefixes.get("context") or "").strip()
+        if not prefix:
+            return False
+        if not _prefix_allows_content("context"):
+            return False
+        return preview or bool(context_probe.strip())
+    if section_id == "format_guide":
+        if omit_format_guide:
+            return False
+        if not format_guide.strip():
+            return False
+        templates_active = wrapper_section_active(
+            "templates",
+            config,
+            include_context=include_context,
+            context=context,
+            templates=templates,
+            styling=styling,
+            format_guide=format_guide,
+            omit_format_guide=True,
+            preview=preview,
+            active_context=active_context,
+            active_templates=active_templates,
+            active_styling=active_styling,
+            section_prefixes=prefixes,
+        )
+        styling_active = wrapper_section_active(
+            "styling",
+            config,
+            include_context=include_context,
+            context=context,
+            templates=templates,
+            styling=styling,
+            format_guide=format_guide,
+            omit_format_guide=True,
+            preview=preview,
+            active_context=active_context,
+            active_templates=active_templates,
+            active_styling=active_styling,
+            section_prefixes=prefixes,
+        )
+        return templates_active or styling_active
+    if section_id == "templates":
+        if not include_context:
+            return False
+        if not import_templates_enabled(config):
+            return False
+        prefix = (prefixes.get("templates") or "").strip()
+        if not prefix:
+            return False
+        if not _prefix_allows_content("templates"):
+            return False
+        return preview or bool(templates_probe.strip())
+    if section_id == "styling":
+        if not include_context:
+            return False
+        if not import_css_enabled(config):
+            return False
+        prefix = (prefixes.get("styling") or "").strip()
+        if not prefix:
+            return False
+        if not _prefix_allows_content("styling"):
+            return False
+        return preview or bool(styling_probe.strip())
+    if section_id == "request":
+        return True
+    return False
+
+
+def wrapper_section_missing_placeholders(section_id: str, text: str) -> bool:
+    if section_id == "format_guide":
+        return False
+    if section_id not in PLACEHOLDER_SECTIONS:
+        return False
+    stripped = (text or "").strip()
     if not stripped:
-        return ""
-    if not wrapper_has_conditional_blocks(stripped):
-        return stripped
-    return process_wrapper_conditionals(
-        stripped,
-        config,
-        templates_content=templates_content,
-        styling_content=styling_content,
-        preview=True,
-    )
+        return False
+    return wrapper_content_tag(section_id) not in stripped
 
 
-def _format_resolved_wrapper_message(
-    resolved: str,
+def wrapper_sections_missing_required(
+    sections: dict[str, str],
+    *,
+    order: list[str] | None = None,
+) -> bool:
+    for section_id in order or WRAPPER_SECTION_IDS:
+        if section_id == "request" and wrapper_section_missing_placeholders(
+            section_id, sections.get(section_id, "")
+        ):
+            return True
+    return False
+
+
+def wrapper_missing_import_placeholders(
+    sections: dict[str, str],
     config: dict[str, Any] | None,
+    *,
+    default_sections: dict[str, str] | None = None,
+) -> list[str]:
+    missing: list[str] = []
+    defaults = default_sections or {}
+    for section_id in ("templates", "styling"):
+        if section_id == "templates" and not import_templates_enabled(config):
+            continue
+        if section_id == "styling" and not import_css_enabled(config):
+            continue
+        text = (sections.get(section_id) or defaults.get(section_id) or "").strip()
+        if text and wrapper_content_tag(section_id) not in text:
+            missing.append(section_id)
+    return missing
+
+
+def _collapse_blank_lines(text: str, *, max_blank_lines: int = 2) -> str:
+    collapsed: list[str] = []
+    blank_run = 0
+    for line in text.splitlines():
+        if not line.strip():
+            blank_run += 1
+            if blank_run <= max_blank_lines:
+                collapsed.append(line)
+            continue
+        blank_run = 0
+        collapsed.append(line)
+    return "\n".join(collapsed).strip()
+
+
+def _render_section_text(
+    section_id: str,
+    prefix: str,
     *,
     context: str,
     request: str,
     templates: str,
     styling: str,
-    card_templates_format_addon: Callable[..., str],
+    format_guide: str,
 ) -> str:
-    templates_out = templates if wrapper_includes_section(resolved, "templates") else ""
-    styling_out = styling if wrapper_includes_section(resolved, "styling") else ""
-
-    if wrapper_has_conditional_blocks(resolved):
-        body = process_wrapper_conditionals(
-            resolved,
-            config,
-            templates_content=templates_out,
-            styling_content=styling_out,
-            preview=False,
-            wrapper_text=resolved,
-        )
-    else:
-        body = resolved
-
-    format_addon = _card_templates_format_guide_for_message(
-        resolved,
-        config,
-        templates_out=templates_out,
-        styling_out=styling_out,
-        card_templates_format_addon=card_templates_format_addon,
-    )
-    if format_addon:
-        marker = wrapper_content_tag("templates")
-        if marker in body:
-            body = _inject_before_marker(body, marker, format_addon)
-        elif wrapper_content_tag("styling") in body:
-            body = _inject_before_marker(body, wrapper_content_tag("styling"), format_addon)
-
+    if section_id == "format_guide":
+        return format_guide.strip()
     return apply_wrapper_placeholders(
-        body,
+        prefix,
         context=context,
         request=request,
-        templates=templates_out,
-        styling=styling_out,
+        templates=templates,
+        styling=styling,
+    ).strip()
+
+
+def assemble_wrapper_message(
+    config: dict[str, Any] | None,
+    *,
+    section_order: list[str],
+    section_prefixes: dict[str, str],
+    context: str,
+    request: str,
+    templates: str = "",
+    styling: str = "",
+    format_guide: str = "",
+    include_context: bool = True,
+    omit_format_guide: bool = False,
+    omit_sections: set[str] | None = None,
+    preview: bool = False,
+    active_context: str | None = None,
+    active_templates: str | None = None,
+    active_styling: str | None = None,
+) -> str:
+    omitted = omit_sections or set()
+    parts: list[str] = []
+    for section_id in normalize_wrapper_section_order(section_order):
+        if section_id in omitted:
+            continue
+        prefix = (section_prefixes.get(section_id) or "").strip()
+        if section_id != "format_guide" and not prefix:
+            continue
+        if not wrapper_section_active(
+            section_id,
+            config,
+            include_context=include_context,
+            context=context,
+            templates=templates,
+            styling=styling,
+            format_guide=format_guide,
+            omit_format_guide=omit_format_guide,
+            preview=preview,
+            active_context=active_context,
+            active_templates=active_templates,
+            active_styling=active_styling,
+            section_prefixes=section_prefixes,
+        ):
+            continue
+        rendered = _render_section_text(
+            section_id,
+            prefix,
+            context=context,
+            request=request,
+            templates=templates,
+            styling=styling,
+            format_guide=format_guide,
+        )
+        if rendered:
+            parts.append(rendered)
+    return _join_wrapper_sections(parts)
+
+
+def _join_wrapper_sections(parts: list[str]) -> str:
+    collapsed = [_collapse_blank_lines(part.strip()) for part in parts if part and part.strip()]
+    return join_prompt_blocks(*collapsed)
+
+
+def build_cache_safe_wrapper(
+    config: dict[str, Any] | None,
+    *,
+    section_order: list[str],
+    section_prefixes: dict[str, str],
+    cache_imported_note: bool,
+    cache_format_guide: bool,
+    cache_templates: bool,
+    cache_styling: bool,
+    context_content: str = "",
+    templates_content: str = "",
+    styling_content: str = "",
+    format_guide: str = "",
+) -> str:
+    omit: set[str] = {"request"}
+    if cache_imported_note:
+        omit.add("context")
+    if cache_format_guide:
+        omit.add("format_guide")
+    if cache_templates:
+        omit.add("templates")
+    if cache_styling:
+        omit.add("styling")
+    return assemble_wrapper_message(
+        config,
+        section_order=section_order,
+        section_prefixes=section_prefixes,
+        context=wrapper_content_tag("context") if context_content.strip() else "",
+        request="",
+        templates=wrapper_content_tag("templates") if templates_content.strip() else "",
+        styling=wrapper_content_tag("styling") if styling_content.strip() else "",
+        format_guide=format_guide,
+        include_context=True,
+        omit_format_guide=False,
+        omit_sections=omit,
+        active_context=context_content,
+        active_templates=templates_content,
+        active_styling=styling_content,
     )
+
+
+def build_live_request_message(
+    config: dict[str, Any] | None,
+    *,
+    section_order: list[str],
+    section_prefixes: dict[str, str],
+    request: str,
+) -> str:
+    rendered = assemble_wrapper_message(
+        config,
+        section_order=section_order,
+        section_prefixes=section_prefixes,
+        context="",
+        request=request,
+        include_context=False,
+        omit_sections={"context", "format_guide", "templates", "styling"},
+    )
+    return rendered if rendered.strip() else request
 
 
 def format_chat_context_message(
@@ -340,45 +358,50 @@ def format_chat_context_message(
     request: str,
     templates: str = "",
     styling: str = "",
-    template: str | None = None,
-    effective_wrapper: Callable[[dict[str, Any] | None], str],
-    default_wrapper: Callable[[dict[str, Any] | None], str],
-    is_builtin_wrapper: Callable[[str | None], bool],
-    assemble_builtin_message: Callable[..., str],
-    card_templates_format_addon: Callable[..., str],
+    include_context: bool = True,
+    omit_format_guide: bool = False,
+    section_order: list[str] | None = None,
+    section_prefixes: dict[str, str] | None = None,
+    format_guide: str | None = None,
+    omit_sections: set[str] | None = None,
+    resolve_wrapper_layout: Callable[[dict[str, Any] | None], tuple[list[str], dict[str, str]]],
+    resolve_format_guide: Callable[[dict[str, Any] | None], str],
 ) -> str:
-    session_template = (template or "").strip() or None
-    resolved = session_template or effective_wrapper(config)
-    templates = templates or ""
-    styling = styling or ""
+    base_order, base_prefixes = resolve_wrapper_layout(config)
+    order = normalize_wrapper_section_order(section_order) if section_order is not None else base_order
+    prefixes = dict(base_prefixes)
+    if section_prefixes is not None:
+        prefixes.update(section_prefixes)
+    guide = resolve_format_guide(config) if format_guide is None else format_guide
 
-    if is_builtin_wrapper(resolved):
-        return assemble_builtin_message(
-            config,
-            context=context,
-            request=request,
-            templates=templates,
-            styling=styling,
-        )
+    if wrapper_sections_missing_required(prefixes, order=order):
+        order = base_order
+        prefixes = dict(base_prefixes)
+        guide = resolve_format_guide(config) if format_guide is None else format_guide
+        if wrapper_sections_missing_required(prefixes, order=order):
+            order, prefixes = resolve_wrapper_layout(None)
+            guide = resolve_format_guide(None) if format_guide is None else format_guide
 
-    if chat_context_wrapper_should_fallback(resolved):
-        if session_template is not None:
-            resolved = effective_wrapper(config)
-        if is_builtin_wrapper(resolved) or chat_context_wrapper_should_fallback(resolved):
-            return assemble_builtin_message(
-                config,
-                context=context,
-                request=request,
-                templates=templates,
-                styling=styling,
-            )
-
-    return _format_resolved_wrapper_message(
-        resolved,
+    rendered = assemble_wrapper_message(
         config,
+        section_order=order,
+        section_prefixes=prefixes,
         context=context,
         request=request,
-        templates=templates,
-        styling=styling,
-        card_templates_format_addon=card_templates_format_addon,
+        templates=templates or "",
+        styling=styling or "",
+        format_guide=guide,
+        include_context=include_context,
+        omit_format_guide=omit_format_guide,
+        omit_sections=omit_sections,
     )
+    if rendered.strip():
+        return rendered
+    if not include_context or not context.strip():
+        return build_live_request_message(
+            config,
+            section_order=order,
+            section_prefixes=prefixes,
+            request=request,
+        )
+    return request

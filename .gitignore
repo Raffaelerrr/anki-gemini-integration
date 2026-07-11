@@ -2,6 +2,7 @@
 config.json
 meta.json
 config_gemini.json
+prompt_cache_state.json
 *.local.json
 .env
 .env.local

@@ -12,11 +12,62 @@ _MATHJAX_JS = (
 )
 
 
-def mathjax_typeset_js(root_id: str) -> str:
+_NOTE_PREVIEW_SHELL_ID = "addon-note-preview-shell"
+_NOTE_PREVIEW_ROOT_ID = "addon-note-preview"
+_NOTE_PREVIEW_LOADING_ID = "addon-note-preview-loading"
+NOTE_PREVIEW_LOADING_MIN_MS = 300
+
+
+def mathjax_typeset_js(
+    root_id: str,
+    *,
+    loading_id: str | None = None,
+    min_loading_ms: int = 0,
+) -> str:
+    reveal_fn = ""
+    reveal_call = ""
+    if loading_id:
+        reveal_fn = f"""
+    var loadingShownAt = Date.now();
+    var minLoadingMs = {max(0, int(min_loading_ms))};
+    function revealRoot() {{
+        var loading = document.getElementById({loading_id!r});
+        var root = document.getElementById({root_id!r});
+        var shell = document.getElementById({_NOTE_PREVIEW_SHELL_ID!r});
+        if (loading) {{
+            loading.style.display = "none";
+        }}
+        if (shell) {{
+            shell.classList.add("preview-ready");
+        }}
+        if (root) {{
+            root.classList.remove("preview-pending");
+            root.classList.add("rendered");
+        }}
+    }}
+    function scheduleReveal() {{
+        if (!minLoadingMs) {{
+            revealRoot();
+            return;
+        }}
+        var remaining = minLoadingMs - (Date.now() - loadingShownAt);
+        if (remaining > 0) {{
+            setTimeout(revealRoot, remaining);
+            return;
+        }}
+        revealRoot();
+    }}
+"""
+        reveal_call = "scheduleReveal();"
     return f"""
-(function () {{
+(function () {{{reveal_fn}
     var root = document.getElementById({root_id!r});
-    if (!root || !window.MathJax || !MathJax.startup || !MathJax.startup.promise) {{
+    if (!root) {{
+        {reveal_call}
+        return;
+    }}
+    if (!window.MathJax || !MathJax.startup || !MathJax.startup.promise) {{
+        {reveal_call}
         return;
     }}
     MathJax.startup.promise
@@ -26,14 +77,23 @@ def mathjax_typeset_js(root_id: str) -> str:
             }}
             return MathJax.typesetPromise([root]);
         }})
+        .then(function () {{
+            {reveal_call}
+        }})
         .catch(function (err) {{
             console.log("addon MathJax failed:", err);
+            {reveal_call}
         }});
 }})();
 """
 
 
-_TYPESET_JS = mathjax_typeset_js("addon-note-preview")
+def note_preview_typeset_js() -> str:
+    return mathjax_typeset_js(
+        _NOTE_PREVIEW_ROOT_ID,
+        loading_id=_NOTE_PREVIEW_LOADING_ID,
+        min_loading_ms=NOTE_PREVIEW_LOADING_MIN_MS,
+    )
 
 _SCRIPT_TAG_RE = re.compile(r"<script\b[^>]*>.*?</script>", re.IGNORECASE | re.DOTALL)
 _TEX_MACRO_RE = re.compile(r"\\(?:newcommand|renewcommand|def|DeclareMathOperator)\b")
@@ -43,6 +103,46 @@ _HIDDEN_MACRO_BLOCK_RE = re.compile(
 )
 
 _PREVIEW_CSS_BASE = """
+html, body {
+    height: 100%;
+    margin: 0;
+}
+#addon-note-preview-shell {
+    position: relative;
+    min-height: 100vh;
+}
+#addon-note-preview-shell.preview-ready {
+    min-height: 0;
+}
+#addon-note-preview-loading {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 0;
+    opacity: 0.8;
+    z-index: 10;
+    pointer-events: none;
+}
+#addon-note-preview-loading .preview-loading-label {
+    padding: 16px;
+    text-align: center;
+}
+#addon-note-preview.preview-pending {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+#addon-note-preview.rendered {
+    position: static;
+    visibility: visible;
+    pointer-events: auto;
+}
 #addon-note-preview {
     padding: 8px 10px 14px;
 }
@@ -200,6 +300,7 @@ def build_note_preview_body(
     *,
     empty_message: str = "",
     mathjax_preamble: str = "",
+    loading_message: str = "",
 ) -> str:
     preamble = (mathjax_preamble or "").strip()
     field_blocks: list[str] = []
@@ -219,14 +320,20 @@ def build_note_preview_body(
         message = html.escape(empty_message or "")
         return f'<div id="addon-note-preview"><div class="empty-preview">{message}</div></div>'
 
-    parts = ['<div id="addon-note-preview">']
+    loading_text = html.escape(loading_message or "")
+    parts = [
+        f'<div id="{_NOTE_PREVIEW_SHELL_ID}">',
+        f'<div id="{_NOTE_PREVIEW_LOADING_ID}">'
+        f'<span class="preview-loading-label">{loading_text}</span></div>',
+        f'<div id="{_NOTE_PREVIEW_ROOT_ID}" class="preview-pending">',
+    ]
     if preamble:
         parts.append(f'<div class="mathjax-preamble">{preamble}</div>')
     if field_blocks:
         if preamble:
             parts.append('<div class="field-gap"></div>')
         parts.extend(field_blocks)
-    parts.append("</div>")
+    parts.append("</div></div>")
     return "".join(parts)
 
 
@@ -244,13 +351,16 @@ def load_note_preview_webview(
     config: dict[str, Any] | None = None,
     notetype_id: int | None = None,
 ) -> None:
+    from ..i18n import tr
+
     preamble = resolve_mathjax_preview_preamble(config, notetype_id=notetype_id)
     body = build_note_preview_body(
         fields,
         empty_message=empty_message,
         mathjax_preamble=preamble,
+        loading_message=tr("chat.preview.loading", config=config),
     )
-    body += f"<script>{_TYPESET_JS}</script>"
+    body += f"<script>{note_preview_typeset_js()}</script>"
     web.stdHtml(
         body,
         css=[],

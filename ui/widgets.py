@@ -118,6 +118,93 @@ def _apply_native_wheel_scroll(editor: QTextEdit, event) -> None:
     event.accept()
 
 
+_WIDGET_SIZE_MAX = 16777215
+_SETTINGS_TEXT_EDIT_MIN_WIDTH = 160
+_SETTINGS_TEXT_EDIT_FALLBACK_WIDTH = 520
+
+
+def _propagate_widget_geometry(widget: QWidget) -> None:
+    parent = widget.parentWidget()
+    while parent is not None:
+        parent.updateGeometry()
+        parent = parent.parentWidget()
+
+
+def _settings_form_available_width(widget: QWidget) -> int:
+    best = 0
+    parent = widget.parentWidget()
+    while parent is not None:
+        if isinstance(parent, QScrollArea):
+            viewport = parent.viewport()
+            if viewport is not None and viewport.width() > 0:
+                return max(viewport.width() - 16, _SETTINGS_TEXT_EDIT_MIN_WIDTH)
+        width = parent.width()
+        if width > best:
+            best = width
+        parent = parent.parentWidget()
+    if best > 0:
+        return max(best - 16, _SETTINGS_TEXT_EDIT_MIN_WIDTH)
+    return _SETTINGS_TEXT_EDIT_FALLBACK_WIDTH
+
+
+def _settings_editor_ideal_content_width(editor: QTextEdit, *, frame: int) -> int:
+    document = editor.document()
+    document.setTextWidth(-1)
+    if document.isEmpty():
+        placeholder = editor.placeholderText().strip()
+        if placeholder:
+            metrics = editor.fontMetrics()
+            max_line = 0
+            for line in placeholder.replace("\r\n", "\n").split("\n"):
+                max_line = max(max_line, metrics.horizontalAdvance(line))
+            return int(max_line + frame + 16)
+    return int(math.ceil(document.idealWidth() + frame + 16))
+
+
+def _settings_placeholder_height(
+    editor: QTextEdit,
+    *,
+    width: int,
+    min_height: int,
+) -> int:
+    placeholder = editor.placeholderText().strip()
+    if not placeholder:
+        return min_height
+    frame = editor.frameWidth() * 2
+    inner = max(width - frame - 16, 1)
+    rect = editor.fontMetrics().boundingRect(
+        0,
+        0,
+        inner,
+        10_000,
+        int(Qt.TextFlag.TextWordWrap),
+        placeholder,
+    )
+    return int(max(min_height, rect.height() + frame + 16))
+
+
+def _settings_target_width(editor: QTextEdit, *, frame: int) -> int:
+    available = _settings_form_available_width(editor)
+    document = editor.document()
+    previous = document.textWidth()
+    ideal = _settings_editor_ideal_content_width(editor, frame=frame)
+    if previous > 0:
+        document.setTextWidth(previous)
+    else:
+        document.setTextWidth(-1)
+    return min(max(ideal, _SETTINGS_TEXT_EDIT_MIN_WIDTH), available)
+
+
+def _sync_settings_text_edit_shell(editor: QTextEdit, *, width: int, height: int) -> None:
+    shell = getattr(editor, "_settings_shell", None)
+    if shell is None:
+        return
+    if shell.width() != width:
+        shell.setFixedWidth(width)
+    if shell.height() != height:
+        shell.setFixedHeight(height)
+
+
 def bind_text_edit_auto_height(
     editor: QTextEdit,
     *,
@@ -128,32 +215,130 @@ def bind_text_edit_auto_height(
 
     Pass ``maximum=None`` to expand to full content height (for nested scroll areas).
     """
+    existing_adjust = getattr(editor, "_auto_height_adjust", None)
+    if existing_adjust is not None:
+        editor._auto_height_minimum = minimum
+        editor._auto_height_maximum = maximum
+        existing_adjust()
+        return
+
+    def _content_height() -> int:
+        document = editor.document()
+        layout = document.documentLayout()
+        doc_height = layout.documentSize().height()
+        last = document.lastBlock()
+        if last.isValid():
+            block_rect = layout.blockBoundingRect(last)
+            doc_height = max(doc_height, block_rect.bottom())
+        contents = editor.contentsMargins()
+        chrome = (
+            editor.frameWidth() * 2
+            + document.documentMargin() * 2
+            + contents.top()
+            + contents.bottom()
+            + 8
+        )
+        return int(math.ceil(doc_height + chrome + 2))
 
     def _adjust() -> None:
         if not _qt_widget_alive(editor):
             return
+        if getattr(editor, "_auto_height_adjusting", False):
+            return
+        editor._auto_height_adjusting = True
         try:
-            editor.document().setTextWidth(-1)
-            doc_height = editor.document().documentLayout().documentSize().height()
+            min_height = getattr(editor, "_auto_height_minimum", minimum)
+            max_height = getattr(editor, "_auto_height_maximum", maximum)
             frame = editor.frameWidth() * 2
-            natural = int(math.ceil(doc_height + frame + 8))
-            if maximum is None:
-                height = int(max(minimum, natural))
+            wrap_mode = editor.lineWrapMode()
+            settings_width = None
+            document = editor.document()
+            document.blockSignals(True)
+            try:
+                if wrap_mode == QTextEdit.LineWrapMode.NoWrap:
+                    document.setTextWidth(-1)
+                elif getattr(editor, "_settings_text_edit", False):
+                    settings_width = _settings_target_width(editor, frame=frame)
+                    document.setTextWidth(max(settings_width - frame - 8, 1))
+                else:
+                    viewport_width = editor.viewport().width()
+                    if viewport_width <= 0:
+                        viewport_width = max(editor.width() - frame, 0)
+                    if viewport_width <= 0:
+                        parent = editor.parentWidget()
+                        if parent is not None and parent.width() > 0:
+                            viewport_width = max(parent.width() - 8, 1)
+                    document.setTextWidth(
+                        max(viewport_width, 1) if viewport_width > 0 else -1
+                    )
+            finally:
+                document.blockSignals(False)
+            natural = _content_height()
+            if (
+                getattr(editor, "_settings_text_edit", False)
+                and document.isEmpty()
+                and editor.placeholderText().strip()
+            ):
+                measure_width = settings_width or max(editor.width(), _SETTINGS_TEXT_EDIT_MIN_WIDTH)
+                natural = max(
+                    natural,
+                    _settings_placeholder_height(
+                        editor,
+                        width=measure_width,
+                        min_height=min_height,
+                    ),
+                )
+            if max_height is None:
+                height = int(max(min_height, natural))
                 editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-                editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+                editor.setHorizontalScrollBarPolicy(
+                    Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+                    if wrap_mode != QTextEdit.LineWrapMode.NoWrap
+                    else Qt.ScrollBarPolicy.ScrollBarAsNeeded
+                )
+                editor.setMinimumHeight(height)
+                editor.setMaximumHeight(_WIDGET_SIZE_MAX)
             else:
-                height = int(max(minimum, min(natural, maximum)))
+                height = int(max(min_height, min(natural, max_height)))
                 editor.setVerticalScrollBarPolicy(
                     Qt.ScrollBarPolicy.ScrollBarAsNeeded
-                    if natural > maximum
+                    if natural > max_height
                     else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
                 )
-                editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-            if editor.height() != height:
-                editor.setFixedHeight(height)
-                editor.updateGeometry()
+                editor.setHorizontalScrollBarPolicy(
+                    Qt.ScrollBarPolicy.ScrollBarAsNeeded
+                    if wrap_mode == QTextEdit.LineWrapMode.NoWrap
+                    else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+                )
+                editor.setMinimumHeight(min_height)
+                editor.setMaximumHeight(height)
+
+            shell = getattr(editor, "_settings_shell", None)
+            if (
+                editor.height() == height
+                and (
+                    settings_width is None
+                    or (shell is not None and shell.width() == settings_width and shell.height() == height)
+                )
+            ):
+                return
+
+            editor.setFixedHeight(height)
+            editor.updateGeometry()
+            if settings_width is not None:
+                _sync_settings_text_edit_shell(
+                    editor,
+                    width=settings_width,
+                    height=height,
+                )
+            _propagate_widget_geometry(editor)
         except RuntimeError:
             return
+        finally:
+            editor._auto_height_adjusting = False
+
+    editor._auto_height_minimum = minimum
+    editor._auto_height_maximum = maximum
 
     class _ResizeFilter(QObject):
         def eventFilter(self, obj, event) -> bool:
@@ -162,7 +347,6 @@ def bind_text_edit_auto_height(
             return False
 
     editor.textChanged.connect(_adjust)
-    editor.document().contentsChanged.connect(_adjust)
     resize_filter = _ResizeFilter(editor)
     editor.installEventFilter(resize_filter)
     viewport = editor.viewport()
@@ -171,9 +355,6 @@ def bind_text_edit_auto_height(
     editor._auto_height_resize_filter = resize_filter  # prevent GC
     editor._auto_height_adjust = _adjust
     QTimer.singleShot(0, _adjust)
-    if maximum is None:
-        QTimer.singleShot(50, _adjust)
-        QTimer.singleShot(200, _adjust)
 
 
 class _ScrollAwareWheelAppFilter(QObject):
@@ -643,6 +824,8 @@ class ScrollAwareTextEdit(QTextEdit):
         timer.start()
 
     def clear_text_selection(self) -> None:
+        if not _qt_widget_alive(self):
+            return
         cursor = self.textCursor()
         cursor.clearSelection()
         self.setTextCursor(cursor)
@@ -662,9 +845,16 @@ class ScrollAwareTextEdit(QTextEdit):
         editors = _SCROLL_AWARE_EDITORS_BY_WINDOW.get(host)
         if not editors:
             return
-        for editor in editors:
-            if editor is not self:
-                editor.clear_text_selection()
+        stale: list[ScrollAwareTextEdit] = []
+        for editor in list(editors):
+            if editor is self:
+                continue
+            if not _qt_widget_alive(editor):
+                stale.append(editor)
+                continue
+            editor.clear_text_selection()
+        for editor in stale:
+            editors.discard(editor)
 
     def is_internally_scrollable(self) -> bool:
         return self._has_vertical_scroll(self) or self._has_horizontal_scroll(self)

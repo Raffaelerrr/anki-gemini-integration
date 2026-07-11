@@ -32,17 +32,24 @@ CHAT_SESSION_CONFIG_KEYS: tuple[str, ...] = (
     "prompt_chat_addon",
     "prompt_dynamic_rules_prefix",
     "prompt_chat_context",
+    "prompt_chat_context_order",
+    "prompt_chat_context_sections",
     "prompt_card_templates_format",
-    "brain_import_templates",
-    "brain_import_css",
+    "prompt_cache_enabled",
+    "prompt_cache_ttl_seconds",
+    "prompt_cache_min_chars",
+    "prompt_cache_custom_text",
+    "prompt_cache_segments",
 )
 
 CHAT_LIVE_CONFIG_KEYS: tuple[str, ...] = (
     "language",
-    "chat_token_warning_threshold",
-    "chat_prompt_inspection",
+    "chat_payload_warning_chars",
     "timeout_seconds",
     "max_retries",
+    "brain_import_templates",
+    "brain_import_css",
+    "chat_modify_prompt_before_send",
 )
 
 
@@ -74,6 +81,20 @@ class PromptInspection:
             title = tr(segment.label_key, config=config)
             blocks.append(f"=== {title} ===\n{segment.text}")
         return "\n\n".join(blocks)
+
+    def plain_full_text(self, config: dict[str, Any] | None = None) -> str:
+        from .prompt_compose import join_prompt_blocks
+
+        parts: list[str] = []
+        system = merge_inspection_system_text(self.segments)
+        if system.strip():
+            parts.append(system)
+        for segment in self.segments:
+            if segment.role == "history" and (segment.text or "").strip():
+                parts.append(segment.text)
+            elif segment.label_key == "prompt.inspect.next_user_message" and (segment.text or "").strip():
+                parts.append(segment.text)
+        return join_prompt_blocks(*parts)
 
     def metadata_lines(self, config: dict[str, Any] | None = None) -> list[str]:
         config = config or {}
@@ -114,6 +135,45 @@ class PromptInspection:
 
     def metadata_text(self, config: dict[str, Any] | None = None) -> str:
         return ", ".join(self.metadata_lines(config))
+
+
+def merge_inspection_system_text(segments: list[PromptSegment]) -> str:
+    from .prompt_compose import join_prompt_blocks, join_prompt_header_body
+
+    base = ""
+    prefix = ""
+    dynamic = ""
+    addon = ""
+    for segment in segments:
+        if segment.label_key == "prompt.inspect.system_instruction":
+            base = segment.text
+        elif segment.label_key == "prompt.inspect.dynamic_rules_prefix":
+            prefix = segment.text
+        elif segment.label_key == "prompt.inspect.dynamic_instructions":
+            dynamic = segment.text
+        elif segment.label_key == "prompt.inspect.chat_system_addon":
+            addon = segment.text
+    blocks: list[str] = [base]
+    if dynamic.strip():
+        blocks.append(join_prompt_header_body(prefix, dynamic))
+    if addon.strip():
+        blocks.append(addon)
+    return join_prompt_blocks(*blocks)
+
+
+def system_instruction_parts_from_segments(
+    segments: list[PromptSegment],
+) -> dict[str, str]:
+    parts = {
+        "prompt.inspect.system_instruction": "",
+        "prompt.inspect.dynamic_rules_prefix": "",
+        "prompt.inspect.dynamic_instructions": "",
+        "prompt.inspect.chat_system_addon": "",
+    }
+    for segment in segments:
+        if segment.label_key in parts:
+            parts[segment.label_key] = segment.text
+    return parts
 
 
 def chat_session_config_fingerprint(config: dict[str, Any] | None) -> str:
@@ -243,17 +303,7 @@ def build_chat_prompt_inspection(
             )
         )
 
-    draft_note = ""
-    if next_user_text.strip() and next_user_text.strip() != outgoing_payload.strip():
-        draft_note = tr(
-            "prompt.inspect.draft_input_note",
-            config=config,
-            draft=next_user_text.strip(),
-        )
-
     next_text = outgoing_payload.strip() or tr("prompt.inspect.empty_next_message", config=config)
-    if draft_note:
-        next_text = f"{draft_note}\n\n{next_text}"
 
     segments.append(
         PromptSegment(

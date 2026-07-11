@@ -29,7 +29,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 - **Per-purpose models & thinking budgets** — different settings for optimize vs chat.
 - **Optimization preview** — optional confirm-before-apply dialog.
 - **Undo** — revert last field optimization in the session.
-- **Note analysis (🧠)** — import all fields into chat for atomicity feedback.
+- **Note analysis (brain icon)** — import all fields into chat for atomicity feedback.
 - **Dynamic rules** — chat can persist learned preferences into settings.
 - **Built-in defaults** — generic HTML/MathJax system instructions (EN/IT); language-aware.
 - **Dismissible warnings** — default-instructions warning on optimize; API key restore warning.

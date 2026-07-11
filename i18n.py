@@ -3,20 +3,19 @@ from __future__ import annotations
 from typing import Any
 
 from .chat_context_wrapper import (
+    DEFAULT_WRAPPER_SECTION_ORDER,
+    PLACEHOLDER_SECTIONS,
+    WRAPPER_SECTION_IDS,
     apply_wrapper_placeholders,
-    chat_context_wrapper_has_unbalanced_conditionals,
-    chat_context_wrapper_missing_placeholders,
-    chat_context_wrapper_should_fallback,
-    expand_chat_context_wrapper,
+    assemble_wrapper_message,
     format_chat_context_message as _format_chat_context_message_core,
     import_css_enabled,
     import_templates_enabled,
-    process_wrapper_conditionals,
-    repair_wrapper_brace_escaping,
+    normalize_wrapper_section_order,
     wrapper_content_tag,
-    wrapper_has_conditional_blocks,
     wrapper_missing_import_placeholders,
-    wrapper_open_tag,
+    wrapper_section_missing_placeholders,
+    wrapper_sections_missing_required,
 )
 from .constants import DEFAULT_BRAIN_IMPORT_MESSAGE
 
@@ -27,6 +26,10 @@ DEFAULT_LANGUAGE = LANG_EN
 
 _STRINGS: dict[str, dict[str, str]] = {
     # Editor buttons & menu
+    "editor.button.optimize": {
+        "it": "Ottimizza",
+        "en": "Optimize",
+    },
     "editor.tip.optimize": {
         "it": "Ottimizza questo campo con Gemini (Ctrl+Shift+G)",
         "en": "Optimize this field with Gemini (Ctrl+Shift+G)",
@@ -87,6 +90,24 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.api_key.placeholder.empty": {
         "it": "Incolla la chiave da aistudio.google.com",
         "en": "Paste your key from aistudio.google.com",
+    },
+    "settings.api_cost_tracking": {
+        "it": (
+            "Questo add-on non mostra importi in dollari. Monitora utilizzo e costi in "
+            "<a href=\"{billing_url}\">AI Studio → Fatturazione</a> e "
+            "<a href=\"{usage_url}\">AI Studio → Utilizzo</a> "
+            "(saldo prepagato in pochi minuti; i grafici possono ritardare fino a 24 ore). "
+            "Apri la <b>guida impostazioni (pulsante info)</b> → <b>Monitorare i costi API</b> o "
+            "<b>Dimensioni payload nell'add-on</b> per i dettagli."
+        ),
+        "en": (
+            "This add-on does not show dollar amounts. Track usage and spend in "
+            "<a href=\"{billing_url}\">AI Studio → Billing</a> and "
+            "<a href=\"{usage_url}\">AI Studio → Usage</a> "
+            "(prepay balance updates within minutes; charts may lag up to 24 hours). "
+            "Open the <b>settings guide (info button)</b> → <b>Track API costs</b> or "
+            "<b>Add-on payload sizes</b> for details."
+        ),
     },
     "settings.model_optimize": {
         "it": "Modello Gemini (ottimizzazione):",
@@ -164,42 +185,378 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Mostra anteprima prima di applicare l'ottimizzazione del campo",
         "en": "Show preview before applying field optimization",
     },
+    "settings.show_text_newlines": {
+        "it": "Mostra i ritorni a capo nelle caselle di testo",
+        "en": "Show line breaks in text boxes",
+    },
+    "settings.show_text_newlines.hint": {
+        "it": (
+            "Mostra il simbolo ¶ a fine riga così puoi distinguere i a capo reali "
+            "dall'avvolgimento automatico del testo."
+        ),
+        "en": (
+            "Shows a ¶ marker at the end of each line so you can tell real line breaks "
+            "from automatic word wrap."
+        ),
+    },
     "settings.brain_message": {
-        "it": "Messaggio predefinito importazione nota (🧠):",
-        "en": "Default note import message (🧠):",
+        "it": "Messaggio predefinito dopo import nota (icona cervello):",
+        "en": "Default message after note import (brain icon):",
     },
     "settings.brain_message.hint": {
-        "it": "Testo inserito automaticamente nella chat quando importi una nota con il bottone 🧠.",
-        "en": "Text inserted automatically in chat when you import a note with the 🧠 button.",
+        "it": (
+            "Testo inserito nella casella chat quando clicchi l'icona cervello nell'editor "
+            "(importa tutti i campi della nota in chat)."
+        ),
+        "en": (
+            "Text placed in the chat input when you click the brain icon in the editor "
+            "(imports all note fields into chat)."
+        ),
     },
     "settings.brain_import_templates": {
-        "it": "Includi i template delle carte del tipo di nota nel messaggio chat",
-        "en": "Include the note type's card templates in the chat message",
+        "it": "Includi template carte (chat)",
+        "en": "Include card templates (chat)",
     },
     "settings.brain_import_css": {
-        "it": "Includi lo stile CSS del tipo di nota nel messaggio chat",
-        "en": "Include the note type CSS styling in the chat message",
+        "it": "Includi CSS nota (chat)",
+        "en": "Include note CSS (chat)",
     },
-    "settings.chat_token_warning_threshold": {
-        "it": "Avviso token chat oltre",
-        "en": "Chat token warning above",
+    "settings.chat_payload_warning_chars": {
+        "it": "Avviso caratteri payload chat oltre",
+        "en": "Chat payload warning above (characters)",
     },
     "settings.advanced": {
         "it": "Avanzate",
         "en": "Advanced",
     },
     "settings.advanced.title": {
-        "it": "Prompt avanzati",
-        "en": "Advanced prompts",
+        "it": "Impostazioni avanzate",
+        "en": "Advanced settings",
     },
     "settings.advanced.hint": {
         "it": (
-            "Testi aggiuntivi inviati a Gemini. Modifica solo se sai cosa stai facendo. "
+            "Testi extra, cache prompt e altre opzioni tecniche. Modifica solo se sai cosa stai facendo. "
             "Ripristina i valori predefiniti da Impostazioni → Ripristina predefiniti."
         ),
         "en": (
-            "Extra text sent to Gemini. Edit only if you know what you are doing. "
+            "Extra prompt text, prompt caching, and other technical options. Edit only if you know what you are doing. "
             "Restore defaults from Settings → Restore defaults."
+        ),
+    },
+    "settings.prompt_cache_enabled": {
+        "it": "Abilita cache prompt (Gemini)",
+        "en": "Enable prompt caching (Gemini)",
+    },
+    "settings.prompt_cache.hint": {
+        "it": (
+            "Memorizza su Gemini le parti del prompt che scegli, per un TTL impostato. "
+            "Richiede abbastanza token (vedi soglia minima). Le modifiche al testo cached "
+            "richiedono una nuova cache."
+        ),
+        "en": (
+            "Store selected prompt parts on Gemini for a TTL you choose. "
+            "Requires enough tokens (see minimum threshold). "
+            "Changing cached text requires creating a new cache."
+        ),
+    },
+    "settings.prompt_cache.billing_link": {
+        "it": (
+            "Per costi ufficiali (non stime dell'add-on), vedi "
+            "<a href=\"{billing_url}\">AI Studio → Fatturazione</a>."
+        ),
+        "en": (
+            "For official costs (not add-on estimates), see "
+            "<a href=\"{billing_url}\">AI Studio → Billing</a>."
+        ),
+    },
+    "settings.prompt_cache_ttl": {
+        "it": "Durata cache (secondi)",
+        "en": "Cache TTL (seconds)",
+    },
+    "settings.prompt_cache_min_chars": {
+        "it": "Caratteri minimi per la cache (controllo interno)",
+        "en": "Minimum characters to cache (internal check)",
+    },
+    "settings.prompt_cache.segment.context_wrapper.disabled": {
+        "it": "Incluso automaticamente quando si cache nota, template o CSS.",
+        "en": "Included automatically when caching note, templates, or CSS.",
+    },
+    "settings.prompt_cache.system_instruction_cache_info": {
+        "it": (
+            "Se le istruzioni di sistema sono separate per chat e ottimizzazione, "
+            "quando la cache è usata per la chat verranno inviate solo le istruzioni "
+            "specifiche della chat; per l'ottimizzazione solo quelle specifiche di ottimizzazione."
+        ),
+        "en": (
+            "When system instructions are split between chat and optimize: "
+            "cached system instructions for chat use the chat-only field, "
+            "and cached system instructions for optimize use the optimize-only field."
+        ),
+    },
+    "prompt_cache.recreate_confirm.title": {
+        "it": "Ricreare la cache prompt?",
+        "en": "Recreate prompt cache?",
+    },
+    "prompt_cache.recreate_confirm.message": {
+        "it": (
+            "Il contenuto cached è cambiato ({chars} caratteri, TTL {minutes} min). "
+            "Ricreare la cache su Gemini può comportare addebiti."
+        ),
+        "en": (
+            "Cached content changed ({chars} characters, TTL {minutes} min). "
+            "Recreating the cache on Gemini may incur charges."
+        ),
+    },
+    "prompt_cache.recreate_confirm.detail": {
+        "it": (
+            "Sì = ricrea la cache e invia. "
+            "No = invia senza cache: viene inviato solo il prompt live (scheda Live prompt); "
+            "il materiale in cache non è incluso. "
+            "Annulla = non inviare. "
+            "L'add-on non mostra importi: vedi "
+            "<a href=\"{billing_url}\">AI Studio → Fatturazione</a>."
+        ),
+        "en": (
+            "Yes = recreate the cache and send. "
+            "No = send without cache: only the live prompt is sent (Live prompt tab); "
+            "cached background material is omitted. "
+            "Cancel = do not send. "
+            "The add-on does not show dollar amounts — see "
+            "<a href=\"{billing_url}\">AI Studio → Billing</a>."
+        ),
+    },
+    "settings.prompt_cache_custom_text": {
+        "it": "Testo personalizzato per la cache",
+        "en": "Custom cache text",
+    },
+    "settings.prompt_cache_custom_text.hint": {
+        "it": (
+            "Materiale di riferimento lungo (libro, glossario, regole del deck). Inviato come blocco "
+            "cached, non come istruzione di sistema. Puoi caricarlo da un file di testo (.txt)."
+        ),
+        "en": (
+            "Long reference material (book chapter, glossary, deck rules). Sent as a cached content "
+            "block, not as system instruction. You can load it from a plain text file (.txt)."
+        ),
+    },
+    "settings.prompt_cache_custom_text.load_file": {
+        "it": "Carica da file…",
+        "en": "Load from file…",
+    },
+    "settings.prompt_cache_custom_text.load_file.title": {
+        "it": "Carica testo cache da file",
+        "en": "Load cache text from file",
+    },
+    "settings.prompt_cache_custom_text.load_file.filter": {
+        "it": "File di testo (*.txt);;Tutti i file (*.*)",
+        "en": "Text files (*.txt);;All files (*.*)",
+    },
+    "settings.prompt_cache_custom_text.load_confirm.title": {
+        "it": "Sostituire il testo personalizzato?",
+        "en": "Replace custom text?",
+    },
+    "settings.prompt_cache_custom_text.load_confirm.message": {
+        "it": "Il campo contiene già del testo. Sostituirlo con il contenuto del file?",
+        "en": "The field already has text. Replace it with the file contents?",
+    },
+    "settings.prompt_cache_custom_text.load_error": {
+        "it": "Impossibile leggere il file: {error}",
+        "en": "Could not read file: {error}",
+    },
+    "settings.prompt_cache_segments": {
+        "it": "Segmenti da includere nella cache",
+        "en": "Segments to include in cache",
+    },
+    "settings.prompt_cache_segments.hint": {
+        "it": (
+            "Il wrapper contesto nota viene incluso automaticamente quando si cache "
+            "nota importata, template o CSS. La sezione richiesta (segnaposto "
+            "<code>request</code>) resta sempre live."
+        ),
+        "en": (
+            "The note context wrapper is included automatically when caching an "
+            "imported note, templates, or CSS. The request section "
+            "(<code>request</code> placeholder) always stays live."
+        ),
+    },
+    "settings.prompt_cache.segment.system_instruction": {
+        "it": "Istruzioni di sistema",
+        "en": "System instructions",
+    },
+    "settings.prompt_cache.segment.dynamic_rules": {
+        "it": "Regole dinamiche",
+        "en": "Dynamic rules",
+    },
+    "settings.prompt_cache.segment.chat_system_addon": {
+        "it": "Istruzioni chat extra",
+        "en": "Extra chat instructions",
+    },
+    "settings.prompt_cache.segment.custom_cache_text": {
+        "it": "Testo personalizzato per la cache",
+        "en": "Custom cache text",
+    },
+    "settings.prompt_cache.segment.imported_note": {
+        "it": "Nota importata (chat)",
+        "en": "Imported note (chat)",
+    },
+    "settings.prompt_cache.segment.card_templates": {
+        "it": "Template carte importati (chat)",
+        "en": "Imported card templates (chat)",
+    },
+    "settings.prompt_cache.segment.card_templates_format_guide": {
+        "it": "Guida formato template carte (chat)",
+        "en": "Card templates format guide (chat)",
+    },
+    "settings.prompt_cache.segment.notetype_css": {
+        "it": "CSS nota importato (chat)",
+        "en": "Imported note CSS (chat)",
+    },
+    "settings.prompt_cache.segment.context_wrapper": {
+        "it": "Wrapper contesto nota (chat)",
+        "en": "Note context wrapper (chat)",
+    },
+    "settings.prompt_cache.extend": {
+        "it": "Estendi TTL",
+        "en": "Extend TTL",
+    },
+    "settings.prompt_cache.clear": {
+        "it": "Elimina cache tracciate",
+        "en": "Clear tracked caches",
+    },
+    "settings.prompt_cache.manage": {
+        "it": "Gestisci cache…",
+        "en": "Manage caches…",
+    },
+    "settings.prompt_cache.manager.title": {
+        "it": "Cache prompt su Gemini",
+        "en": "Gemini prompt caches",
+    },
+    "settings.prompt_cache.manager.intro": {
+        "it": (
+            "Elenca le cache remote create da questo add-on (nome <code>anki-ai-*</code> su Google).<br><br>"
+            "<b>Tracciata</b> — l'add-on ricorda questa cache in locale (<code>prompt_cache_state.json</code>) "
+            "come cache attuale per chat o ottimizzazione.<br>"
+            "<b>Orfana</b> — esiste ancora su Google ma l'add-on non la traccia (es. dopo un crash o prima "
+            "della persistenza); può costare fino a scadenza TTL.<br><br>"
+            "Eliminare un'orfana non influisce sulla chat finché non era tracciata."
+        ),
+        "en": (
+            "Lists remote caches created by this add-on (<code>anki-ai-*</code> display names on Google).<br><br>"
+            "<b>Tracked</b> — the add-on remembers this cache locally (<code>prompt_cache_state.json</code>) "
+            "as the current cache for chat or optimize.<br>"
+            "<b>Orphan</b> — still on Google but not tracked locally (e.g. after a crash or before persistence); "
+            "may incur storage cost until TTL expires.<br><br>"
+            "Deleting an orphan does not affect chat unless it was the tracked cache."
+        ),
+    },
+    "settings.prompt_cache.manager.empty": {
+        "it": "Nessuna cache dell'add-on (prefisso anki-ai-) trovata sul tuo account.",
+        "en": "No add-on caches (anki-ai- prefix) found on your account.",
+    },
+    "settings.prompt_cache.manager.no_api_key": {
+        "it": "Imposta una chiave API per elencare o eliminare le cache remote.",
+        "en": "Set an API key to list or delete remote caches.",
+    },
+    "settings.prompt_cache.manager.load_error": {
+        "it": "Impossibile caricare le cache: {error}",
+        "en": "Could not load caches: {error}",
+    },
+    "settings.prompt_cache.manager.summary": {
+        "it": "{count} cache dell'add-on · {orphans} orfane (non tracciate localmente)",
+        "en": "{count} add-on caches · {orphans} orphaned (not tracked locally)",
+    },
+    "settings.prompt_cache.manager.col.purpose": {
+        "it": "Per",
+        "en": "For",
+    },
+    "settings.prompt_cache.manager.col.model": {
+        "it": "Modello",
+        "en": "Model",
+    },
+    "settings.prompt_cache.manager.col.expires": {
+        "it": "Scade",
+        "en": "Expires",
+    },
+    "settings.prompt_cache.manager.col.tracked": {
+        "it": "Tracciata",
+        "en": "Tracked",
+    },
+    "settings.prompt_cache.manager.col.actions": {
+        "it": "Azioni",
+        "en": "Actions",
+    },
+    "settings.prompt_cache.manager.refresh": {
+        "it": "Aggiorna",
+        "en": "Refresh",
+    },
+    "settings.prompt_cache.manager.delete_orphans": {
+        "it": "Elimina orfane",
+        "en": "Delete orphans",
+    },
+    "settings.prompt_cache.manager.delete_orphans.title": {
+        "it": "Eliminare le cache orfane?",
+        "en": "Delete orphaned caches?",
+    },
+    "settings.prompt_cache.manager.delete_orphans.message": {
+        "it": "Eliminare {count} cache remote non tracciate dall'add-on?",
+        "en": "Delete {count} remote caches not tracked by the add-on?",
+    },
+    "settings.prompt_cache.manager.delete": {
+        "it": "Elimina",
+        "en": "Delete",
+    },
+    "settings.prompt_cache.manager.close": {
+        "it": "Chiudi",
+        "en": "Close",
+    },
+    "settings.prompt_cache.manager.tracked_yes": {
+        "it": "Sì",
+        "en": "Yes",
+    },
+    "settings.prompt_cache.manager.tracked_no": {
+        "it": "No",
+        "en": "No",
+    },
+    "settings.prompt_cache.manager.purpose.chat": {
+        "it": "Chat",
+        "en": "Chat",
+    },
+    "settings.prompt_cache.manager.purpose.optimize": {
+        "it": "Ottimizzazione",
+        "en": "Optimize",
+    },
+    "settings.prompt_cache.manager.purpose.unknown": {
+        "it": "Sconosciuto",
+        "en": "Unknown",
+    },
+    "settings.prompt_cache.manager.expired": {
+        "it": "Scaduta",
+        "en": "Expired",
+    },
+    "settings.prompt_cache.manager.minutes": {
+        "it": "tra {minutes} min",
+        "en": "in {minutes} min",
+    },
+    "settings.prompt_cache.status.inactive": {
+        "it": "{purpose} — nessuna cache tracciata.",
+        "en": "{purpose} — no tracked cache.",
+    },
+    "settings.prompt_cache.status.active": {
+        "it": "{purpose} — cache attiva · {chars} caratteri cached · scade tra {minutes} min",
+        "en": "{purpose} — cache active · {chars} cached characters · expires in {minutes} min",
+    },
+    "settings.prompt_cache.status.error": {
+        "it": "{purpose} — cache non disponibile: {error}",
+        "en": "{purpose} — cache unavailable: {error}",
+    },
+    "chat.prompt_cache.created": {
+        "it": (
+            "Cache prompt creata su Gemini ({chars} caratteri in cache, "
+            "TTL {minutes} min)."
+        ),
+        "en": (
+            "Prompt cache created on Gemini ({chars} cached characters, "
+            "TTL {minutes} min)."
         ),
     },
     "settings.prompt_optimize_user": {
@@ -217,17 +574,17 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
     },
     "settings.prompt_chat_addon": {
-        "it": "Istruzioni aggiuntive di sistema (chat)",
-        "en": "Extra system instructions (chat)",
+        "it": "Istruzioni chat extra",
+        "en": "Extra chat instructions",
     },
     "settings.prompt_chat_addon.hint": {
         "it": (
-            "Appeso alle istruzioni di sistema in chat: formattazione risposte, blocchi code per i campi, "
-            "regole dinamiche (<UPDATE_DYNAMIC_RULES>), ecc."
+            "Regole solo per la chat: formattazione risposte, blocchi code per i campi, "
+            "protocollo regole dinamiche (<UPDATE_DYNAMIC_RULES>), ecc."
         ),
         "en": (
-            "Appended to chat system instructions: reply formatting, field code blocks, "
-            "dynamic rules (<UPDATE_DYNAMIC_RULES>), etc."
+            "Chat-only rules: reply formatting, field code blocks, "
+            "dynamic rules protocol (<UPDATE_DYNAMIC_RULES>), etc."
         ),
     },
     "settings.prompt_dynamic_rules_prefix": {
@@ -237,14 +594,16 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.prompt_dynamic_rules_prefix.hint": {
         "it": (
             "Inserito prima del testo delle regole dinamiche quando non è vuoto. "
-            "Deve terminare con un a capo. Per impostazione predefinita indica che le regole "
-            "dinamiche hanno priorità inferiore rispetto alle istruzioni statiche sopra; "
-            "modifica questo testo per dichiarare esplicitamente una priorità diversa."
+            "Per impostazione predefinita indica che le regole dinamiche hanno priorità inferiore "
+            "rispetto alle istruzioni statiche sopra; modifica questo testo per dichiarare "
+            "esplicitamente una priorità diversa. Gli a capo tra i blocchi del prompt "
+            "vengono aggiunti automaticamente."
         ),
         "en": (
             "Inserted before your dynamic rules text when that field is not empty. "
-            "Should end with a newline. By default it states dynamic rules are lower priority "
-            "than the static instructions above; edit this text to state a different priority explicitly."
+            "By default it states dynamic rules are lower priority than the static instructions "
+            "above; edit this text to state a different priority explicitly. "
+            "Line breaks between prompt blocks are added automatically."
         ),
     },
     "settings.prompt_chat_context": {
@@ -253,21 +612,27 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
     "settings.prompt_chat_context.hint": {
         "it": (
-            "Usato quando invii in chat con «Includi contesto nota» dopo l'import 🧠. "
-            "Obbligatori: {{context}}, {{request}}. Per template e CSS usa "
-            "{{#templates}}…{{/templates}} e {{#styling}}…{{/styling}} con "
-            "{{templates}} e {{styling}}. Usa il pulsante <b>i</b> accanto al titolo per la guida."
+            "Usato per ogni invio in chat. Cinque sezioni riordinabili: contesto nota, "
+            "guida formato, template, CSS e richiesta. Ogni sezione ha un segnaposto colorato "
+            "non eliminabile (pillola) sostituito al momento dell'invio. "
+            "La sezione contesto è omessa senza nota importata o con "
+            "il pulsante Importa disattivo; template/CSS solo con le opzioni import attive. "
+            "La richiesta è sempre inviata live (non cachata). "
+            "Usa il pulsante <b>i</b> accanto al titolo per la guida."
         ),
         "en": (
-            "Used when you send chat with “include note context” after 🧠 import. "
-            "Required: {{context}}, {{request}}. For templates and CSS use "
-            "{{#templates}}…{{/templates}} and {{#styling}}…{{/styling}} with "
-            "{{templates}} and {{styling}}. Use the <b>i</b> button beside the title for the guide."
+            "Used for every chat send. Five reorderable sections: note context, "
+            "format guide, templates, CSS, and request. Each section has a colored, "
+            "undeletable placeholder pill that is expanded when you send. "
+            "The context section is omitted with no imported note "
+            "or when the <b>Import toggle</b> is unchecked; templates/CSS only when those import "
+            "options are enabled. The request section is always sent live (never cached). "
+            "Use the <b>i</b> button beside the title for the guide."
         ),
     },
     "settings.prompt_card_templates_format": {
-        "it": "Guida formato template e CSS (chat con import template/stile)",
-        "en": "Template & CSS format guide (chat with template/style import)",
+        "it": "Guida formato template carte (chat)",
+        "en": "Card templates format guide (chat)",
     },
     "settings.prompt_card_templates_format.hint": {
         "it": (
@@ -296,31 +661,57 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
     },
     "settings.system_instruction": {
-        "it": "Istruzioni di sistema globali (alta priorità per impostazione predefinita — statiche):",
-        "en": "Global system instructions (high priority by default — static):",
+        "it": "Istruzioni di sistema",
+        "en": "System instructions",
+    },
+    "settings.system_instruction.subtitle": {
+        "it": "Alta priorità per impostazione predefinita — testo statico condiviso tra ottimizzazione e chat.",
+        "en": "High priority by default — static text shared by optimize and chat.",
     },
     "settings.system_instruction_shared": {
         "it": "Usa le stesse istruzioni di sistema per ottimizzazione e chat",
         "en": "Use the same system instructions for optimize and chat",
     },
     "settings.system_instruction_optimize": {
-        "it": "Istruzioni di sistema per l'ottimizzazione (alta priorità per impostazione predefinita — statiche):",
-        "en": "System instructions for optimize (high priority by default — static):",
+        "it": "Istruzioni di sistema (ottimizzazione)",
+        "en": "System instructions (optimize)",
+    },
+    "settings.system_instruction_optimize.subtitle": {
+        "it": "Ottimizzazione campo (Ctrl+Shift+G). Alta priorità — testo statico.",
+        "en": "Field optimize (Ctrl+Shift+G). High priority — static text.",
     },
     "settings.system_instruction_chat": {
-        "it": "Istruzioni di sistema per la chat (alta priorità per impostazione predefinita — statiche):",
-        "en": "System instructions for chat (high priority by default — static):",
+        "it": "Istruzioni di sistema (chat)",
+        "en": "System instructions (chat)",
+    },
+    "settings.system_instruction_chat.subtitle": {
+        "it": "Alta priorità per impostazione predefinita — testo statico.",
+        "en": "High priority by default — static text.",
+    },
+    "settings.restore_label.system_instruction": {
+        "it": "Istruzioni di sistema (campo condiviso)",
+        "en": "System instructions (shared text field)",
+    },
+    "settings.restore_label.system_instruction_optimize": {
+        "it": "Istruzioni di sistema (solo ottimizzazione)",
+        "en": "System instructions (optimize only)",
+    },
+    "settings.restore_label.system_instruction_chat": {
+        "it": "Istruzioni di sistema (solo chat)",
+        "en": "System instructions (chat only)",
     },
     "settings.dynamic_instructions": {
-        "it": "Direttive dinamiche apprese (bassa priorità per impostazione predefinita — aggiornabili via chat):",
-        "en": "Learned dynamic directives (low priority by default — updatable via chat):",
+        "it": "Regole dinamiche",
+        "en": "Dynamic rules",
     },
     "settings.dynamic_instructions.hint": {
         "it": (
+            "Regole apprese via chat quando chiedi a Gemini di ricordarle. "
             "Priorità inferiore alle istruzioni statiche per impostazione predefinita. "
             "Per cambiarla, modifica il prefisso regole dinamiche in Avanzate."
         ),
         "en": (
+            "Rules learned via chat when you ask Gemini to remember them. "
             "Lower priority than static instructions by default. "
             "To change priority, edit the dynamic rules prefix under Advanced."
         ),
@@ -439,6 +830,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Avviso: istruzioni di sistema predefinite non personalizzate",
         "en": "Default system instructions not customized warning",
     },
+    "warnings.prompt_cache_created_optimize": {
+        "it": "Avviso: cache prompt creata (ottimizzazione)",
+        "en": "Prompt cache created notice (optimize)",
+    },
     "settings.info": {
         "it": "Guida impostazioni",
         "en": "Settings guide",
@@ -459,6 +854,139 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Impostazioni chat applicabili subito…",
         "en": "Which chat settings apply immediately…",
     },
+    "settings.help.chat_toolbar_icons.link": {
+        "it": "Icone della barra chat…",
+        "en": "Chat toolbar icons…",
+    },
+    "settings.help.chat_toolbar_icons.title": {
+        "it": "Icone della barra chat",
+        "en": "Chat toolbar icons",
+    },
+    "settings.help.chat_toolbar_icons": {
+        "it": (
+            "La barra in alto nella chat usa icone compatte; passa il mouse per i suggerimenti.<br><br>"
+            "<b>Import toggle</b> — Pulsante: include o esclude la nota importata nel prossimo messaggio "
+            "(icona cervello = inclusa, icona cervello barrato = esclusa).<br>"
+            "<b>Edit menu</b> — Menu matita: modifica nota, wrapper contesto o template (solo sessione).<br>"
+            "<b>Preview</b> — Icona occhio: apre l'anteprima della nota importata in una finestra separata.<br>"
+            "<b>Inspect</b> — Icona lente: anteprima del prompt completo adesso, senza inviare.<br>"
+            "<b>Stop / precedenza</b> — Pulsante commutabile: segnale di stop = revisione pre-invio "
+            "prima di Gemini; segnale di strada con precedenza = invio diretto.<br>"
+            "<b>+ Nuova conversazione</b> — Azzera la chat e applica le impostazioni che richiedono "
+            "una nuova sessione."
+        ),
+        "en": (
+            "The chat toolbar uses compact icons; hover for tooltips.<br><br>"
+            "<b>Import toggle</b> — Button: include or exclude the imported note from the next message "
+            "(brain icon = included, barred brain icon = excluded).<br>"
+            "<b>Edit menu</b> — Pencil icon menu: edit note, context wrapper, or templates (session only).<br>"
+            "<b>Preview</b> — Eye icon: open the imported note preview in a separate window.<br>"
+            "<b>Inspect</b> — Lens icon: read-only preview of the full prompt now, without sending.<br>"
+            "<b>Stop / priority</b> — Toggle: stop sign = pre-send review before Gemini; "
+            "priority road sign = send directly.<br>"
+            "<b>+ New conversation</b> — Clear the chat and apply settings that require a new session."
+        ),
+    },
+    "settings.help.track_api_costs.link": {
+        "it": "Monitorare i costi API…",
+        "en": "Track API costs…",
+    },
+    "settings.help.track_api_costs.title": {
+        "it": "Monitorare i costi API",
+        "en": "Track API costs",
+    },
+    "settings.help.track_api_costs": {
+        "it": (
+            "L'add-on <b>non mostra</b> quanto hai speso in dollari: invia richieste a Gemini "
+            "con la tua chiave, ma la fatturazione è gestita da Google.<br><br>"
+            "<b>Dove guardare</b><br>"
+            "• <a href=\"{billing_url}\">Google AI Studio → Fatturazione</a> — saldo prepagato, "
+            "costi giornalieri per progetto/modello, limiti di spesa.<br>"
+            "• <a href=\"{usage_url}\">Google AI Studio → Utilizzo</a> — richieste al minuto/giorno, "
+            "token, avvicinamento ai rate limit.<br>"
+            "• <a href=\"{docs_url}\">Documentazione fatturazione Gemini</a> — prepagato vs postpagato, "
+            "capping, tempi di aggiornamento.<br><br>"
+            "<b>Piano gratuito vs a pagamento</b><br>"
+            "Senza fatturazione collegata resti sul piano gratuito (limiti di quota, nessun addebito). "
+            "Con fatturazione attiva paghi secondo le tariffe del modello (input, output, eventuale "
+            "cache esplicita).<br><br>"
+            "<b>Quanto è “in tempo reale”?</b><br>"
+            "Il saldo prepagato di solito si aggiorna in pochi minuti. I grafici dei costi possono "
+            "ritardare fino a ~24 ore. L'add-on non calcola importi in dollari.<br><br>"
+            "<b>Controlli utili</b><br>"
+            "Imposta limiti di spesa mensili per progetto in AI Studio (pagina Spend) e controlla "
+            "il saldo prima di sessioni lunghe con note grandi o cache prompt attiva."
+        ),
+        "en": (
+            "The add-on <b>does not show</b> how many dollars you spent: it sends requests to Gemini "
+            "with your key, but billing is handled by Google.<br><br>"
+            "<b>Where to look</b><br>"
+            "• <a href=\"{billing_url}\">Google AI Studio → Billing</a> — prepay balance, "
+            "daily cost by project/model, spend caps.<br>"
+            "• <a href=\"{usage_url}\">Google AI Studio → Usage</a> — requests per minute/day, "
+            "tokens, progress toward rate limits.<br>"
+            "• <a href=\"{docs_url}\">Gemini API billing documentation</a> — prepay vs postpay, "
+            "caps, and update delays.<br><br>"
+            "<b>Free vs paid</b><br>"
+            "Without billing linked you stay on the free tier (quota limits, no charges). "
+            "With billing enabled you pay per model rates (input, output, and explicit prompt cache "
+            "if enabled).<br><br>"
+            "<b>How “live” is it?</b><br>"
+            "Prepay credit balance usually updates within minutes. Cost charts may lag up to "
+            "~24 hours. The add-on does not calculate dollar amounts.<br><br>"
+            "<b>Useful controls</b><br>"
+            "Set monthly project spend caps in AI Studio (Spend page) and check your balance before "
+            "long sessions with large notes or prompt caching enabled."
+        ),
+    },
+    "settings.help.addon_payload_sizes.link": {
+        "it": "Dimensioni payload nell'add-on…",
+        "en": "Add-on payload sizes…",
+    },
+    "settings.help.addon_payload_sizes.title": {
+        "it": "Dimensioni payload nell'add-on",
+        "en": "Add-on payload sizes",
+    },
+    "settings.help.addon_payload_sizes": {
+        "it": (
+            "L'add-on <b>non mostra</b> token Gemini né importi in dollari. Dove serve, "
+            "usa il conteggio <b>esatto dei caratteri</b> (<code>len(testo)</code>).<br><br>"
+            "<b>Avviso payload chat grande</b> — somma caratteri di istruzioni di sistema, "
+            "cronologia e messaggio in uscita (contesto nota/template se attivi). "
+            "Non include la risposta generata.<br><br>"
+            "<b>Conferma ricreazione cache</b> — mostra caratteri del blocco cached e TTL; "
+            "per i costi vedi <a href=\"{billing_url}\">AI Studio → Fatturazione</a>.<br><br>"
+            "<b>Stato cache</b> — caratteri del testo cached al momento della creazione.<br><br>"
+            "<b>Gestisci cache</b> (Impostazioni avanzate) — elenca le cache remote "
+            "<code>anki-ai-*</code>. Vedi sotto <b>Tracciata</b> e <b>Orfana</b>.<br><br>"
+            "<b>Tracciata</b> — l'add-on ha salvato il nome di questa cache in locale come cache "
+            "corrente per chat o ottimizzazione.<br>"
+            "<b>Orfana</b> — ancora su Google ma non più tracciata qui (es. riavvio Anki prima "
+            "della persistenza); può costare fino a scadenza TTL. Usa «Elimina orfane» per pulire.<br><br>"
+            "<b>Soglia minima token cache</b> — controllo interno (~4 caratteri/token) "
+            "allineato al minimo Gemini; non è un prezzo né un conteggio mostrato altrove.<br><br>"
+            "Per il prompt completo prima dell'invio usa l'icona lente (<b>Ispeziona prompt</b>) in chat."
+        ),
+        "en": (
+            "The add-on does <b>not</b> show Gemini token counts or dollar amounts. Where helpful, "
+            "it uses the <b>exact character count</b> (<code>len(text)</code>).<br><br>"
+            "<b>Large chat payload warning</b> — sums characters in system instructions, "
+            "history, and outgoing message (note/templates when enabled). "
+            "Does not include the generated reply.<br><br>"
+            "<b>Cache recreate confirm</b> — shows cached block characters and TTL; "
+            "for costs see <a href=\"{billing_url}\">AI Studio → Billing</a>.<br><br>"
+            "<b>Cache status</b> — characters of cached text when the cache was created.<br><br>"
+            "<b>Manage caches</b> (Advanced settings) — lists remote <code>anki-ai-*</code> caches. "
+            "See <b>Tracked</b> and <b>Orphan</b> below.<br><br>"
+            "<b>Tracked</b> — the add-on saved this cache name locally as the current cache "
+            "for chat or optimize.<br>"
+            "<b>Orphan</b> — still on Google but no longer tracked here (e.g. Anki restart before persistence); "
+            "may cost until TTL expires. Use <b>Delete orphans</b> to clean up.<br><br>"
+            "<b>Minimum tokens to cache</b> — internal check (~4 chars/token) aligned with "
+            "Gemini's minimum; not a price and not shown elsewhere.<br><br>"
+            "For the full prompt before sending, use the lens icon (<b>Inspect prompt</b>) in chat."
+        ),
+    },
     "settings.help.chat_live_settings.title": {
         "it": "Impostazioni chat applicabili subito",
         "en": "Which chat settings apply immediately",
@@ -471,8 +999,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": (
             "L'add-on invia a Gemini un <b>prompt di sistema</b> e uno o più <b>messaggi utente</b>. "
             "Quasi tutto il testo è modificabile nelle Impostazioni (e cinque blocchi in <b>Avanzate…</b>). "
-            "I pezzi vengono concatenati nell'ordine sotto — non vengono aggiunti spazi o a capo automatici "
-            "tra un blocco e l'altro, salvo dove indicato.<br><br>"
+            "I pezzi vengono concatenati nell'ordine sotto. L'add-on inserisce a capo tra i blocchi "
+            "principali (di solito una riga vuota); non serve aggiungere a capo iniziali o finali "
+            "nei testi personalizzati salvo per la formattazione interna.<br><br>"
             "<b>Ottimizzazione campo (Ctrl+Shift+G)</b><br>"
             "<b>Prompt di sistema</b> (in ordine):<br>"
             "1. <b>Istruzioni di sistema</b> — Impostazioni (condivise o solo ottimizzazione)<br>"
@@ -486,42 +1015,42 @@ _STRINGS: dict[str, dict[str, str]] = {
             "<b>Prompt di sistema</b> (in ordine):<br>"
             "1. <b>Istruzioni di sistema</b> — Impostazioni (condivise o solo chat)<br>"
             "2. Se le regole dinamiche non sono vuote: prefisso + testo (come sopra)<br>"
-            "3. <b>Istruzioni aggiuntive di sistema (chat)</b> — Avanzate "
+            "3. <b>Istruzioni chat extra</b> — Avanzate "
             "(formattazione risposte, blocchi code, tag &lt;UPDATE_DYNAMIC_RULES&gt;, ecc.)<br><br>"
             "<b>Messaggi utente</b> (con storico fino a «Storico chat (turni)»):<br>"
             "• Di solito: solo ciò che scrivi nella chat<br>"
-            "• Con «Includi contesto nota» dopo import 🧠: "
-            "<b>wrapper contesto nota</b> (Avanzate, o «Modifica wrapper» nella chat). "
-            "Obbligatori: <code>{{context}}</code>, <code>{{request}}</code>. "
-            "Template e CSS opzionali con blocchi <code>{{#templates}}…{{/templates}}</code> "
-            "e <code>{{#styling}}…{{/styling}}</code> (sintassi Anki), più "
-            "<code>{{templates}}</code> e <code>{{styling}}</code>. "
-            "I campi in <code>{{context}}</code> provengono dall'anteprima modificabile sopra la chat; "
+            "• Con il pulsante Importa in chat (dopo import con l'icona cervello dall'editor): "
+            "il messaggio è avvolto dal <b>wrapper contesto nota (chat)</b> "
+            "(Impostazioni → Avanzate, o <b>Modifica wrapper contesto</b> dal menu <b>Modifica</b>). "
+            "Cinque sezioni riordinabili con segnaposto colorati non eliminabili "
+            "(contesto, guida formato, template, CSS, richiesta). "
+            "Obbligatori: segnaposto <code>context</code> e <code>request</code>. "
+            "Le sezioni contesto, template e CSS vengono omesse automaticamente quando la nota non è importata, "
+            "il pulsante Importa è disattivo o le relative opzioni import non sono attive.<br>"
+            "I campi in <code>{{context}}</code> provengono dalla nota importata "
+            "(modificabile con <b>Modifica nota</b>); "
             "ogni campo è formattato come "
             "<code>Campo [Nome]:</code> + HTML grezzo.<br>"
-            "Se il wrapper personalizzato omette <code>{{context}}</code> o <code>{{request}}</code>, "
-            "o ha blocchi condizionali non bilanciati, si usa il modello predefinito.<br>"
+            "Se il wrapper personalizzato omette i segnaposto obbligatori, si usa il modello predefinito.<br>"
             "Se sono attivi import template e/o CSS e compaiono nel messaggio, subito prima delle "
             "sezioni template/CSS viene concatenata la "
-            "<b>guida formato template e CSS</b> (Avanzate).<br><br>"
+            "<b>guida formato template carte (chat)</b> (Avanzate). Puoi metterla in cache "
+            "separatamente con la voce omonima nei segmenti cache (consigliato se cache anche template e CSS).<br><br>"
             "<b>Non inviato a Gemini</b>: messaggio di benvenuto, "
             "nome del campo nel messaggio normale.<br><br>"
-            "<b>Messaggio import 🧠</b>: precompila la casella di input; i campi nota compaiono "
-            "nell'anteprima sopra la chat (modificabile). Il messaggio viene inviato come messaggio "
-            "utente normale (eventualmente avvolto dal wrapper contesto).<br><br>"
-            "<b>Prefisso regole dinamiche</b>: il predefinito inizia con due a capo (<code>\\n\\n</code>) "
-            "e termina con uno. In un prefisso personalizzato, includi tu stesso gli a capo "
-            "prima/dopo il testo, altrimenti il blocco si attacca a quello precedente. "
-            "Per impostazione predefinita le istruzioni statiche hanno priorità più alta; "
-            "modifica il <b>prefisso regole dinamiche</b> (Avanzate) per dichiarare esplicitamente "
-            "una priorità diversa.<br><br>"
+            "<b>Messaggio import nota</b>: dopo l'icona cervello nell'editor, precompila la casella di input; "
+            "i campi compaiono nella finestra di anteprima nota (sola lettura; "
+            "modifica con <b>Modifica nota</b> dal menu <b>Modifica</b>). "
+            "Con il pulsante Importa attivo, il messaggio viene inviato come messaggio "
+            "utente normale (eventualmente avvolto dal wrapper contesto nota (chat)).<br><br>"
             "Vedi anche <b>Impostazioni chat applicabili subito</b> nella guida impostazioni."
         ),
         "en": (
             "The add-on sends Gemini a <b>system prompt</b> and one or more <b>user messages</b>. "
             "Almost all text is editable in Settings (plus five blocks under <b>Advanced…</b>). "
-            "Pieces are concatenated in the order below — the add-on does not insert extra spaces "
-            "or line breaks between blocks unless noted.<br><br>"
+            "Pieces are concatenated in the order below. The add-on inserts line breaks between "
+            "major blocks (usually one blank line); you do not need leading or trailing line breaks "
+            "in custom text unless you want them inside a block.<br><br>"
             "<b>Field optimize (Ctrl+Shift+G)</b><br>"
             "<b>System prompt</b> (in order):<br>"
             "1. <b>System instructions</b> — Settings (shared or optimize-only)<br>"
@@ -535,35 +1064,35 @@ _STRINGS: dict[str, dict[str, str]] = {
             "<b>System prompt</b> (in order):<br>"
             "1. <b>System instructions</b> — Settings (shared or chat-only)<br>"
             "2. If dynamic rules are not empty: prefix + text (as above)<br>"
-            "3. <b>Extra system instructions (chat)</b> — Advanced "
+            "3. <b>Extra chat instructions</b> — Advanced "
             "(reply formatting, code blocks, &lt;UPDATE_DYNAMIC_RULES&gt; tags, etc.)<br><br>"
             "<b>User messages</b> (with history up to “Chat history (turns)”):<br>"
             "• Usually: only what you type in chat<br>"
-            "• With “include note context” after 🧠 import: "
-            "<b>note context wrapper</b> (Advanced, or <b>Edit wrapper</b> in chat). "
-            "Required: <code>{{context}}</code>, <code>{{request}}</code>. "
-            "Optional template and CSS sections use "
-            "<code>{{#templates}}…{{/templates}}</code> and "
-            "<code>{{#styling}}…{{/styling}}</code> (Anki-like syntax), plus "
-            "<code>{{templates}}</code> and <code>{{styling}}</code>. "
-            "Fields in <code>{{context}}</code> come from the editable preview above the chat; "
+            "• With the <b>Import toggle</b> in chat (after brain icon import from the editor): "
+            "the message is wrapped by the <b>Note context wrapper (chat)</b> "
+            "(Settings → Advanced, or <b>Edit context wrapper</b> from the <b>Edit menu</b>). "
+            "Five reorderable sections with colored, undeletable placeholder pills "
+            "(context, format guide, templates, styling, request). "
+            "Required: <code>context</code> and <code>request</code> placeholders. "
+            "Context, template, and CSS sections are omitted automatically when no note is imported, "
+            "the <b>Import toggle</b> is unchecked, or the matching import options are disabled.<br>"
+            "Fields in <code>{{context}}</code> come from the imported note "
+            "(editable via <b>Edit note</b>); "
             "each field is formatted as "
             "<code>Field [Name]:</code> + raw HTML.<br>"
-            "If a custom wrapper omits <code>{{context}}</code> or <code>{{request}}</code>, "
-            "or has unbalanced conditional blocks, the default template is used.<br>"
+            "If a custom wrapper omits required placeholders, the default template is used.<br>"
             "When template and/or CSS import is enabled and those sections appear in the message, "
-            "the <b>template &amp; CSS format guide</b> (Advanced) is chained immediately before "
-            "the template and styling sections.<br><br>"
+            "the <b>Card templates format guide (chat)</b> (Advanced) is chained immediately before "
+            "the template and styling sections. You can cache it separately under "
+            "<b>Card templates format guide (chat)</b> in cache segments (recommended when templates "
+            "and CSS are cached too).<br><br>"
             "<b>Not sent to Gemini</b>: welcome message, "
             "field name in a normal message.<br><br>"
-            "<b>🧠 import message</b>: pre-fills the input box; note fields appear in the "
-            "editable preview above the chat. The message is sent as a normal user message "
-            "(optionally wrapped by the note context wrapper).<br><br>"
-            "<b>Dynamic rules prefix</b>: the default starts with two line breaks (<code>\\n\\n</code>) "
-            "and ends with one. In a custom prefix, include line breaks before/after your text yourself, "
-            "or the block will run into the text above or below. "
-            "Static instructions are higher priority by default; edit the <b>dynamic rules prefix</b> "
-            "(Advanced) to state a different priority explicitly.<br><br>"
+            "<b>Note import message</b>: after you click the brain icon in the editor, pre-fills the input box; "
+            "note fields appear in the separate note preview window (read-only; "
+            "edit via <b>Edit note</b> from the <b>Edit menu</b>). "
+            "When the <b>Import toggle</b> is on, the message is sent as a normal user message "
+            "(optionally wrapped by the note context wrapper (chat)).<br><br>"
             "See also <b>Which chat settings apply immediately?</b> in the settings guide."
         ),
     },
@@ -592,15 +1121,19 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
     },
     "settings.help.api_key": {
-        "it": (
-            "Chiave API di Google AI Studio usata per chiamare Gemini. "
-            "Viene salvata localmente in Anki e non viene mai inviata altrove. "
-            "Puoi lasciare il campo vuoto al salvataggio per mantenere la chiave già memorizzata."
-        ),
         "en": (
             "Your Google AI Studio API key used to call Gemini. "
             "It is stored locally in Anki and is not sent anywhere else. "
-            "When saving, leave the field empty to keep the key already stored."
+            "When saving, leave the field empty to keep the key already stored. "
+            "Usage is billed to your Google account — see <b>Track API costs</b> in this guide "
+            "or the link under the API key field."
+        ),
+        "it": (
+            "Chiave API di Google AI Studio usata per chiamare Gemini. "
+            "Viene salvata localmente in Anki e non viene mai inviata altrove. "
+            "Puoi lasciare il campo vuoto al salvataggio per mantenere la chiave già memorizzata. "
+            "L'utilizzo è addebitato sul tuo account Google — vedi <b>Monitorare i costi API</b> "
+            "in questa guida o il link sotto il campo chiave."
         ),
     },
     "settings.help.model_optimize": {
@@ -619,12 +1152,12 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
     "settings.help.model_chat": {
         "it": (
-            "Modello Gemini usato nella <b>chat</b> (Ctrl+Alt+C) e nell'analisi note 🧠. "
+            "Modello Gemini usato nella <b>chat</b> (Ctrl+Alt+C) e nell'analisi note (icona cervello). "
             "Può essere più capace del modello di ottimizzazione, perché spesso serve "
             "ragionare e spiegare, non solo riformattare."
         ),
         "en": (
-            "Gemini model used in <b>chat</b> (Ctrl+Alt+C) and note analysis 🧠. "
+            "Gemini model used in <b>chat</b> (Ctrl+Alt+C) and note analysis (brain icon). "
             "It can be more capable than the optimize model, since chat often requires "
             "reasoning and explanations, not just reformatting."
         ),
@@ -716,15 +1249,15 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
     },
     "settings.help.prompt_chat_addon": {
-        "it": (
-            "Blocco aggiuntivo appeso alle istruzioni di sistema durante la chat "
-            "(formattazione risposte, blocchi code, regole dinamiche). "
-            "Modificabile in <b>Avanzate…</b>."
-        ),
         "en": (
-            "Extra block appended to chat system instructions "
-            "(reply formatting, code blocks, dynamic rules). "
+            "<b>Extra chat instructions</b> — chat-only rules appended to system instructions "
+            "(reply formatting, code blocks, dynamic rules protocol). "
             "Editable under <b>Advanced…</b>."
+        ),
+        "it": (
+            "<b>Istruzioni chat extra</b> — regole solo chat appese alle istruzioni di sistema "
+            "(formattazione risposte, blocchi code, protocollo regole dinamiche). "
+            "Modificabile in <b>Avanzate…</b>."
         ),
     },
     "settings.help.prompt_dynamic_rules_prefix": {
@@ -732,107 +1265,125 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Intestazione inserita prima del testo delle regole dinamiche nel prompt di sistema "
             "(solo se le regole dinamiche non sono vuote). Modificabile in <b>Avanzate…</b>. "
             "Per impostazione predefinita indica priorità inferiore rispetto alle istruzioni statiche; "
-            "modifica il testo per dichiarare esplicitamente una priorità diversa. "
-            "Includi tu gli a capo nel testo personalizzato; vedi <b>Come vengono costruiti i prompt</b>."
+            "modifica il testo per dichiarare esplicitamente una priorità diversa."
         ),
         "en": (
             "Header inserted before your dynamic rules text in the system prompt "
             "(only when dynamic rules are not empty). Editable under <b>Advanced…</b>. "
             "By default it states lower priority than static instructions; edit the text to state "
-            "a different priority explicitly. "
-            "Include line breaks in custom text yourself; see <b>How prompts are built</b>."
+            "a different priority explicitly."
         ),
     },
     "settings.help.prompt_chat_context": {
         "it": (
-            "Modello del messaggio utente quando invii in chat con «Includi contesto nota» dopo import 🧠.<br><br>"
-            "<b>Obbligatori</b>: <code>{{context}}</code> (campi nota), <code>{{request}}</code> (tuo messaggio). "
-            "Se mancano o i blocchi condizionali non sono bilanciati, si usa il wrapper predefinito.<br><br>"
-            "<b>Template e CSS (opzionali, sintassi Anki)</b>:<br>"
-            "<code>{{#templates}}…{{/templates}}</code> — testo mostrato solo con import template attivo "
-            "e contenuto template non vuoto all'invio.<br>"
-            "<code>{{#styling}}…{{/styling}}</code> — analogo per il CSS del tipo di nota.<br>"
-            "<code>{{templates}}</code> e <code>{{styling}}</code> — dove inserire il contenuto; "
-            "possono stare in uno o più blocchi condizionali (non devono esserci in ogni blocco).<br><br>"
-            "Esempio:<br>"
-            "<code>{{#templates}}</code><br>"
-            "Seguono i template delle carte:<br>"
-            "<code>{{templates}}</code><br>"
-            "<code>{{/templates}}</code><br><br>"
-            "In chat, «Modifica wrapper» mostra il testo <b>espanso</b> per le opzioni di import correnti "
-            "(i blocchi disattivati spariscono). Modifica qui in Avanzate per i blocchi condizionali."
+            "Modello del messaggio utente per ogni invio in chat.<br><br>"
+            "Cinque sezioni riordinabili con frecce su/giù. Ogni sezione ha un segnaposto colorato "
+            "non eliminabile (pillola) che viene sostituito al momento dell'invio:<br>"
+            "<b>Contesto nota</b> — segnaposto <code>context</code>; omessa senza nota importata "
+            "o con il pulsante Importa disattivo.<br>"
+            "<b>Guida formato</b> — testo che spiega template/CSS Anki (stesso contenuto di "
+            "«Guida formato template carte»); mostrata solo quando template o CSS sono inclusi.<br>"
+            "<b>Template</b> — segnaposto <code>templates</code>; solo con import template attivo.<br>"
+            "<b>CSS</b> — segnaposto <code>styling</code>; solo con import CSS attivo.<br>"
+            "<b>Richiesta</b> — segnaposto <code>request</code>; sempre inviata live, mai in cache.<br><br>"
+            "L'ordine delle sezioni nel messaggio finale segue l'ordine qui impostato. "
+            "Per modifiche solo alla sessione corrente usa <b>Modifica wrapper contesto</b> "
+            "nel menu <b>Modifica</b> della chat."
         ),
         "en": (
-            "User message template when you send chat with “include note context” after 🧠 import.<br><br>"
-            "<b>Required</b>: <code>{{context}}</code> (note fields), <code>{{request}}</code> (your message). "
-            "If either is missing or conditional blocks are unbalanced, the default wrapper is used.<br><br>"
-            "<b>Templates and CSS (optional, Anki-like syntax)</b>:<br>"
-            "<code>{{#templates}}…{{/templates}}</code> — shown only when template import is enabled "
-            "and template content is non-empty at send time.<br>"
-            "<code>{{#styling}}…{{/styling}}</code> — same for note type CSS.<br>"
-            "<code>{{templates}}</code> and <code>{{styling}}</code> — where content is inserted; "
-            "you may use multiple conditional blocks and not every block needs "
-            "<code>{{templates}}</code> or <code>{{styling}}</code>.<br><br>"
-            "Example:<br>"
-            "<code>{{#templates}}</code><br>"
-            "Following are the card templates:<br>"
-            "<code>{{templates}}</code><br>"
-            "<code>{{/templates}}</code><br><br>"
-            "In chat, <b>Edit wrapper</b> shows the <b>expanded</b> text for current import options "
-            "(disabled blocks are removed). Edit here in Advanced for conditional blocks."
+            "User message template for every chat send.<br><br>"
+            "Five reorderable sections (up/down arrows). Each section has a colored, "
+            "undeletable placeholder pill that is expanded when you send:<br>"
+            "<b>Note context</b> — <code>context</code> placeholder; omitted with no imported note "
+            "or when the <b>Import toggle</b> is unchecked.<br>"
+            "<b>Format guide</b> — explains Anki template/CSS syntax (same text as "
+            "«Card templates format guide»); shown only when templates or CSS are included.<br>"
+            "<b>Templates</b> — <code>templates</code> placeholder; only when template import is enabled.<br>"
+            "<b>Styling</b> — <code>styling</code> placeholder; only when CSS import is enabled.<br>"
+            "<b>Request</b> — <code>request</code> placeholder; always sent live, never cached.<br><br>"
+            "The final message section order matches the order set here. "
+            "For session-only edits use <b>Edit context wrapper</b> from the chat <b>Edit menu</b>."
         ),
+    },
+    "settings.wrapper_section.context": {
+        "it": "Contesto nota",
+        "en": "Note context",
+    },
+    "settings.wrapper_section.format_guide": {
+        "it": "Guida formato template/CSS",
+        "en": "Templates/CSS format guide",
+    },
+    "settings.wrapper_section.templates": {
+        "it": "Template carte",
+        "en": "Card templates",
+    },
+    "settings.wrapper_section.styling": {
+        "it": "CSS tipo di nota",
+        "en": "Note type CSS",
+    },
+    "settings.wrapper_section.request": {
+        "it": "Richiesta studente",
+        "en": "Student request",
+    },
+    "settings.wrapper_section.move_up": {
+        "it": "Sposta su",
+        "en": "Move up",
+    },
+    "settings.wrapper_section.move_down": {
+        "it": "Sposta giù",
+        "en": "Move down",
     },
     "settings.wrapper_import_warning.templates": {
         "it": (
-            "L'import template è attivo ma il wrapper non contiene {{templates}}. "
-            "I template importati potrebbero non comparire nel messaggio."
+            "L'import template è attivo ma la sezione template non contiene il segnaposto "
+            "<code>templates</code>. I template importati potrebbero non comparire nel messaggio."
         ),
         "en": (
-            "Template import is enabled but the wrapper does not contain {{templates}}. "
-            "Imported templates may be omitted from the message."
+            "Template import is enabled but the templates section is missing the "
+            "<code>templates</code> placeholder. Imported templates may be omitted from the message."
         ),
     },
     "settings.wrapper_import_warning.styling": {
         "it": (
-            "L'import CSS è attivo ma il wrapper non contiene {{styling}}. "
-            "Lo stile importato potrebbe non comparire nel messaggio."
+            "L'import CSS è attivo ma la sezione CSS non contiene il segnaposto "
+            "<code>styling</code>. Lo stile importato potrebbe non comparire nel messaggio."
         ),
         "en": (
-            "CSS import is enabled but the wrapper does not contain {{styling}}. "
-            "Imported styling may be omitted from the message."
+            "CSS import is enabled but the styling section is missing the "
+            "<code>styling</code> placeholder. Imported styling may be omitted from the message."
         ),
     },
     "settings.wrapper_import_warning.required": {
         "it": (
-            "Il wrapper deve includere {{context}} e {{request}}. "
+            "La sezione richiesta deve includere il segnaposto <code>request</code>. "
             "Ripristino predefiniti."
         ),
         "en": (
-            "The wrapper must include {{context}} and {{request}}. "
+            "The request section must include the <code>request</code> placeholder. "
             "Reverting to defaults."
         ),
     },
     "chat.wrapper_import_warning.required": {
         "it": (
-            "Il wrapper deve includere {{context}} e {{request}}. "
+            "La sezione richiesta deve includere {{request}}. "
             "Ripristino del wrapper delle impostazioni."
         ),
         "en": (
-            "The wrapper must include {{context}} and {{request}}. "
+            "The request section must include {{request}}. "
             "Reverting to settings wrapper."
         ),
     },
     "settings.help.prompt_card_templates_format": {
         "it": (
             "Testo concatenato <b>prima delle sezioni template carte e CSS del tipo di nota</b> "
-            "quando compaiono nel messaggio (import 🧠 con le relative opzioni "
+            "quando compaiono nel messaggio (import con icona cervello e le relative opzioni "
             "attive in Impostazioni). Spiega a Gemini come interpretare le sezioni "
             "<code>[TEMPLATE DELLE CARTE]</code> e <code>[STILE DEL TIPO DI NOTA]</code> "
             "che seguono. Modificabile in <b>Avanzate…</b>. Se vuoto, non viene inviato nulla."
         ),
         "en": (
             "Text chained <b>before the card template and note type CSS sections</b> when they "
-            "appear in the message (🧠 import with the corresponding Settings options enabled). "
+            "appear in the message (brain icon import with the corresponding Settings options enabled). "
             "Explains to Gemini how to read the "
             "<code>[CARD TEMPLATES]</code> and <code>[NOTE TYPE STYLING]</code> sections that follow. "
             "Editable under <b>Advanced…</b>. If empty, nothing extra is sent."
@@ -841,14 +1392,14 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.help.mathjax_preview_preamble": {
         "it": (
             "HTML opzionale per l'<b>anteprima nota</b> nella chat (finestra separata). "
-            "All'import 🧠, se i template fronte/retro del tipo di nota contengono un preambolo "
+            "All'import con icona cervello, se i template fronte/retro del tipo di nota contengono un preambolo "
             "MathJax (es. un <code>div</code> nascosto con <code>\\newcommand</code>), "
             "quello ha priorità. Altrimenti viene usato questo testo. "
             "Non influisce sui messaggi inviati a Gemini."
         ),
         "en": (
             "Optional HTML for the chat <b>note preview window</b>. "
-            "On 🧠 import, if the note type's front/back templates contain a MathJax preamble "
+            "On brain icon import, if the note type's front/back templates contain a MathJax preamble "
             "(e.g. a hidden <code>div</code> with <code>\\newcommand</code>), that takes priority. "
             "Otherwise this text is used. Does not affect messages sent to Gemini."
         ),
@@ -887,32 +1438,32 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
     "settings.help.brain_import_message": {
         "it": (
-            "Testo inserito automaticamente nella casella di input quando importi una nota con il bottone 🧠. "
-            "I campi nota compaiono nell'anteprima modificabile sopra la chat. "
-            "Puoi personalizzare il messaggio per chiedere sempre la stessa analisi (es. atomicità, "
-            "semplificazione, ecc.). Lascia il testo predefinito per usare il messaggio "
-            "standard nella lingua scelta."
+            "Quando clicchi l'icona cervello nell'editor, l'add-on importa tutti i campi della nota in chat e inserisce "
+            "questo testo nella casella di input. I campi compaiono nella finestra di anteprima nota "
+            "(icona occhio); modificali con <b>Modifica nota</b> dal menu <b>Modifica</b>. "
+            "Puoi personalizzarlo per chiedere sempre la stessa analisi (es. atomicità, semplificazione). "
+            "Lascia il predefinito per il messaggio standard nella lingua scelta."
         ),
         "en": (
-            "Text automatically inserted in the input box when you import a note with the 🧠 button. "
-            "Note fields appear in the editable preview above the chat. "
-            "Customize the message to always ask the same kind of analysis (e.g. atomicity, "
-            "simplification). Keep the default text to use the standard message "
-            "in your selected language."
+            "When you click the brain icon in the editor, the add-on imports all note fields into chat and places "
+            "this text in the input box. Fields appear in the separate note preview window "
+            "(eye icon); edit them via <b>Edit note</b> from the <b>Edit menu</b>. "
+            "Customize it to always ask the same kind of analysis (e.g. atomicity, simplification). "
+            "Keep the default for the standard message in your selected language."
         ),
     },
     "settings.help.brain_import_templates": {
         "it": (
-            "Se attivo, quando invii in chat con «Includi contesto nota», il messaggio include "
+            "Se attivo, quando invii in chat con il pulsante Importa attivo, il messaggio include "
             "tutti i template delle carte del tipo di nota (fronte e retro). "
-            "Puoi modificarli con «Modifica template» nella chat. Disattivato per impostazione predefinita "
-            "per limitare la dimensione del messaggio inviato a Gemini."
+            "Puoi modificarli con <b>Modifica template</b> dal menu <b>Modifica</b> nella chat. "
+            "Disattivato per impostazione predefinita per limitare la dimensione del messaggio inviato a Gemini."
         ),
         "en": (
-            "When enabled, sending chat with “include note context” adds all card templates "
+            "When enabled, sending chat with the <b>Import toggle</b> on adds all card templates "
             "from the note type (front and back) to the message. "
-            "You can edit them via <b>Edit templates</b> in chat. Off by default to keep "
-            "Gemini message size smaller."
+            "You can edit them via <b>Edit templates</b> from the <b>Edit menu</b> in chat. "
+            "Off by default to keep Gemini message size smaller."
         ),
     },
     "settings.help.brain_import_css": {
@@ -925,30 +1476,28 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Off by default because it is often long and rarely needed."
         ),
     },
-    "settings.help.chat_token_warning_threshold": {
+    "settings.help.chat_payload_warning_chars": {
         "it": (
-            "Prima di inviare in chat, stima i token di input totali inviati a Gemini "
+            "Prima di inviare in chat, conta i <b>caratteri</b> totali del payload inviato a Gemini "
             "(istruzioni di sistema, cronologia e messaggio in uscita). "
-            "Se superi questa soglia, compare un avviso (non disattivabile) con possibilità di annullare l'invio. "
-            "La stima usa ~4 caratteri per token ed è approssimativa (di solito leggermente al di sotto del reale). "
-            "Si applica subito anche con una chat già aperta."
+            "Se superi questa soglia, compare un avviso con possibilità di annullare l'invio. "
+            "Non è un conteggio token né un costo. Si applica subito anche con chat aperta."
         ),
         "en": (
-            "Before sending in chat, estimates total input tokens sent to Gemini "
+            "Before sending in chat, counts total <b>characters</b> in the payload sent to Gemini "
             "(system instructions, history, and outgoing message). "
-            "Above this threshold, a non-dismissable warning appears and you can cancel the send. "
-            "The estimate uses ~4 characters per token and is approximate (often slightly below actual). "
-            "Applies immediately even with an open chat."
+            "Above this threshold, a warning appears and you can cancel the send. "
+            "This is not a token count or a cost. Applies immediately even with an open chat."
         ),
     },
     "settings.help.chat_prompt_inspection": {
         "it": (
-            "Mostra un pulsante 🔍 nella barra della chat che apre una finestra di sola lettura con "
+            "Mostra l'icona lente nella barra della chat che apre una finestra di sola lettura con "
             "l'intero prompt che verrebbe inviato (sistema, cronologia, prossimo messaggio). "
             "Include un pulsante Aggiorna. Si attiva/disattiva subito anche con chat aperta."
         ),
         "en": (
-            "Shows a 🔍 button in the chat toolbar that opens a read-only window with the full prompt "
+            "Shows the lens icon in the chat toolbar that opens a read-only window with the full prompt "
             "that would be sent (system, history, next message). Includes a Refresh button. "
             "Toggles on/off immediately even with an open chat."
         ),
@@ -967,14 +1516,14 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.help.chat_live_settings": {
         "it": (
             "<b>Impostazioni chat applicabili subito</b> (chat aperta): lingua interfaccia, "
-            "soglia avviso token, ispezione prompt, timeout, max retry.<br>"
+            "soglia avviso caratteri payload, ispezione prompt, timeout, max retry.<br>"
             "<b>Richiedono nuova conversazione</b> (banner in chat): istruzioni di sistema, "
             "regole dinamiche, modello/temperatura/thinking chat, streaming, storico turni, "
             "prompt avanzati chat, import template/CSS. Usa «Nuova conversazione» o chiudi e riapri la chat."
         ),
         "en": (
-            "<b>Settings applied immediately</b> (open chat): interface language, token warning threshold, "
-            "prompt inspection, timeout, max retries.<br>"
+            "<b>Settings applied immediately</b> (open chat): interface language, "
+            "chat payload character warning threshold, prompt inspection, timeout, max retries.<br>"
             "<b>Require a new conversation</b> (banner in chat): system instructions, dynamic rules, "
             "chat model/temperature/thinking, streaming, history turns, advanced chat prompts, "
             "template/CSS import. Use <b>New conversation</b> or close and reopen chat."
@@ -1068,8 +1617,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "The active field is empty!",
     },
     "optimize.api_key_missing": {
-        "it": "Errore: API Key mancante. Impostala con il bottone ⚙️.",
-        "en": "Error: API key missing. Set it with the ⚙️ button.",
+        "it": "Errore: API Key mancante. Impostala con il pulsante impostazioni.",
+        "en": "Error: API key missing. Set it with the settings button.",
     },
     "optimize.in_progress": {
         "it": "Ottimizzazione in corso…",
@@ -1098,6 +1647,30 @@ _STRINGS: dict[str, dict[str, str]] = {
     "optimize.default_instruction.detail": {
         "it": "Continuare comunque con l'ottimizzazione?",
         "en": "Continue with optimization anyway?",
+    },
+    "optimize.prompt_cache.created.title": {
+        "it": "Cache prompt creata",
+        "en": "Prompt cache created",
+    },
+    "optimize.prompt_cache.created.message": {
+        "it": (
+            "È stata creata una cache prompt su Gemini per l'ottimizzazione campo "
+            "({chars} caratteri in cache, TTL {minutes} min)."
+        ),
+        "en": (
+            "A Gemini prompt cache was created for field optimize "
+            "({chars} cached characters, TTL {minutes} min)."
+        ),
+    },
+    "optimize.prompt_cache.created.detail": {
+        "it": (
+            "Le richieste successive useranno la cache finché il testo cached o il modello "
+            "non cambiano. Puoi gestirla in Impostazioni → Avanzate."
+        ),
+        "en": (
+            "Later requests will use the cache until cached text or the model changes. "
+            "Manage it under Settings → Advanced."
+        ),
     },
     # Preview dialog
     "preview.title": {
@@ -1136,58 +1709,78 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Gemini chat",
     },
     "chat.include_context": {
-        "it": "Includi contesto nota nel prossimo messaggio",
-        "en": "Include note context in the next message",
+        "it": (
+            "Includi o escludi la nota importata dal prossimo messaggio. "
+            "Icona cervello = inclusa; icona cervello barrato = esclusa."
+        ),
+        "en": (
+            "Include or exclude the imported note from the next message. "
+            "Brain icon = included; barred brain icon = excluded."
+        ),
     },
     "chat.include_context.short": {
-        "it": "Includi contesto",
-        "en": "Include context",
+        "it": "Importa",
+        "en": "Import",
     },
-    "chat.edit_context": {
-        "it": "Modifica wrapper",
-        "en": "Edit wrapper",
+    "chat.include_context.icon": {
+        "it": "",
+        "en": "",
+    },
+    "chat.include_context.icon.excluded": {
+        "it": "",
+        "en": "",
     },
     "chat.edit_wrapper": {
-        "it": "Modifica wrapper",
-        "en": "Edit wrapper",
-    },
-    "chat.edit_wrapper.short": {
-        "it": "📝 wrapper",
-        "en": "📝 wrapper",
+        "it": "Modifica wrapper contesto",
+        "en": "Edit context wrapper",
     },
     "chat.edit_wrapper.tooltip": {
-        "it": "Modifica wrapper",
-        "en": "Edit wrapper",
+        "it": "Modifica wrapper contesto nota",
+        "en": "Edit context wrapper",
     },
     "chat.edit_wrapper.wrapper_label": {
-        "it": "Testo wrapper ({{context}}, {{request}}; espanso per le opzioni import correnti):",
-        "en": "Wrapper text ({{context}}, {{request}}; expanded for current import options):",
+        "it": "Wrapper contesto (questa sessione)",
+        "en": "Context wrapper (this session)",
     },
     "chat.edit_wrapper.wrapper_label.basic": {
-        "it": "Testo wrapper ({{context}}, {{request}}):",
-        "en": "Wrapper text ({{context}}, {{request}}):",
+        "it": "Wrapper contesto (questa sessione)",
+        "en": "Context wrapper (this session)",
     },
     "chat.edit_wrapper.wrapper_label.with_optional": {
-        "it": "Testo wrapper ({{context}}, {{request}}; opzionali {optional}):",
-        "en": "Wrapper text ({{context}}, {{request}}; optional {optional}):",
+        "it": "Wrapper contesto (questa sessione; sezioni opzionali incluse)",
+        "en": "Context wrapper (this session; optional sections included)",
     },
     "chat.edit_wrapper.wrapper_hint": {
         "it": (
-            "Il tuo messaggio in basso sostituisce {{request}}. "
-            "Qui vedi il wrapper espanso; per blocchi condizionali usa Impostazioni → Avanzate."
+            "Il messaggio in chat sostituisce il segnaposto request. "
+            "Riordina e modifica le sezioni qui sotto; le modifiche valgono solo per questa sessione."
         ),
         "en": (
-            "Your message below replaces {{request}}. "
-            "This is the expanded wrapper; use Settings → Advanced for conditional blocks."
+            "Your chat message replaces the request placeholder. "
+            "Reorder and edit the sections below; changes apply for this session only."
         ),
     },
     "chat.edit_wrapper.wrapper_hint.basic": {
-        "it": "Il tuo messaggio in basso sostituisce {{request}}.",
-        "en": "Your message below replaces {{request}}.",
+        "it": (
+            "Il messaggio in chat sostituisce il segnaposto request. "
+            "Riordina e modifica le sezioni qui sotto; le modifiche valgono solo per questa sessione."
+        ),
+        "en": (
+            "Your chat message replaces the request placeholder. "
+            "Reorder and edit the sections below; changes apply for this session only."
+        ),
     },
     "chat.edit_wrapper.wrapper_hint.with_optional": {
-        "it": "Il tuo messaggio in basso sostituisce {{request}}. Opzionali: {optional}.",
-        "en": "Your message below replaces {{request}}. Optional: {optional}.",
+        "it": (
+            "Il messaggio in chat sostituisce il segnaposto request. "
+            "Le sezioni template/CSS sono incluse in base alle opzioni import attive. "
+            "Riordina e modifica le sezioni qui sotto; le modifiche valgono solo per questa sessione."
+        ),
+        "en": (
+            "Your chat message replaces the request placeholder. "
+            "Template and CSS sections are included for your current import settings. "
+            "Reorder and edit the sections below; changes apply for this session only."
+        ),
     },
     "chat.edit_wrapper.wrapper_invalid": {
         "it": (
@@ -1216,10 +1809,6 @@ _STRINGS: dict[str, dict[str, str]] = {
     "chat.edit_templates": {
         "it": "Modifica template",
         "en": "Edit templates",
-    },
-    "chat.edit_templates.short": {
-        "it": "📝 template",
-        "en": "📝 templates",
     },
     "chat.edit_templates.tooltip": {
         "it": "Modifica template",
@@ -1261,39 +1850,25 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Vai al tipo carta…",
         "en": "Go to card type…",
     },
-    "chat.edit_context.fields_label": {
-        "it": "Campi nota (modificabili nell'anteprima sopra la chat):",
-        "en": "Note fields (editable in the preview above the chat):",
+    "chat.edit.menu": {
+        "it": "Modifica",
+        "en": "Edit",
     },
-    "chat.edit_context.note_label": {
-        "it": "Contenuto nota inviato come {{context}} (modificabile nell'anteprima):",
-        "en": "Note content sent as {{context}} (editable in the preview):",
+    "chat.edit.menu.icon": {
+        "it": "",
+        "en": "",
     },
-    "chat.edit_context.wrapper_label": {
-        "it": "Testo wrapper ({{context}}, {{request}}; espanso per le opzioni import correnti):",
-        "en": "Wrapper text ({{context}}, {{request}}; expanded for current import options):",
+    "chat.edit.menu.tooltip": {
+        "it": "Modifica nota, wrapper contesto o template",
+        "en": "Edit note, context wrapper, or templates",
     },
-    "chat.edit_context.wrapper_hint": {
-        "it": (
-            "Il tuo messaggio in basso sostituisce {{request}}. "
-            "Qui vedi il wrapper espanso; per blocchi condizionali usa Impostazioni → Avanzate."
-        ),
-        "en": (
-            "Your message below replaces {{request}}. "
-            "This is the expanded wrapper; use Settings → Advanced for conditional blocks."
-        ),
+    "chat.edit_note": {
+        "it": "Modifica nota",
+        "en": "Edit note",
     },
-    "chat.edit_context.wrapper_invalid": {
-        "it": (
-            "Il wrapper deve includere {{context}} e {{request}} "
-            "(e blocchi {{#templates}}/{{/templates}} o {{#styling}}/{{/styling}} bilanciati). "
-            "Ripristino del wrapper delle impostazioni."
-        ),
-        "en": (
-            "The wrapper must include {{context}} and {{request}} "
-            "(with balanced {{#templates}}/{{/templates}} or {{#styling}}/{{/styling}} blocks). "
-            "Reverting to settings wrapper."
-        ),
+    "chat.edit_note.send_empty_fields": {
+        "it": "Invia campi vuoti",
+        "en": "Send empty fields",
     },
     "chat.new_conversation": {
         "it": "Nuova conversazione",
@@ -1373,41 +1948,82 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Nessun contenuto da mostrare.",
         "en": "No content to show.",
     },
+    "chat.preview.loading": {
+        "it": "Rendering anteprima…",
+        "en": "Rendering preview…",
+    },
     "chat.api_key_missing": {
-        "it": "Errore: API Key mancante (⚙️).",
-        "en": "Error: API key missing (⚙️).",
+        "it": "Errore: API Key mancante (pulsante impostazioni).",
+        "en": "Error: API key missing (settings button).",
     },
     "chat.large_payload.title": {
         "it": "Invio chat molto grande",
         "en": "Large chat send",
     },
     "chat.large_payload.message": {
-        "it": "Stima ~{count} token di input totali per la prossima richiesta a Gemini (soglia {threshold}). Inviare comunque?",
-        "en": "The next Gemini request is estimated at ~{count} total input tokens (threshold {threshold}). Send anyway?",
+        "it": (
+            "La prossima richiesta chat invierà {count} caratteri di input totali "
+            "(soglia {threshold}). Inviare comunque?"
+        ),
+        "en": (
+            "The next chat request will send {count} total input characters "
+            "(threshold {threshold}). Send anyway?"
+        ),
     },
     "chat.large_payload.detail": {
         "it": (
-            "La stima include tutto ciò che Gemini riceve come input: istruzioni di sistema "
+            "Include tutto ciò che Gemini riceve come input: istruzioni di sistema "
             "(incluse regole dinamiche e meta-regola chat), cronologia chat e il messaggio utente "
             "in uscita (contesto nota, template/stile se attivi, ecc.). "
-            "Approssimazione ~4 caratteri per token; non include i token generati in risposta. "
-            "Puoi alzare la soglia in Impostazioni → «Avviso token chat oltre»."
+            "Conteggio caratteri esatto, non token né costo. "
+            "Puoi alzare la soglia in Impostazioni → «Avviso caratteri payload chat oltre»."
         ),
         "en": (
-            "The estimate includes everything Gemini receives as input: system instructions "
+            "Includes everything Gemini receives as input: system instructions "
             "(including dynamic rules and the chat meta-rule), chat history, and the outgoing user "
             "message (note context, templates/styling when enabled, etc.). "
-            "Approximate (~4 characters per token); it does not include tokens generated in the reply. "
-            "You can raise the threshold in Settings → “Chat token warning above”."
+            "Exact character count — not tokens or cost. "
+            "You can raise the threshold in Settings → “Chat payload warning above (characters)”."
         ),
     },
     "chat.inspect_prompt": {
-        "it": "🔍",
-        "en": "🔍",
+        "it": "",
+        "en": "",
     },
     "chat.inspect_prompt.tooltip": {
-        "it": "Ispeziona il prompt che verrà inviato",
-        "en": "Inspect what prompt will be sent",
+        "it": "Anteprima del prompt adesso (non invia)",
+        "en": "Preview the prompt now (does not send)",
+    },
+    "chat.stop_before_send.icon": {
+        "it": "",
+        "en": "",
+    },
+    "chat.modify_prompt_before_send": {
+        "it": "",
+        "en": "",
+    },
+    "chat.modify_prompt_before_send.tooltip": {
+        "it": (
+            "Attiva/disattiva la revisione del prompt prima dell'invio a Gemini. "
+            "Segnale di stop (attivo): l'invio apre il dialogo pre-invio per rivedere e "
+            "modificare prompt e cache (se attiva). Segnale di strada con precedenza "
+            "(disattivo): i messaggi partono subito. Usa l'icona lente per un'anteprima del prompt "
+            "in sola lettura in qualsiasi momento."
+        ),
+        "en": (
+            "Toggle pre-send review before messages go to Gemini. "
+            "Stop sign (on): sending opens the pre-send dialog so you can review and edit "
+            "the prompt (and cached content when enabled). Priority road sign (off): messages "
+            "send directly. Use the lens icon anytime for a read-only prompt preview without sending."
+        ),
+    },
+    "chat.edit_templates.include_templates": {
+        "it": "Includi template carte nel messaggio",
+        "en": "Include card templates in message",
+    },
+    "chat.edit_templates.include_css": {
+        "it": "Includi CSS nota nel messaggio",
+        "en": "Include note CSS in message",
     },
     "chat.settings_stale.message": {
         "it": "Avvia una nuova conversazione perché tutte le impostazioni vengano aggiornate.",
@@ -1433,6 +2049,106 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Ispezione prompt chat",
         "en": "Chat prompt inspection",
     },
+    "prompt.inspect.pre_send.title": {
+        "it": "Modifica prompt prima dell'invio",
+        "en": "Modify prompt before sending",
+    },
+    "prompt.inspect.preview.title": {
+        "it": "Anteprima prompt chat",
+        "en": "Chat prompt preview",
+    },
+    "prompt.inspect.pre_send.preview_hint": {
+        "it": (
+            "Anteprima sola lettura di ciò che verrebbe inviato. Usa Aggiorna dopo "
+            "aver modificato il messaggio in chat. Per modificare prima dell'invio, "
+            "attiva il pulsante stop nella barra chat."
+        ),
+        "en": (
+            "Read-only preview of what would be sent. Use Refresh after editing the "
+            "chat message. To edit before sending, enable the stop button in the chat toolbar."
+        ),
+    },
+    "prompt.inspect.pre_send.view_live": {
+        "it": "Prompt live",
+        "en": "Live prompt",
+    },
+    "prompt.inspect.pre_send.view_caching": {
+        "it": "Caching",
+        "en": "Caching",
+    },
+    "prompt.inspect.pre_send.jump": {
+        "it": "Vai a…",
+        "en": "Go to…",
+    },
+    "prompt.inspect.pre_send.full_live_prompt": {
+        "it": "Prompt live completo",
+        "en": "Full live prompt",
+    },
+    "prompt.inspect.pre_send.full_cached_prompt": {
+        "it": "Prompt in cache completo",
+        "en": "Full cached prompt",
+    },
+    "prompt.inspect.pre_send.live_hint": {
+        "it": (
+            "Questa scheda è ciò che viene inviato con il messaggio: istruzioni ancora "
+            "live, cronologia chat e la tua richiesta. Il materiale riutilizzabile sta "
+            "nella scheda Caching."
+        ),
+        "en": (
+            "This tab is what goes out with your message: still-live instructions, chat "
+            "history, and your request. Reusable background material lives on the Caching tab."
+        ),
+    },
+    "prompt.inspect.pre_send.live_cache_tip": {
+        "it": (
+            "Suggerimento: le modifiche in questa scheda non invalidano la cache — "
+            "solo quelle nella scheda Caching la fanno ricreare."
+        ),
+        "en": (
+            "Tip: edits on this tab do not invalidate the cache — only changes on the "
+            "Caching tab trigger recreation."
+        ),
+    },
+    "prompt.inspect.pre_send.edit_live_sections": {
+        "it": "Modifica le sezioni sotto; l'anteprima live sopra si aggiorna.",
+        "en": "Edit the sections below; the live preview above updates as you type.",
+    },
+    "prompt.inspect.pre_send.edit_cached_sections": {
+        "it": "Modifica le sezioni sotto; l'anteprima cache sopra si aggiorna.",
+        "en": "Edit the sections below; the cached preview above updates as you type.",
+    },
+    "prompt.inspect.pre_send.cache_hint": {
+        "it": (
+            "Questa scheda è il primo passo quando la cache viene creata o ricreata: "
+            "carichiamo su Gemini le parti grandi e riutilizzabili (regole, nota importata, "
+            "template, testo cache personalizzato, ecc.). Le richieste successive inviano "
+            "solo il prompt live, facendo riferimento a questo contenuto."
+        ),
+        "en": (
+            "This tab is the first step when the cache is created or recreated: we upload "
+            "the large reusable parts to Gemini (rules, imported note, templates, custom "
+            "cache text, etc.). Later requests send only the live prompt, referencing this "
+            "content."
+        ),
+    },
+    "prompt.inspect.pre_send.cache_edit_tip": {
+        "it": (
+            "Suggerimento: se modifichi questo testo e una cache esiste già, quella cache "
+            "non vale più. All'invio ti chiederemo di ricrearla (oppure di inviare senza cache)."
+        ),
+        "en": (
+            "Tip: if you edit this text while a cache already exists, that cache is no longer "
+            "valid. When you send, you'll be asked to recreate it (or send without cache)."
+        ),
+    },
+    "prompt.inspect.pre_send.cached_content": {
+        "it": "Contenuto in cache",
+        "en": "Cached content",
+    },
+    "prompt.inspect.pre_send.live_system": {
+        "it": "Istruzioni di sistema live",
+        "en": "Live system instructions",
+    },
     "prompt.inspect.system_instruction": {
         "it": "Istruzioni di sistema",
         "en": "System instructions",
@@ -1446,8 +2162,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Dynamic rules",
     },
     "prompt.inspect.chat_system_addon": {
-        "it": "Istruzioni aggiuntive chat",
-        "en": "Extra chat system instructions",
+        "it": "Istruzioni chat extra",
+        "en": "Extra chat instructions",
     },
     "prompt.inspect.optimize_user_prefix": {
         "it": "Prefisso messaggio utente (ottimizzazione)",
@@ -1518,12 +2234,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Unexpected error: {error}",
     },
     "chat.loading": {
-        "it": "🤖 Gemini sta scrivendo.",
-        "en": "🤖 Gemini is typing.",
+        "it": "Gemini sta scrivendo.",
+        "en": "Gemini is typing.",
     },
     "chat.stopping": {
-        "it": "⏹️ Interruzione in corso.",
-        "en": "⏹️ Stopping.",
+        "it": "Interruzione in corso.",
+        "en": "Stopping.",
     },
     "chat.copied": {
         "it": "Contenuto del campo copiato negli appunti.",
@@ -1542,12 +2258,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "System",
     },
     "chat.context.field": {
-        "it": "Campo [{name}]:",
-        "en": "Field [{name}]:",
+        "it": "Campo [{name}]",
+        "en": "Field [{name}]",
+    },
+    "chat.context.empty_field": {
+        "it": "(Questo campo è vuoto)",
+        "en": "(This field is empty)",
     },
     "chat.context.section.note": {
-        "it": "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:",
-        "en": "[FULL NOTE CONTEXT TO ANALYZE]:",
+        "it": "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]",
+        "en": "[FULL NOTE CONTEXT TO ANALYZE]",
     },
     "chat.context.section.templates": {
         "it": "[TEMPLATE DELLE CARTE]",
@@ -1558,38 +2278,40 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "[NOTE TYPE STYLING]",
     },
     "chat.context.section.request": {
-        "it": "[RICHIESTA DELLO STUDENTE]:",
-        "en": "[STUDENT REQUEST]:",
+        "it": "[RICHIESTA DELLO STUDENTE]",
+        "en": "[STUDENT REQUEST]",
     },
     "chat.context.card_type_header": {
         "it": "[TIPO CARTA {index} NOME] {name}",
         "en": "[CARD TYPE {index} NAME] {name}",
     },
     "chat.context.front_template": {
-        "it": "[TEMPLATE FRONTE]:",
-        "en": "[FRONT TEMPLATE]:",
+        "it": "[TEMPLATE FRONTE]",
+        "en": "[FRONT TEMPLATE]",
     },
     "chat.context.back_template": {
-        "it": "[TEMPLATE RETRO]:",
-        "en": "[BACK TEMPLATE]:",
+        "it": "[TEMPLATE RETRO]",
+        "en": "[BACK TEMPLATE]",
     },
-    "instructions.chat_context_wrapper": {
-        "it": (
-            "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:\n{{context}}\n\n"
-            "{{#templates}}\n[TEMPLATE DELLE CARTE]\n{{templates}}\n{{/templates}}\n\n"
-            "{{#styling}}\n[STILE DEL TIPO DI NOTA]\n{{styling}}\n{{/styling}}\n\n"
-            "[RICHIESTA DELLO STUDENTE]:\n{{request}}"
-        ),
-        "en": (
-            "[FULL NOTE CONTEXT TO ANALYZE]:\n{{context}}\n\n"
-            "{{#templates}}\n[CARD TEMPLATES]\n{{templates}}\n{{/templates}}\n\n"
-            "{{#styling}}\n[NOTE TYPE STYLING]\n{{styling}}\n{{/styling}}\n\n"
-            "[STUDENT REQUEST]:\n{{request}}"
-        ),
+    "instructions.chat_context_section.context": {
+        "it": "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]\n{{context}}",
+        "en": "[FULL NOTE CONTEXT TO ANALYZE]\n{{context}}",
+    },
+    "instructions.chat_context_section.templates": {
+        "it": "[TEMPLATE DELLE CARTE]\n{{templates}}",
+        "en": "[CARD TEMPLATES]\n{{templates}}",
+    },
+    "instructions.chat_context_section.styling": {
+        "it": "[STILE DEL TIPO DI NOTA]\n{{styling}}",
+        "en": "[NOTE TYPE STYLING]\n{{styling}}",
+    },
+    "instructions.chat_context_section.request": {
+        "it": "[RICHIESTA DELLO STUDENTE]\n{{request}}",
+        "en": "[STUDENT REQUEST]\n{{request}}",
     },
     "instructions.card_templates_format": {
         "it": (
-            "[GUIDA AL FORMATO TEMPLATE E CSS ANKI]\n"
+            "[GUIDA AL FORMATO TEMPLATE E CSS ANKI]\n\n"
             "Le sezioni [TEMPLATE DELLE CARTE] e/o [STILE DEL TIPO DI NOTA] sotto provengono "
             "dal tipo di nota Anki importato:\n"
             "• Tipi di carta: un tipo di nota può avere più tipi di carta (es. Base, Inverso). "
@@ -1606,7 +2328,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "non trattare template HTML o CSS come la domanda dello studente salvo richiesta esplicita."
         ),
         "en": (
-            "[HOW TO READ ANKI CARD TEMPLATES AND STYLING]\n"
+            "[HOW TO READ ANKI CARD TEMPLATES AND STYLING]\n\n"
             "The [CARD TEMPLATES] and/or [NOTE TYPE STYLING] sections below come from the imported Anki note type:\n"
             "• Card types: a note type may have several card types (e.g. Basic, Reversed). "
             "Each has a front template and a back template.\n"
@@ -1672,17 +2394,17 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
     "instructions.dynamic_rules_prefix": {
         "it": (
-            "\n\nREGOLE DINAMICHE AGGIUNTIVE PRECEDENTEMENTE MEMORIZZATE "
-            "(Priorità inferiore rispetto alle regole sopra):\n"
+            "REGOLE DINAMICHE AGGIUNTIVE PRECEDENTEMENTE MEMORIZZATE "
+            "(Priorità inferiore rispetto alle regole sopra)"
         ),
         "en": (
-            "\n\nADDITIONAL DYNAMIC RULES PREVIOUSLY STORED "
-            "(Lower priority than the rules above):\n"
+            "ADDITIONAL DYNAMIC RULES PREVIOUSLY STORED "
+            "(Lower priority than the rules above)"
         ),
     },
     "instructions.chat_system_addon": {
         "it": (
-            "\nREGOLE DI FORMATTAZIONE PER LE RISPOSTE IN CHAT:\n"
+            "REGOLE DI FORMATTAZIONE PER LE RISPOSTE IN CHAT:\n"
             "- Per il testo esplicativo usa Markdown standard direttamente nel messaggio: **grassetto**, *corsivo*, `codice inline`, titoli con ##, elenchi, tabelle, separatori ---.\n"
             "- NON racchiudere l'intera risposta in un unico blocco ```markdown: scrivi il Markdown nel testo normale.\n"
             "- Nel testo esplicativo (fuori dai blocchi code), usa \\(...\\) per matematica inline e \\[...\\] "
@@ -1708,7 +2430,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "all'interno dei tag <UPDATE_DYNAMIC_RULES> e </UPDATE_DYNAMIC_RULES>. Includi sia le vecchie regole che la nuova."
         ),
         "en": (
-            "\nCHAT REPLY FORMATTING RULES:\n"
+            "CHAT REPLY FORMATTING RULES:\n"
             "- For explanatory text use standard Markdown in the message: **bold**, *italic*, `inline code`, ## headings, lists, tables, --- separators.\n"
             "- Do NOT wrap the entire reply in one ```markdown block; write Markdown as normal text.\n"
             "- In explanatory text (outside code blocks), use \\(...\\) for inline math and \\[...\\] for display math "
@@ -1835,8 +2557,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "No text in Gemini's response.",
     },
     "gemini.auth_error": {
-        "it": "API Key non valida o non autorizzata. Controlla la chiave nelle impostazioni (⚙️).",
-        "en": "Invalid or unauthorized API key. Check the key in settings (⚙️).",
+        "it": "API Key non valida o non autorizzata. Controlla la chiave nelle impostazioni (pulsante impostazioni).",
+        "en": "Invalid or unauthorized API key. Check the key in settings (settings button).",
     },
     "gemini.rate_limit": {
         "it": "Limite di richieste raggiunto. Riprova tra qualche secondo.",
@@ -2035,18 +2757,163 @@ def normalize_dynamic_rules_prefix_for_save(text: str) -> str:
     return _normalize_prompt_for_save(text, "instructions.dynamic_rules_prefix")
 
 
-def default_chat_context_wrapper(config: dict[str, Any] | None = None) -> str:
-    return tr("instructions.chat_context_wrapper", config=config)
+def default_wrapper_section_text(section_id: str, config: dict[str, Any] | None = None) -> str:
+    if section_id == "format_guide":
+        return ""
+    return tr(f"instructions.chat_context_section.{section_id}", config=config)
 
 
-def effective_chat_context_wrapper(config: dict[str, Any] | None = None) -> str:
-    return repair_wrapper_brace_escaping(
-        _effective_prompt(config, "prompt_chat_context", "instructions.chat_context_wrapper")
+def default_wrapper_section_order(config: dict[str, Any] | None = None) -> list[str]:
+    return list(DEFAULT_WRAPPER_SECTION_ORDER)
+
+
+def default_wrapper_sections(config: dict[str, Any] | None = None) -> dict[str, str]:
+    return {
+        section_id: default_wrapper_section_text(section_id, config)
+        for section_id in WRAPPER_SECTION_IDS
+        if section_id != "format_guide"
+    }
+
+
+def is_builtin_wrapper_section(section_id: str, text: str | None) -> bool:
+    if section_id == "format_guide":
+        return not (text or "").strip()
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    return stripped in _builtin_prompt_texts(
+        f"instructions.chat_context_section.{section_id}"
     )
 
 
-def normalize_chat_context_wrapper_for_save(text: str) -> str:
-    return _normalize_prompt_for_save(text, "instructions.chat_context_wrapper")
+def normalize_wrapper_sections_for_save(
+    sections: dict[str, str],
+    config: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    defaults = default_wrapper_sections(config)
+    normalized: dict[str, str] = {}
+    for section_id in WRAPPER_SECTION_IDS:
+        if section_id == "format_guide":
+            continue
+        if section_id not in sections:
+            continue
+        raw = sections.get(section_id) or ""
+        stripped = raw.strip()
+        default_stripped = (defaults.get(section_id) or "").strip()
+        if stripped == default_stripped:
+            continue
+        if not stripped:
+            normalized[section_id] = ""
+            continue
+        if is_builtin_wrapper_section(section_id, stripped):
+            continue
+        normalized[section_id] = stripped
+    return normalized
+
+
+def normalize_wrapper_order_for_save(order: list[str] | None) -> list[str]:
+    return normalize_wrapper_section_order(order)
+
+
+def effective_wrapper_layout(
+    config: dict[str, Any] | None = None,
+) -> tuple[list[str], dict[str, str]]:
+    cfg = config or {}
+    order = normalize_wrapper_section_order(cfg.get("prompt_chat_context_order"))
+    stored = cfg.get("prompt_chat_context_sections") or {}
+    defaults = default_wrapper_sections(config)
+    prefixes: dict[str, str] = {"format_guide": ""}
+    for section_id in WRAPPER_SECTION_IDS:
+        if section_id == "format_guide":
+            continue
+        if section_id not in stored:
+            prefixes[section_id] = defaults.get(section_id, "")
+            continue
+        custom = (stored.get(section_id) or "").strip()
+        if not custom:
+            prefixes[section_id] = ""
+        elif is_builtin_wrapper_section(section_id, custom):
+            prefixes[section_id] = defaults.get(section_id, "")
+        else:
+            prefixes[section_id] = custom
+    return order, prefixes
+
+
+def is_builtin_wrapper_layout(
+    config: dict[str, Any] | None,
+    *,
+    section_order: list[str] | None = None,
+    section_prefixes: dict[str, str] | None = None,
+) -> bool:
+    cfg = config or {}
+    order = normalize_wrapper_section_order(section_order or cfg.get("prompt_chat_context_order"))
+    if order != list(DEFAULT_WRAPPER_SECTION_ORDER):
+        return False
+    stored = section_prefixes if section_prefixes is not None else (cfg.get("prompt_chat_context_sections") or {})
+    for section_id in WRAPPER_SECTION_IDS:
+        if section_id == "format_guide":
+            continue
+        text = (stored.get(section_id) or "").strip()
+        if text and not is_builtin_wrapper_section(section_id, text):
+            return False
+    if not is_builtin_card_templates_format_prompt(cfg.get("prompt_card_templates_format")):
+        stored_format = (cfg.get("prompt_card_templates_format") or "").strip()
+        if stored_format:
+            return False
+    return True
+
+
+def wrapper_layout_warnings(
+    section_prefixes: dict[str, str],
+    config: dict[str, Any] | None,
+) -> list[str]:
+    _, defaults = effective_wrapper_layout(config)
+    warnings: list[str] = []
+    request_text = (section_prefixes.get("request") or defaults.get("request") or "").strip()
+    if wrapper_section_missing_placeholders("request", request_text):
+        warnings.append("required")
+    warnings.extend(
+        wrapper_missing_import_placeholders(
+            section_prefixes,
+            config,
+            default_sections=defaults,
+        )
+    )
+    return warnings
+
+
+def build_wrapper_preview(
+    config: dict[str, Any] | None = None,
+    *,
+    section_order: list[str] | None = None,
+    section_prefixes: dict[str, str] | None = None,
+    format_guide: str | None = None,
+    templates_content: str = "",
+    styling_content: str = "",
+) -> str:
+    order, prefixes = effective_wrapper_layout(config)
+    if section_order is not None:
+        order = normalize_wrapper_section_order(section_order)
+    if section_prefixes is not None:
+        prefixes = dict(section_prefixes)
+        prefixes.setdefault("format_guide", "")
+    guide = (
+        effective_card_templates_format_prompt(config)
+        if format_guide is None
+        else format_guide
+    )
+    return assemble_wrapper_message(
+        config,
+        section_order=order,
+        section_prefixes=prefixes,
+        context="…",
+        request="…",
+        templates=templates_content or "…",
+        styling=styling_content or "…",
+        format_guide=guide,
+        include_context=True,
+        preview=True,
+    )
 
 
 def default_card_templates_format_prompt(config: dict[str, Any] | None = None) -> str:
@@ -2088,101 +2955,18 @@ def card_templates_format_addon(
     return effective_card_templates_format_prompt(config).strip()
 
 
-_LEGACY_CHAT_CONTEXT_WRAPPERS = (
-    (
-        "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:\n{{context}}\n\n"
-        "{{#templates}}\n[TEMPLATE DELLE CARTE]\n{{templates}}\n{{/templates}}\n\n"
-        "{{#styling}}\n[STILE DEL TIPO DI NOTA]\n{{styling}}\n{{/styling}}\n\n"
-        "[RICHIESTA DELLO STUDENTE]:\n{{request}}"
-    ),
-    (
-        "[FULL NOTE CONTEXT TO ANALYZE]:\n{{context}}\n\n"
-        "{{#templates}}\n[CARD TEMPLATES]\n{{templates}}\n{{/templates}}\n\n"
-        "{{#styling}}\n[NOTE TYPE STYLING]\n{{styling}}\n{{/styling}}\n\n"
-        "[STUDENT REQUEST]:\n{{request}}"
-    ),
-    (
-        "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:\n{context}\n\n"
-        "[TEMPLATE DELLE CARTE]\n{templates}\n\n"
-        "[STILE DEL TIPO DI NOTA]\n{styling}\n\n"
-        "[RICHIESTA DELLO STUDENTE]:\n{request}"
-    ),
-    (
-        "[FULL NOTE CONTEXT TO ANALYZE]:\n{context}\n\n"
-        "[CARD TEMPLATES]\n{templates}\n\n"
-        "[NOTE TYPE STYLING]\n{styling}\n\n"
-        "[STUDENT REQUEST]:\n{request}"
-    ),
-    "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:\n{context}\n\n[RICHIESTA DELLO STUDENTE]:\n{request}",
-    "[FULL NOTE CONTEXT TO ANALYZE]:\n{context}\n\n[STUDENT REQUEST]:\n{request}",
-    "[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:\n{{context}}\n\n[RICHIESTA DELLO STUDENTE]:\n{{request}}",
-    "[FULL NOTE CONTEXT TO ANALYZE]:\n{{context}}\n\n[STUDENT REQUEST]:\n{{request}}",
-    # Saved while i18n used quadruple-brace escaping without calling .format().
-    (
-        '[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:\n{{{{context}}}}\n\n{{{{#templates}}}}\n[TEMPLATE DELLE CARTE]\n{{{{templates}}}}\n{{{{/templates}}}}\n\n{{{{#styling}}}}\n[STILE DEL TIPO DI NOTA]\n{{{{styling}}}}\n{{{{/styling}}}}\n\n[RICHIESTA DELLO STUDENTE]:\n{{{{request}}}}'
-    ),
-    (
-        '[FULL NOTE CONTEXT TO ANALYZE]:\n{{{{context}}}}\n\n{{{{#templates}}}}\n[CARD TEMPLATES]\n{{{{templates}}}}\n{{{{/templates}}}}\n\n{{{{#styling}}}}\n[NOTE TYPE STYLING]\n{{{{styling}}}}\n{{{{/styling}}}}\n\n[STUDENT REQUEST]:\n{{{{request}}}}'
-    ),
-    '[CONTESTO DELLA NOTA INTERA DA ANALIZZARE]:\n{{{{context}}}}\n\n[RICHIESTA DELLO STUDENTE]:\n{{{{request}}}}',
-    '[FULL NOTE CONTEXT TO ANALYZE]:\n{{{{context}}}}\n\n[STUDENT REQUEST]:\n{{{{request}}}}'
-)
-
-
-def is_builtin_chat_context_wrapper(text: str | None) -> bool:
-    stripped = (text or "").strip()
-    if not stripped:
-        return True
-    if _is_builtin_prompt(text, "instructions.chat_context_wrapper"):
-        return True
-    return stripped in _legacy_chat_context_wrappers()
-
-
-def _legacy_chat_context_wrappers() -> frozenset[str]:
-    return frozenset(message.strip() for message in _LEGACY_CHAT_CONTEXT_WRAPPERS if message.strip())
-
-
-def build_chat_context_wrapper_for_import_settings(
-    config: dict[str, Any] | None = None,
-) -> str:
-    return expand_chat_context_wrapper(
-        config,
-        source=effective_chat_context_wrapper(config),
-    )
-
-
-def filter_wrapper_for_import_settings(text: str, config: dict[str, Any] | None = None) -> str:
-    if wrapper_has_conditional_blocks(text):
-        return expand_chat_context_wrapper(config, source=text)
-    return text.strip()
-
-
-def chat_context_wrapper_for_session(
-    config: dict[str, Any] | None = None,
-    *,
-    template_override: str | None = None,
-    templates_content: str = "",
-    styling_content: str = "",
-) -> str:
-    raw = (template_override or effective_chat_context_wrapper(config)).strip()
-    if is_builtin_chat_context_wrapper(raw) or chat_context_wrapper_should_fallback(raw):
-        return build_chat_context_wrapper_for_import_settings(config)
-    if wrapper_has_conditional_blocks(raw):
-        return expand_chat_context_wrapper(
-            config,
-            source=raw,
-            templates_content=templates_content,
-            styling_content=styling_content,
-        )
-    return raw
-
-
 def chat_edit_wrapper_label_text(config: dict[str, Any] | None = None) -> str:
-    return tr("chat.edit_wrapper.wrapper_label", config=config)
+    config = config or {}
+    if import_templates_enabled(config) or import_css_enabled(config):
+        return tr("chat.edit_wrapper.wrapper_label.with_optional", config=config)
+    return tr("chat.edit_wrapper.wrapper_label.basic", config=config)
 
 
 def chat_edit_wrapper_hint_text(config: dict[str, Any] | None = None) -> str:
-    return tr("chat.edit_wrapper.wrapper_hint", config=config)
+    config = config or {}
+    if import_templates_enabled(config) or import_css_enabled(config):
+        return tr("chat.edit_wrapper.wrapper_hint.with_optional", config=config)
+    return tr("chat.edit_wrapper.wrapper_hint.basic", config=config)
 
 
 def chat_edit_wrapper_invalid_text(config: dict[str, Any] | None = None) -> str:
@@ -2205,28 +2989,43 @@ def wrapper_import_warning_text(
     return " ".join(parts)
 
 
-def _assemble_builtin_chat_context_message(
+def _resolve_wrapper_layout(config: dict[str, Any] | None) -> tuple[list[str], dict[str, str]]:
+    return effective_wrapper_layout(config)
+
+
+def _resolve_format_guide(config: dict[str, Any] | None) -> str:
+    return effective_card_templates_format_prompt(config).strip()
+
+
+def format_chat_context_message(
     config: dict[str, Any] | None,
     *,
     context: str,
     request: str,
-    templates: str,
-    styling: str,
+    templates: str = "",
+    styling: str = "",
+    include_context: bool = True,
+    omit_format_guide: bool = False,
+    section_order: list[str] | None = None,
+    section_prefixes: dict[str, str] | None = None,
+    format_guide: str | None = None,
+    omit_sections: set[str] | None = None,
 ) -> str:
-    parts = [f"{tr('chat.context.section.note', config=config)}\n{context}"]
-    format_addon = card_templates_format_addon(
+    return _format_chat_context_message_core(
         config,
+        context=context,
+        request=request,
         templates=templates,
         styling=styling,
+        include_context=include_context,
+        omit_format_guide=omit_format_guide,
+        section_order=section_order,
+        section_prefixes=section_prefixes,
+        format_guide=format_guide,
+        omit_sections=omit_sections,
+        resolve_wrapper_layout=_resolve_wrapper_layout,
+        resolve_format_guide=_resolve_format_guide,
     )
-    if format_addon:
-        parts.append(format_addon)
-    if templates.strip():
-        parts.append(f"{tr('chat.context.section.templates', config=config)}\n{templates}")
-    if styling.strip():
-        parts.append(f"{tr('chat.context.section.styling', config=config)}\n{styling}")
-    parts.append(f"{tr('chat.context.section.request', config=config)}\n{request}")
-    return "\n\n".join(parts)
 
 
 def chat_edit_templates_title_text(config: dict[str, Any] | None = None) -> str:
@@ -2251,30 +3050,6 @@ def chat_edit_templates_hint_text(config: dict[str, Any] | None = None) -> str:
     if css and not templates:
         return tr("chat.edit_templates.hint.styling_only", config=config)
     return tr("chat.edit_templates.hint.templates_only", config=config)
-
-
-def format_chat_context_message(
-    config: dict[str, Any] | None,
-    *,
-    context: str,
-    request: str,
-    templates: str = "",
-    styling: str = "",
-    template: str | None = None,
-) -> str:
-    return _format_chat_context_message_core(
-        config,
-        context=context,
-        request=request,
-        templates=templates,
-        styling=styling,
-        template=template,
-        effective_wrapper=effective_chat_context_wrapper,
-        default_wrapper=default_chat_context_wrapper,
-        is_builtin_wrapper=is_builtin_chat_context_wrapper,
-        assemble_builtin_message=_assemble_builtin_chat_context_message,
-        card_templates_format_addon=card_templates_format_addon,
-    )
 
 
 def _builtin_system_instructions() -> frozenset[str]:

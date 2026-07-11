@@ -7,12 +7,13 @@ from aqt.qt import (
     QCloseEvent,
     QDialog,
     QFrame,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPoint,
     QPushButton,
+    QResizeEvent,
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
@@ -24,7 +25,15 @@ from aqt.qt import (
 from aqt import mw
 from aqt.utils import showInfo, showWarning
 
-from ..constants import DEFAULT_MODEL_CHAT, DEFAULT_MODEL_OPTIMIZE, DEFAULT_THINKING_BUDGET_CHAT, DEFAULT_THINKING_BUDGET_OPTIMIZE
+from ..constants import (
+    DEFAULT_MODEL_CHAT,
+    DEFAULT_MODEL_OPTIMIZE,
+    DEFAULT_THINKING_BUDGET_CHAT,
+    DEFAULT_THINKING_BUDGET_OPTIMIZE,
+    GEMINI_AI_STUDIO_BILLING_URL,
+    GEMINI_AI_STUDIO_USAGE_URL,
+    GEMINI_API_BILLING_DOCS_URL,
+)
 from ..config import (
     DISMISSIBLE_WARNING_KEYS,
     DISMISSIBLE_WARNING_LABELS,
@@ -37,7 +46,15 @@ from ..config import (
     load_config,
     save_config,
 )
-from ..prompt_inspection import build_optimize_prompt_inspection
+from ..prompt_cache import (
+    PROMPT_CACHE_USER_SEGMENT_ORDER,
+    clear_prompt_cache,
+    extend_prompt_cache_ttl,
+    prompt_cache_segments,
+    prompt_cache_status_text,
+    segment_label_key,
+)
+from .prompt_cache_manager_dialog import open_prompt_cache_manager
 from ..i18n import (
     LANG_EN,
     LANG_IT,
@@ -45,36 +62,34 @@ from ..i18n import (
     default_card_templates_format_prompt,
     default_chat_system_addon,
     default_dynamic_rules_prefix,
-    default_chat_context_wrapper,
     default_optimize_user_prompt,
+    default_wrapper_section_order,
     effective_brain_import_message,
     effective_card_templates_format_prompt,
     effective_mathjax_preview_preamble,
     effective_chat_system_addon,
     effective_dynamic_rules_prefix,
-    effective_chat_context_wrapper,
     effective_optimize_user_prompt,
     is_builtin_brain_import_message,
     is_builtin_card_templates_format_prompt,
     is_builtin_chat_system_addon,
-    is_builtin_chat_context_wrapper,
     is_builtin_dynamic_rules_prefix,
     is_builtin_optimize_user_prompt,
     is_builtin_system_instruction,
+    is_builtin_wrapper_layout,
     normalize_brain_import_message_for_save,
     normalize_card_templates_format_prompt_for_save,
     normalize_mathjax_preview_preamble_for_save,
     normalize_chat_system_addon_for_save,
-    normalize_chat_context_wrapper_for_save,
     normalize_dynamic_rules_prefix_for_save,
     normalize_optimize_user_prompt_for_save,
     normalize_system_instruction_fields_for_save,
+    normalize_wrapper_order_for_save,
+    normalize_wrapper_sections_for_save,
     effective_system_instruction,
     tr,
-    chat_context_wrapper_missing_placeholders,
-    wrapper_import_warning_text,
-    wrapper_missing_import_placeholders,
 )
+from .wrapper_sections_editor import WrapperSectionsEditor
 from .chat_dialog import refresh_chat_from_settings, refresh_chat_language
 from .prompt_inspection_dialog import PromptInspectionWindow
 from .settings_help_dialog import _make_info_button, open_settings_help_dialog
@@ -85,11 +100,21 @@ from .model_selector import (
     update_model_selector_choices,
 )
 from .settings_compact_controls import (
+    SETTINGS_SECTION_GAP,
+    SETTINGS_SECTION_INNER_SPACING,
+    add_settings_labeled_field,
+    apply_settings_icon_row_height,
+    create_settings_auto_height_text_edit,
+    create_settings_checkbox_info_row,
     create_settings_combo,
     create_settings_double_spinbox,
+    create_settings_hint_label,
     create_settings_line_edit,
+    create_settings_panel,
+    create_settings_section_label,
     create_settings_spinbox,
-    create_settings_text_edit,
+    refresh_settings_text_edit_layouts,
+    refresh_settings_text_edit_newlines,
 )
 from .widgets import ScrollAwareTextEdit
 from .theme import (
@@ -97,7 +122,6 @@ from .theme import (
     info_button_stylesheet,
     muted_hint_html,
     panel_content_html,
-    panel_widget_stylesheet,
     refresh_native_text_edits_in,
     settings_stale_banner_stylesheet,
     status_color_stylesheet,
@@ -113,9 +137,6 @@ QPushButton {
     min-height: 28px;
 }
 """
-
-_WRAPPER_IMPORT_WARNING_BANNER_WIDTH = 520
-
 
 def _setup_footer_button(button: QPushButton, *, tooltip: str) -> None:
     button.setToolTip(tooltip)
@@ -144,7 +165,6 @@ class SettingsDialog(QDialog):
         self._model_refresh_busy = False
         self._settings_help_dialog = None
         self._optimize_prompt_inspection_window: PromptInspectionWindow | None = None
-        self._wrapper_import_warnings_dismissed: set[str] = set()
         self._force_shutdown = False
         self.silentlyClose = True
         self.setWindowModality(Qt.WindowModality.NonModal)
@@ -298,6 +318,19 @@ class SettingsDialog(QDialog):
 
         self._set_subpage_mode(None)
         self._baseline_config = self._collect_pending_config()
+        refresh_settings_text_edit_newlines(
+            self,
+            bool(self.config.get("settings_show_text_newlines", False)),
+        )
+        QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._force_shutdown:
@@ -329,9 +362,10 @@ class SettingsDialog(QDialog):
         scroll = QScrollArea(page)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        apply_native_page_scroll_theme(scroll)
+        apply_native_page_scroll_theme(scroll, allow_horizontal_scroll=False)
 
         form_host = QWidget(scroll)
+        form_host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         layout = QVBoxLayout(form_host)
         layout.setContentsMargins(4, 4, 4, 4)
 
@@ -360,6 +394,18 @@ class SettingsDialog(QDialog):
             self.api_key_input.setPlaceholderText(tr("settings.api_key.placeholder.empty", config=config))
         layout.addWidget(api_key_shell)
 
+        layout.addWidget(
+            create_settings_hint_label(
+                form_host,
+                tr(
+                    "settings.api_cost_tracking",
+                    config=config,
+                    billing_url=GEMINI_AI_STUDIO_BILLING_URL,
+                    usage_url=GEMINI_AI_STUDIO_USAGE_URL,
+                ),
+            )
+        )
+
         layout.addWidget(QLabel(f"<br><b>{tr('settings.model_optimize', config=config)}</b>"))
         optimize_row = QHBoxLayout()
         model_optimize_shell, self.model_optimize_input = create_model_selector(
@@ -368,12 +414,13 @@ class SettingsDialog(QDialog):
             default=DEFAULT_MODEL_OPTIMIZE,
             config=config,
         )
-        optimize_row.addWidget(model_optimize_shell, stretch=1)
+        optimize_row.addWidget(model_optimize_shell)
         self.btn_refresh_optimize_models = QPushButton(tr("settings.model.refresh", config=config), form_host)
         self.btn_refresh_optimize_models.setAutoDefault(False)
         self.btn_refresh_optimize_models.setDefault(False)
         self.btn_refresh_optimize_models.clicked.connect(self._refresh_models_from_api)
         optimize_row.addWidget(self.btn_refresh_optimize_models)
+        optimize_row.addStretch(1)
         layout.addLayout(optimize_row)
 
         layout.addWidget(QLabel(f"<b>{tr('settings.model_chat', config=config)}</b>"))
@@ -384,101 +431,131 @@ class SettingsDialog(QDialog):
             default=DEFAULT_MODEL_CHAT,
             config=config,
         )
-        chat_row.addWidget(model_chat_shell, stretch=1)
+        chat_row.addWidget(model_chat_shell)
         self.btn_refresh_chat_models = QPushButton(tr("settings.model.refresh", config=config), form_host)
         self.btn_refresh_chat_models.setAutoDefault(False)
         self.btn_refresh_chat_models.setDefault(False)
         self.btn_refresh_chat_models.clicked.connect(self._refresh_models_from_api)
         chat_row.addWidget(self.btn_refresh_chat_models)
+        chat_row.addStretch(1)
         layout.addLayout(chat_row)
 
-        self.thinking_budget_hint = QLabel(
-            muted_hint_html(tr("settings.thinking_budget.hint", config=config)),
+        self.thinking_budget_hint = create_settings_hint_label(
             form_host,
+            tr("settings.thinking_budget.hint", config=config),
         )
         layout.addWidget(self.thinking_budget_hint)
-        thinking_row = QHBoxLayout()
-        thinking_row.addWidget(QLabel(tr("settings.thinking_budget_optimize", config=config)))
         thinking_optimize_shell, self.thinking_budget_optimize_input = create_settings_spinbox(form_host)
         self.thinking_budget_optimize_input.setRange(-1, 24576)
         self.thinking_budget_optimize_input.setValue(
             int(self.config.get("thinking_budget_optimize", DEFAULT_THINKING_BUDGET_OPTIMIZE))
         )
-        thinking_row.addWidget(thinking_optimize_shell)
+        add_settings_labeled_field(
+            layout,
+            form_host,
+            tr("settings.thinking_budget_optimize", config=config),
+            thinking_optimize_shell,
+        )
 
-        thinking_row.addWidget(QLabel(tr("settings.thinking_budget_chat", config=config)))
         thinking_chat_shell, self.thinking_budget_chat_input = create_settings_spinbox(form_host)
         self.thinking_budget_chat_input.setRange(-1, 24576)
         self.thinking_budget_chat_input.setValue(
             int(self.config.get("thinking_budget_chat", DEFAULT_THINKING_BUDGET_CHAT))
         )
-        thinking_row.addWidget(thinking_chat_shell)
-        layout.addLayout(thinking_row)
+        add_settings_labeled_field(
+            layout,
+            form_host,
+            tr("settings.thinking_budget_chat", config=config),
+            thinking_chat_shell,
+        )
+
+        timeout_shell, self.timeout_input = create_settings_spinbox(form_host)
+        self.timeout_input.setRange(5, 120)
+        self.timeout_input.setValue(int(self.config.get("timeout_seconds", 30)))
+        add_settings_labeled_field(
+            layout,
+            form_host,
+            tr("settings.timeout", config=config),
+            timeout_shell,
+        )
+
+        retries_shell, self.retries_input = create_settings_spinbox(form_host)
+        self.retries_input.setRange(0, 5)
+        self.retries_input.setValue(int(self.config.get("max_retries", 2)))
+        add_settings_labeled_field(
+            layout,
+            form_host,
+            tr("settings.max_retry", config=config),
+            retries_shell,
+        )
+
+        history_shell, self.history_input = create_settings_spinbox(form_host)
+        self.history_input.setRange(0, 100)
+        self.history_input.setValue(int(self.config.get("max_history_turns", 10)))
+        add_settings_labeled_field(
+            layout,
+            form_host,
+            tr("settings.chat_history", config=config),
+            history_shell,
+        )
+
+        token_warn_shell, self.chat_payload_warning_input = create_settings_spinbox(form_host)
+        self.chat_payload_warning_input.setRange(1, 2_000_000)
+        self.chat_payload_warning_input.setSingleStep(1000)
+        self.chat_payload_warning_input.setValue(
+            int(self.config.get("chat_payload_warning_chars", 12000))
+        )
+        add_settings_labeled_field(
+            layout,
+            form_host,
+            tr("settings.chat_payload_warning_chars", config=config),
+            token_warn_shell,
+        )
+
+        temp_optimize_shell, self.temp_optimize_input = create_settings_double_spinbox(form_host)
+        self.temp_optimize_input.setRange(0.0, 2.0)
+        self.temp_optimize_input.setSingleStep(0.1)
+        self.temp_optimize_input.setValue(float(self.config.get("temperature_optimize", 0.1)))
+        add_settings_labeled_field(
+            layout,
+            form_host,
+            tr("settings.temp_optimize", config=config),
+            temp_optimize_shell,
+        )
+
+        temp_chat_shell, self.temp_chat_input = create_settings_double_spinbox(form_host)
+        self.temp_chat_input.setRange(0.0, 2.0)
+        self.temp_chat_input.setSingleStep(0.1)
+        self.temp_chat_input.setValue(float(self.config.get("temperature_chat", 0.2)))
+        add_settings_labeled_field(
+            layout,
+            form_host,
+            tr("settings.temp_chat", config=config),
+            temp_chat_shell,
+        )
+
+        self.confirm_checkbox = QCheckBox(tr("settings.confirm_preview", config=config), form_host)
+        self.confirm_checkbox.setChecked(bool(self.config.get("confirm_before_apply", True)))
+        layout.addWidget(self.confirm_checkbox)
 
         self.chat_streaming_checkbox = QCheckBox(tr("settings.chat_streaming", config=config), form_host)
         self.chat_streaming_checkbox.setChecked(bool(self.config.get("chat_streaming", True)))
         layout.addWidget(self.chat_streaming_checkbox)
 
-        self.chat_prompt_inspection_checkbox = QCheckBox(
-            tr("settings.chat_prompt_inspection", config=config),
+        self.show_text_newlines_checkbox = QCheckBox(
+            tr("settings.show_text_newlines", config=config),
             form_host,
         )
-        self.chat_prompt_inspection_checkbox.setChecked(
-            bool(self.config.get("chat_prompt_inspection", False))
+        self.show_text_newlines_checkbox.setChecked(
+            bool(self.config.get("settings_show_text_newlines", False))
         )
-        layout.addWidget(self.chat_prompt_inspection_checkbox)
-
-        params_row = QHBoxLayout()
-        params_row.addWidget(QLabel(tr("settings.timeout", config=config)))
-        timeout_shell, self.timeout_input = create_settings_spinbox(form_host)
-        self.timeout_input.setRange(5, 120)
-        self.timeout_input.setValue(int(self.config.get("timeout_seconds", 30)))
-        params_row.addWidget(timeout_shell)
-
-        params_row.addWidget(QLabel(tr("settings.max_retry", config=config)))
-        retries_shell, self.retries_input = create_settings_spinbox(form_host)
-        self.retries_input.setRange(0, 5)
-        self.retries_input.setValue(int(self.config.get("max_retries", 2)))
-        params_row.addWidget(retries_shell)
-
-        params_row.addWidget(QLabel(tr("settings.chat_history", config=config)))
-        history_shell, self.history_input = create_settings_spinbox(form_host)
-        self.history_input.setRange(0, 100)
-        self.history_input.setValue(int(self.config.get("max_history_turns", 10)))
-        params_row.addWidget(history_shell)
-        layout.addLayout(params_row)
-
-        token_row = QHBoxLayout()
-        token_row.addWidget(QLabel(tr("settings.chat_token_warning_threshold", config=config)))
-        token_warn_shell, self.chat_token_warning_input = create_settings_spinbox(form_host)
-        self.chat_token_warning_input.setRange(1, 200000)
-        self.chat_token_warning_input.setSingleStep(500)
-        self.chat_token_warning_input.setValue(
-            int(self.config.get("chat_token_warning_threshold", 3000))
+        self.show_text_newlines_checkbox.toggled.connect(self._on_show_text_newlines_toggled)
+        layout.addWidget(self.show_text_newlines_checkbox)
+        self.show_text_newlines_hint = create_settings_hint_label(
+            form_host,
+            tr("settings.show_text_newlines.hint", config=config),
         )
-        token_row.addWidget(token_warn_shell)
-        token_row.addStretch(1)
-        layout.addLayout(token_row)
-
-        temp_row = QHBoxLayout()
-        temp_row.addWidget(QLabel(tr("settings.temp_optimize", config=config)))
-        temp_optimize_shell, self.temp_optimize_input = create_settings_double_spinbox(form_host)
-        self.temp_optimize_input.setRange(0.0, 2.0)
-        self.temp_optimize_input.setSingleStep(0.1)
-        self.temp_optimize_input.setValue(float(self.config.get("temperature_optimize", 0.1)))
-        temp_row.addWidget(temp_optimize_shell)
-
-        temp_row.addWidget(QLabel(tr("settings.temp_chat", config=config)))
-        temp_chat_shell, self.temp_chat_input = create_settings_double_spinbox(form_host)
-        self.temp_chat_input.setRange(0.0, 2.0)
-        self.temp_chat_input.setSingleStep(0.1)
-        self.temp_chat_input.setValue(float(self.config.get("temperature_chat", 0.2)))
-        temp_row.addWidget(temp_chat_shell)
-        layout.addLayout(temp_row)
-
-        self.confirm_checkbox = QCheckBox(tr("settings.confirm_preview", config=config), form_host)
-        self.confirm_checkbox.setChecked(bool(self.config.get("confirm_before_apply", True)))
-        layout.addWidget(self.confirm_checkbox)
+        layout.addWidget(self.show_text_newlines_hint)
 
         self.btn_inspect_optimize_prompt = QPushButton(
             tr("settings.inspect_optimize_prompt", config=config),
@@ -490,38 +567,27 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.btn_inspect_optimize_prompt)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.brain_message', config=config)}</b>"))
-        self.brain_message_hint = QLabel(
-            muted_hint_html(tr("settings.brain_message.hint", config=config)),
+        self.brain_message_hint = create_settings_hint_label(
             form_host,
+            tr("settings.brain_message.hint", config=config),
         )
         layout.addWidget(self.brain_message_hint)
-        brain_shell, self.brain_message_input = create_settings_text_edit(form_host)
-        self.brain_message_input.setMinimumHeight(70)
-        self.brain_message_input.setMaximumHeight(120)
+        brain_shell, self.brain_message_input = create_settings_auto_height_text_edit(
+            form_host,
+            show_newlines=self.show_text_newlines_checkbox.isChecked(),
+        )
         self.brain_message_input.setPlainText(effective_brain_import_message(self.config))
+        adjust = getattr(self.brain_message_input, "_auto_height_adjust", None)
+        if adjust is not None:
+            adjust()
         layout.addWidget(brain_shell)
 
-        self.brain_import_templates_checkbox = QCheckBox(
-            tr("settings.brain_import_templates", config=config),
-            form_host,
-        )
-        self.brain_import_templates_checkbox.setChecked(
-            bool(self.config.get("brain_import_templates", False))
-        )
-        self.brain_import_templates_checkbox.toggled.connect(
-            self._update_wrapper_import_warning_banner
-        )
-        layout.addWidget(self.brain_import_templates_checkbox)
-
-        self.brain_import_css_checkbox = QCheckBox(
-            tr("settings.brain_import_css", config=config),
-            form_host,
-        )
-        self.brain_import_css_checkbox.setChecked(bool(self.config.get("brain_import_css", False)))
-        self.brain_import_css_checkbox.toggled.connect(self._update_wrapper_import_warning_banner)
-        layout.addWidget(self.brain_import_css_checkbox)
-
         layout.addWidget(QLabel(f"<br><b>{tr('settings.system_instruction', config=config)}</b>"))
+        self.system_instruction_subtitle = create_settings_hint_label(
+            form_host,
+            tr("settings.system_instruction.subtitle", config=config),
+        )
+        layout.addWidget(self.system_instruction_subtitle)
         self.instruction_shared_checkbox = QCheckBox(
             tr("settings.system_instruction_shared", config=config),
             form_host,
@@ -533,8 +599,10 @@ class SettingsDialog(QDialog):
         self.instruction_shared_host = QWidget(form_host)
         shared_instruction_layout = QVBoxLayout(self.instruction_shared_host)
         shared_instruction_layout.setContentsMargins(0, 0, 0, 0)
-        instruction_shell, self.instruction_input = create_settings_text_edit(self.instruction_shared_host)
-        self.instruction_input.setMinimumHeight(140)
+        instruction_shell, self.instruction_input = create_settings_auto_height_text_edit(
+            self.instruction_shared_host,
+            show_newlines=self.show_text_newlines_checkbox.isChecked(),
+        )
         shared_instruction_layout.addWidget(instruction_shell)
 
         self.instruction_split_host = QWidget(form_host)
@@ -545,20 +613,30 @@ class SettingsDialog(QDialog):
             self.instruction_split_host,
         )
         split_instruction_layout.addWidget(self.instruction_optimize_label)
-        optimize_shell, self.instruction_optimize_input = create_settings_text_edit(
+        self.instruction_optimize_subtitle = create_settings_hint_label(
             self.instruction_split_host,
+            tr("settings.system_instruction_optimize.subtitle", config=config),
         )
-        self.instruction_optimize_input.setMinimumHeight(120)
+        split_instruction_layout.addWidget(self.instruction_optimize_subtitle)
+        optimize_shell, self.instruction_optimize_input = create_settings_auto_height_text_edit(
+            self.instruction_split_host,
+            show_newlines=self.show_text_newlines_checkbox.isChecked(),
+        )
         split_instruction_layout.addWidget(optimize_shell)
         self.instruction_chat_label = QLabel(
             f"<b>{tr('settings.system_instruction_chat', config=config)}</b>",
             self.instruction_split_host,
         )
         split_instruction_layout.addWidget(self.instruction_chat_label)
-        chat_instr_shell, self.instruction_chat_input = create_settings_text_edit(
+        self.instruction_chat_subtitle = create_settings_hint_label(
             self.instruction_split_host,
+            tr("settings.system_instruction_chat.subtitle", config=config),
         )
-        self.instruction_chat_input.setMinimumHeight(120)
+        split_instruction_layout.addWidget(self.instruction_chat_subtitle)
+        chat_instr_shell, self.instruction_chat_input = create_settings_auto_height_text_edit(
+            self.instruction_split_host,
+            show_newlines=self.show_text_newlines_checkbox.isChecked(),
+        )
         split_instruction_layout.addWidget(chat_instr_shell)
 
         layout.addWidget(self.instruction_shared_host)
@@ -569,24 +647,29 @@ class SettingsDialog(QDialog):
         layout.addWidget(
             QLabel(f"<br><b>{tr('settings.dynamic_instructions', config=config)}</b>")
         )
-        self.dynamic_instructions_hint = QLabel(
-            muted_hint_html(tr("settings.dynamic_instructions.hint", config=config)),
+        self.dynamic_instructions_hint = create_settings_hint_label(
             form_host,
+            tr("settings.dynamic_instructions.hint", config=config),
         )
         layout.addWidget(self.dynamic_instructions_hint)
-        dynamic_shell, self.dynamic_input = create_settings_text_edit(form_host)
-        self.dynamic_input.setMinimumHeight(100)
+        dynamic_shell, self.dynamic_input = create_settings_auto_height_text_edit(
+            form_host,
+            show_newlines=self.show_text_newlines_checkbox.isChecked(),
+        )
         self.dynamic_input.setPlaceholderText(tr("settings.dynamic_placeholder", config=config))
         self.dynamic_input.setPlainText(self.config.get("dynamic_instructions", ""))
+        adjust = getattr(self.dynamic_input, "_auto_height_adjust", None)
+        if adjust is not None:
+            adjust()
         layout.addWidget(dynamic_shell)
 
         layout.addWidget(QLabel(f"<br><b>{tr('settings.shortcuts', config=config)}</b>"))
-        self.shortcuts_panel = QLabel(
-            panel_content_html(tr("settings.shortcuts.body", config=config)),
+        self.shortcuts_panel_shell = create_settings_panel(
             form_host,
+            panel_content_html(tr("settings.shortcuts.body", config=config)),
         )
-        self.shortcuts_panel.setStyleSheet(panel_widget_stylesheet())
-        layout.addWidget(self.shortcuts_panel)
+        self.shortcuts_panel = self.shortcuts_panel_shell._settings_panel_label
+        layout.addWidget(self.shortcuts_panel_shell)
 
         scroll.setWidget(form_host)
         page_layout = QVBoxLayout(page)
@@ -600,16 +683,16 @@ class SettingsDialog(QDialog):
         scroll = QScrollArea(page)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        apply_native_page_scroll_theme(scroll)
+        apply_native_page_scroll_theme(scroll, allow_horizontal_scroll=False)
 
         host = QWidget(scroll)
         layout = QVBoxLayout(host)
         layout.setContentsMargins(4, 4, 4, 4)
 
         layout.addWidget(QLabel(f"<b>{tr('settings.restore.title', config=config)}</b>"))
-        self.restore_hint_label = QLabel(
-            muted_hint_html(tr("settings.restore.hint", config=config)),
+        self.restore_hint_label = create_settings_hint_label(
             host,
+            tr("settings.restore.hint", config=config),
         )
         layout.addWidget(self.restore_hint_label)
         layout.addWidget(QLabel("<br>"))
@@ -635,16 +718,16 @@ class SettingsDialog(QDialog):
         scroll = QScrollArea(page)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        apply_native_page_scroll_theme(scroll)
+        apply_native_page_scroll_theme(scroll, allow_horizontal_scroll=False)
 
         host = QWidget(scroll)
         layout = QVBoxLayout(host)
         layout.setContentsMargins(4, 4, 4, 4)
 
         layout.addWidget(QLabel(f"<b>{tr('settings.warnings.title', config=config)}</b>"))
-        self.restore_warnings_hint_label = QLabel(
-            muted_hint_html(tr("settings.warnings.hint", config=config)),
+        self.restore_warnings_hint_label = create_settings_hint_label(
             host,
+            tr("settings.warnings.hint", config=config),
         )
         layout.addWidget(self.restore_warnings_hint_label)
         layout.addWidget(QLabel("<br>"))
@@ -668,155 +751,236 @@ class SettingsDialog(QDialog):
         config = self.config
         page = QWidget(self)
         scroll = QScrollArea(page)
-        self._advanced_page_scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        apply_native_page_scroll_theme(scroll)
+        apply_native_page_scroll_theme(scroll, allow_horizontal_scroll=False)
 
         host = QWidget(scroll)
+        host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         layout = QVBoxLayout(host)
         layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(SETTINGS_SECTION_INNER_SPACING)
 
-        layout.addWidget(QLabel(f"<b>{tr('settings.advanced.title', config=config)}</b>"))
+        layout.addWidget(create_settings_section_label(host, tr("settings.advanced.title", config=config)))
         layout.addWidget(
-            QLabel(muted_hint_html(tr("settings.advanced.hint", config=config)), host)
+            create_settings_hint_label(host, tr("settings.advanced.hint", config=config))
         )
-        layout.addWidget(QLabel("<br>"))
+        layout.addSpacing(SETTINGS_SECTION_GAP)
 
-        layout.addWidget(QLabel(f"<b>{tr('settings.prompt_optimize_user', config=config)}</b>"))
+        layout.addWidget(create_settings_section_label(host, tr("settings.prompt_optimize_user", config=config)))
         layout.addWidget(
-            QLabel(muted_hint_html(tr("settings.prompt_optimize_user.hint", config=config)), host)
+            create_settings_hint_label(host, tr("settings.prompt_optimize_user.hint", config=config))
         )
-        optimize_prompt_shell, self.prompt_optimize_user_input = create_settings_text_edit(host)
-        self.prompt_optimize_user_input.setMinimumHeight(100)
+        optimize_prompt_shell, self.prompt_optimize_user_input = create_settings_auto_height_text_edit(
+            host,
+            show_newlines=self.show_text_newlines_checkbox.isChecked(),
+        )
         self.prompt_optimize_user_input.setPlainText(effective_optimize_user_prompt(config))
         layout.addWidget(optimize_prompt_shell)
 
-        layout.addWidget(QLabel(f"<br><b>{tr('settings.prompt_chat_addon', config=config)}</b>"))
+        layout.addSpacing(SETTINGS_SECTION_GAP)
+        layout.addWidget(create_settings_section_label(host, tr("settings.prompt_chat_addon", config=config)))
         layout.addWidget(
-            QLabel(muted_hint_html(tr("settings.prompt_chat_addon.hint", config=config)), host)
+            create_settings_hint_label(host, tr("settings.prompt_chat_addon.hint", config=config))
         )
-        chat_addon_shell, self.prompt_chat_addon_input = create_settings_text_edit(host)
-        self.prompt_chat_addon_input.setMinimumHeight(180)
+        chat_addon_shell, self.prompt_chat_addon_input = create_settings_auto_height_text_edit(
+            host,
+            show_newlines=self.show_text_newlines_checkbox.isChecked(),
+        )
         self.prompt_chat_addon_input.setPlainText(effective_chat_system_addon(config))
         layout.addWidget(chat_addon_shell)
 
-        layout.addWidget(QLabel(f"<br><b>{tr('settings.prompt_dynamic_rules_prefix', config=config)}</b>"))
+        layout.addSpacing(SETTINGS_SECTION_GAP)
         layout.addWidget(
-            QLabel(
-                muted_hint_html(tr("settings.prompt_dynamic_rules_prefix.hint", config=config)),
+            create_settings_section_label(host, tr("settings.prompt_dynamic_rules_prefix", config=config))
+        )
+        layout.addWidget(
+            create_settings_hint_label(
                 host,
+                tr("settings.prompt_dynamic_rules_prefix.hint", config=config),
             )
         )
-        dynamic_prefix_shell, self.prompt_dynamic_rules_prefix_input = create_settings_text_edit(host)
-        self.prompt_dynamic_rules_prefix_input.setMinimumHeight(70)
+        dynamic_prefix_shell, self.prompt_dynamic_rules_prefix_input = create_settings_auto_height_text_edit(
+            host,
+            show_newlines=self.show_text_newlines_checkbox.isChecked(),
+        )
         self.prompt_dynamic_rules_prefix_input.setPlainText(effective_dynamic_rules_prefix(config))
         layout.addWidget(dynamic_prefix_shell)
 
+        layout.addSpacing(SETTINGS_SECTION_GAP)
         wrapper_title_row = QWidget(host)
-        wrapper_title_row.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        apply_settings_icon_row_height(wrapper_title_row)
         wrapper_header = QHBoxLayout(wrapper_title_row)
         wrapper_header.setContentsMargins(0, 0, 0, 0)
-        wrapper_header.setSpacing(4)
-        wrapper_header.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        wrapper_header.setSpacing(SETTINGS_SECTION_INNER_SPACING)
+        row_align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         self._wrapper_context_label = QLabel(
             f"<b>{tr('settings.prompt_chat_context', config=config)}</b>",
             wrapper_title_row,
         )
+        self._wrapper_context_label.setContentsMargins(0, 0, 0, 0)
         self._wrapper_context_label.setSizePolicy(
             QSizePolicy.Policy.Minimum,
             QSizePolicy.Policy.Preferred,
         )
-        wrapper_header.addWidget(self._wrapper_context_label)
+        wrapper_header.addWidget(self._wrapper_context_label, 0, row_align)
         self.btn_wrapper_context_help = _make_info_button(wrapper_title_row, config)
-        self.btn_wrapper_context_help.setSizePolicy(
-            QSizePolicy.Policy.Fixed,
-            QSizePolicy.Policy.Fixed,
-        )
         self.btn_wrapper_context_help.clicked.connect(self._open_wrapper_context_help)
-        wrapper_header.addWidget(self.btn_wrapper_context_help)
+        wrapper_header.addWidget(self.btn_wrapper_context_help, 0, row_align)
         wrapper_header.addStretch(1)
+        layout.addWidget(wrapper_title_row)
         layout.addWidget(
-            wrapper_title_row,
-            0,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+            create_settings_hint_label(host, tr("settings.prompt_chat_context.hint", config=config))
         )
-        layout.addWidget(
-            QLabel(muted_hint_html(tr("settings.prompt_chat_context.hint", config=config)), host)
-        )
+        layout.addSpacing(SETTINGS_SECTION_INNER_SPACING)
 
-        self._wrapper_import_warning_banner = QWidget(host)
-        self._wrapper_import_warning_banner.setObjectName("settingsStaleBanner")
-        self._wrapper_import_warning_banner.setSizePolicy(
-            QSizePolicy.Policy.Fixed,
-            QSizePolicy.Policy.Fixed,
+        self.wrapper_sections_editor = WrapperSectionsEditor(
+            host,
+            show_newlines=self.show_text_newlines_checkbox.isChecked(),
         )
-        warning_layout = QHBoxLayout(self._wrapper_import_warning_banner)
-        warning_layout.setContentsMargins(0, 0, 0, 0)
-        warning_layout.setSpacing(0)
-        self._wrapper_import_warning_text = QLabel(self._wrapper_import_warning_banner)
-        self._wrapper_import_warning_text.setObjectName("settingsStaleBannerText")
-        self._wrapper_import_warning_text.setWordWrap(True)
-        self._wrapper_import_warning_text.setSizePolicy(
-            QSizePolicy.Policy.Ignored,
-            QSizePolicy.Policy.Minimum,
-        )
-        warning_layout.addWidget(self._wrapper_import_warning_text, 1)
-        self._wrapper_import_warning_close = QPushButton(self._wrapper_import_warning_banner)
-        self._wrapper_import_warning_close.setObjectName("settingsStaleBannerClose")
-        self._wrapper_import_warning_close.setFixedSize(28, 28)
-        self._wrapper_import_warning_close.setText(tr("chat.settings_stale.dismiss", config=config))
-        self._wrapper_import_warning_close.clicked.connect(self._dismiss_wrapper_import_warning_banner)
-        warning_layout.addWidget(
-            self._wrapper_import_warning_close,
-            0,
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
-        )
-        self._wrapper_import_warning_banner.setVisible(False)
-        self._wrapper_import_warning_banner.setStyleSheet(settings_stale_banner_stylesheet())
-        layout.addWidget(
-            self._wrapper_import_warning_banner,
-            0,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-        )
+        self.wrapper_sections_editor.load_from_config(config)
+        layout.addWidget(self.wrapper_sections_editor)
 
-        context_prompt_shell, self.prompt_chat_context_input = create_settings_text_edit(host)
-        self.prompt_chat_context_input.setMinimumHeight(100)
-        self.prompt_chat_context_input.setPlainText(effective_chat_context_wrapper(config))
-        self.prompt_chat_context_input.textChanged.connect(self._update_wrapper_import_warning_banner)
-        layout.addWidget(context_prompt_shell)
-
+        layout.addSpacing(SETTINGS_SECTION_GAP)
         layout.addWidget(
-            QLabel(f"<br><b>{tr('settings.prompt_card_templates_format', config=config)}</b>")
+            create_settings_section_label(host, tr("settings.mathjax_preview_preamble", config=config))
         )
         layout.addWidget(
-            QLabel(
-                muted_hint_html(tr("settings.prompt_card_templates_format.hint", config=config)),
+            create_settings_hint_label(
                 host,
+                tr("settings.mathjax_preview_preamble.hint", config=config),
             )
         )
-        templates_format_shell, self.prompt_card_templates_format_input = create_settings_text_edit(host)
-        self.prompt_card_templates_format_input.setMinimumHeight(120)
-        self.prompt_card_templates_format_input.setPlainText(
-            effective_card_templates_format_prompt(config)
+        preamble_shell, self.mathjax_preview_preamble_input = create_settings_auto_height_text_edit(
+            host,
+            show_newlines=self.show_text_newlines_checkbox.isChecked(),
         )
-        layout.addWidget(templates_format_shell)
-
-        layout.addWidget(
-            QLabel(f"<br><b>{tr('settings.mathjax_preview_preamble', config=config)}</b>")
-        )
-        layout.addWidget(
-            QLabel(
-                muted_hint_html(tr("settings.mathjax_preview_preamble.hint", config=config)),
-                host,
-            )
-        )
-        preamble_shell, self.mathjax_preview_preamble_input = create_settings_text_edit(host)
-        self.mathjax_preview_preamble_input.setMinimumHeight(120)
         self.mathjax_preview_preamble_input.setPlainText(effective_mathjax_preview_preamble(config))
         layout.addWidget(preamble_shell)
 
-        layout.addStretch(1)
+        layout.addSpacing(SETTINGS_SECTION_GAP)
+        layout.addWidget(create_settings_section_label(host, tr("settings.prompt_cache_enabled", config=config)))
+        layout.addWidget(
+            create_settings_hint_label(host, tr("settings.prompt_cache.hint", config=config))
+        )
+        self.prompt_cache_enabled_checkbox = QCheckBox(
+            tr("settings.prompt_cache_enabled", config=config),
+            host,
+        )
+        self.prompt_cache_enabled_checkbox.setChecked(bool(config.get("prompt_cache_enabled", False)))
+        layout.addWidget(self.prompt_cache_enabled_checkbox)
+
+        ttl_row = QHBoxLayout()
+        ttl_row.addWidget(QLabel(tr("settings.prompt_cache_ttl", config=config), host))
+        ttl_shell, self.prompt_cache_ttl_input = create_settings_spinbox(host)
+        self.prompt_cache_ttl_input.setRange(60, 7 * 24 * 3600)
+        self.prompt_cache_ttl_input.setSingleStep(300)
+        self.prompt_cache_ttl_input.setValue(int(config.get("prompt_cache_ttl_seconds", 3600)))
+        ttl_row.addWidget(ttl_shell)
+        ttl_row.addStretch(1)
+        layout.addLayout(ttl_row)
+
+        min_row = QHBoxLayout()
+        min_row.addWidget(QLabel(tr("settings.prompt_cache_min_chars", config=config), host))
+        min_chars_shell, self.prompt_cache_min_chars_input = create_settings_spinbox(host)
+        self.prompt_cache_min_chars_input.setRange(256, 1_000_000)
+        self.prompt_cache_min_chars_input.setValue(
+            int(config.get("prompt_cache_min_chars", 8189))
+        )
+        min_row.addWidget(min_chars_shell)
+        min_row.addStretch(1)
+        layout.addLayout(min_row)
+
+        layout.addSpacing(SETTINGS_SECTION_GAP)
+        layout.addWidget(
+            create_settings_section_label(host, tr("settings.prompt_cache_segments", config=config))
+        )
+        layout.addWidget(
+            create_settings_hint_label(
+                host,
+                tr("settings.prompt_cache_segments.hint", config=config),
+            )
+        )
+        segments = prompt_cache_segments(config)
+        self.prompt_cache_segment_checkboxes: dict[str, QCheckBox] = {}
+        for segment_id in PROMPT_CACHE_USER_SEGMENT_ORDER:
+            label = tr(segment_label_key(segment_id), config=config)
+            checkbox = QCheckBox(label, host)
+            checkbox.setChecked(bool(segments.get(segment_id, False)))
+
+            if segment_id == "system_instruction":
+                info_btn = _make_info_button(host, config)
+                info_btn.setToolTip(
+                    tr("settings.prompt_cache.system_instruction_cache_info", config=config)
+                )
+                layout.addWidget(create_settings_checkbox_info_row(host, checkbox, info_btn))
+            else:
+                layout.addWidget(checkbox)
+
+            self.prompt_cache_segment_checkboxes[segment_id] = checkbox
+
+        layout.addSpacing(SETTINGS_SECTION_GAP)
+        layout.addWidget(
+            create_settings_section_label(host, tr("settings.prompt_cache_custom_text", config=config))
+        )
+        layout.addWidget(
+            create_settings_hint_label(
+                host,
+                tr("settings.prompt_cache_custom_text.hint", config=config),
+            )
+        )
+        custom_cache_shell, self.prompt_cache_custom_text_input = create_settings_auto_height_text_edit(
+            host,
+            show_newlines=self.show_text_newlines_checkbox.isChecked(),
+        )
+        self.prompt_cache_custom_text_input.setPlainText(
+            (config.get("prompt_cache_custom_text") or "").strip()
+        )
+        layout.addWidget(custom_cache_shell)
+        custom_cache_btn_row = QHBoxLayout()
+        self.prompt_cache_custom_text_load_btn = QPushButton(
+            tr("settings.prompt_cache_custom_text.load_file", config=config),
+            host,
+        )
+        self.prompt_cache_custom_text_load_btn.clicked.connect(
+            self._load_prompt_cache_custom_text_from_file
+        )
+        custom_cache_btn_row.addWidget(self.prompt_cache_custom_text_load_btn)
+        custom_cache_btn_row.addStretch(1)
+        layout.addLayout(custom_cache_btn_row)
+
+        self.prompt_cache_status_label = QLabel(host)
+        layout.addWidget(self.prompt_cache_status_label)
+        cache_btn_row = QHBoxLayout()
+        self.prompt_cache_extend_btn = QPushButton(tr("settings.prompt_cache.extend", config=config), host)
+        self.prompt_cache_extend_btn.clicked.connect(self._extend_prompt_cache_ttl)
+        self.prompt_cache_clear_btn = QPushButton(tr("settings.prompt_cache.clear", config=config), host)
+        self.prompt_cache_clear_btn.clicked.connect(self._clear_prompt_cache)
+        self.prompt_cache_manage_btn = QPushButton(tr("settings.prompt_cache.manage", config=config), host)
+        self.prompt_cache_manage_btn.clicked.connect(self._open_prompt_cache_manager)
+        cache_btn_row.addWidget(self.prompt_cache_extend_btn)
+        cache_btn_row.addWidget(self.prompt_cache_clear_btn)
+        cache_btn_row.addWidget(self.prompt_cache_manage_btn)
+        cache_btn_row.addStretch(1)
+        layout.addLayout(cache_btn_row)
+
+        billing_link = QLabel(host)
+        billing_link.setTextFormat(Qt.TextFormat.RichText)
+        billing_link.setOpenExternalLinks(True)
+        billing_link.setWordWrap(True)
+        billing_link.setText(
+            muted_hint_html(
+                tr(
+                    "settings.prompt_cache.billing_link",
+                    config=config,
+                    billing_url=GEMINI_AI_STUDIO_BILLING_URL,
+                )
+            )
+        )
+        layout.addWidget(billing_link)
+
+        self._refresh_prompt_cache_status()
+
         scroll.setWidget(host)
         page_layout = QVBoxLayout(page)
         page_layout.setContentsMargins(0, 0, 0, 0)
@@ -852,68 +1016,7 @@ class SettingsDialog(QDialog):
     def _wrapper_warning_config(self) -> dict[str, Any]:
         config = dict(self.config)
         config.update(self._ui_config())
-        config["brain_import_templates"] = self.brain_import_templates_checkbox.isChecked()
-        config["brain_import_css"] = self.brain_import_css_checkbox.isChecked()
         return config
-
-    def _active_wrapper_import_warnings(self) -> list[str]:
-        config = self._wrapper_warning_config()
-        sections: list[str] = []
-        text = self.prompt_chat_context_input.toPlainText()
-        if chat_context_wrapper_missing_placeholders(text):
-            sections.append("required")
-        missing = wrapper_missing_import_placeholders(
-            text,
-            config,
-        )
-        sections.extend(missing)
-        return [section for section in sections if section not in self._wrapper_import_warnings_dismissed]
-
-    def _sync_wrapper_import_warning_banner_size(self) -> None:
-        banner = self._wrapper_import_warning_banner
-        text_label = self._wrapper_import_warning_text
-        close_btn = self._wrapper_import_warning_close
-        banner_width = _WRAPPER_IMPORT_WARNING_BANNER_WIDTH
-        content_width = banner_width - close_btn.width()
-        text_label.setFixedWidth(max(content_width, 1))
-        text_height = text_label.heightForWidth(content_width)
-        banner_height = max(close_btn.height() + 12, text_height + 16)
-        banner.setFixedSize(banner_width, banner_height)
-
-    def _scroll_wrapper_import_warning_to_center(self) -> None:
-        scroll = getattr(self, "_advanced_page_scroll", None)
-        banner = getattr(self, "_wrapper_import_warning_banner", None)
-        if scroll is None or banner is None or not banner.isVisible():
-            return
-        host = scroll.widget()
-        if host is None:
-            return
-        bar = scroll.verticalScrollBar()
-        banner_top = banner.mapTo(host, QPoint(0, 0)).y()
-        banner_center = banner_top + banner.height() // 2
-        target = banner_center - scroll.viewport().height() // 2
-        bar.setValue(max(0, min(target, bar.maximum())))
-
-    def _update_wrapper_import_warning_banner(self) -> None:
-        if not hasattr(self, "_wrapper_import_warning_banner"):
-            return
-        active = self._active_wrapper_import_warnings()
-        if not active:
-            self._wrapper_import_warning_banner.setVisible(False)
-            return
-        was_visible = self._wrapper_import_warning_banner.isVisible()
-        config = self._wrapper_warning_config()
-        self._wrapper_import_warning_text.setText(
-            wrapper_import_warning_text(config, sections=active, scope="settings")
-        )
-        self._sync_wrapper_import_warning_banner_size()
-        self._wrapper_import_warning_banner.setVisible(True)
-        if not was_visible:
-            QTimer.singleShot(0, self._scroll_wrapper_import_warning_to_center)
-
-    def _dismiss_wrapper_import_warning_banner(self) -> None:
-        self._wrapper_import_warnings_dismissed.update(self._active_wrapper_import_warnings())
-        self._update_wrapper_import_warning_banner()
 
     def _on_settings_help_closed(self) -> None:
         self._settings_help_dialog = None
@@ -990,17 +1093,38 @@ class SettingsDialog(QDialog):
         self.brain_message_hint.setText(
             muted_hint_html(tr("settings.brain_message.hint", config=config))
         )
-        self.brain_import_templates_checkbox.setText(
-            tr("settings.brain_import_templates", config=config)
-        )
-        self.brain_import_css_checkbox.setText(tr("settings.brain_import_css", config=config))
+        if hasattr(self, "system_instruction_subtitle"):
+            self.system_instruction_subtitle.setText(
+                muted_hint_html(tr("settings.system_instruction.subtitle", config=config))
+            )
+        if hasattr(self, "instruction_optimize_label"):
+            self.instruction_optimize_label.setText(
+                f"<b>{tr('settings.system_instruction_optimize', config=config)}</b>"
+            )
+        if hasattr(self, "instruction_optimize_subtitle"):
+            self.instruction_optimize_subtitle.setText(
+                muted_hint_html(tr("settings.system_instruction_optimize.subtitle", config=config))
+            )
+        if hasattr(self, "instruction_chat_label"):
+            self.instruction_chat_label.setText(
+                f"<b>{tr('settings.system_instruction_chat', config=config)}</b>"
+            )
+        if hasattr(self, "instruction_chat_subtitle"):
+            self.instruction_chat_subtitle.setText(
+                muted_hint_html(tr("settings.system_instruction_chat.subtitle", config=config))
+            )
         self.dynamic_instructions_hint.setText(
             muted_hint_html(tr("settings.dynamic_instructions.hint", config=config))
+        )
+        self.show_text_newlines_checkbox.setText(
+            tr("settings.show_text_newlines", config=config)
+        )
+        self.show_text_newlines_hint.setText(
+            muted_hint_html(tr("settings.show_text_newlines.hint", config=config))
         )
         self.shortcuts_panel.setText(
             panel_content_html(tr("settings.shortcuts.body", config=config))
         )
-        self.shortcuts_panel.setStyleSheet(panel_widget_stylesheet())
         self.restore_hint_label.setText(
             muted_hint_html(tr("settings.restore.hint", config=config))
         )
@@ -1008,12 +1132,12 @@ class SettingsDialog(QDialog):
             muted_hint_html(tr("settings.warnings.hint", config=config))
         )
         refresh_native_text_edits_in(self)
+        refresh_settings_text_edit_layouts(self)
+        if hasattr(self, "wrapper_sections_editor"):
+            self.wrapper_sections_editor.refresh_layout()
         self._update_api_key_status()
-        if hasattr(self, "_wrapper_import_warning_banner"):
-            self._wrapper_import_warning_banner.setStyleSheet(settings_stale_banner_stylesheet())
-            self._wrapper_import_warning_close.setText(tr("chat.settings_stale.dismiss", config=config))
+        if hasattr(self, "btn_wrapper_context_help"):
             self.btn_wrapper_context_help.setStyleSheet(info_button_stylesheet())
-            self._update_wrapper_import_warning_banner()
         if self._settings_help_dialog is not None:
             self._settings_help_dialog.apply_theme()
 
@@ -1024,6 +1148,9 @@ class SettingsDialog(QDialog):
     def _set_instruction_field_text(self, editor: ScrollAwareTextEdit, text: str) -> None:
         editor.setPlainText(text)
         editor.clear_text_selection()
+        adjust = getattr(editor, "_auto_height_adjust", None)
+        if adjust is not None:
+            adjust()
 
     def _set_all_instruction_fields(self, text: str) -> None:
         for editor in (
@@ -1178,22 +1305,21 @@ class SettingsDialog(QDialog):
         config["thinking_budget_optimize"] = self.thinking_budget_optimize_input.value()
         config["thinking_budget_chat"] = self.thinking_budget_chat_input.value()
         config["chat_streaming"] = self.chat_streaming_checkbox.isChecked()
-        config["chat_prompt_inspection"] = self.chat_prompt_inspection_checkbox.isChecked()
+        config.pop("chat_prompt_inspection", None)
         config.pop("model", None)
         config.pop("thinking_budget", None)
         config["timeout_seconds"] = self.timeout_input.value()
         config["max_retries"] = self.retries_input.value()
         config["max_history_turns"] = self.history_input.value()
-        config["chat_token_warning_threshold"] = self.chat_token_warning_input.value()
+        config["chat_payload_warning_chars"] = self.chat_payload_warning_input.value()
         config["temperature_optimize"] = self.temp_optimize_input.value()
         config["temperature_chat"] = self.temp_chat_input.value()
         config["confirm_before_apply"] = self.confirm_checkbox.isChecked()
+        config["settings_show_text_newlines"] = self.show_text_newlines_checkbox.isChecked()
         brain_message = self.brain_message_input.toPlainText().strip()
         config["brain_import_message"] = normalize_brain_import_message_for_save(
             brain_message, config
         )
-        config["brain_import_templates"] = self.brain_import_templates_checkbox.isChecked()
-        config["brain_import_css"] = self.brain_import_css_checkbox.isChecked()
         instruction_fields = normalize_system_instruction_fields_for_save(
             shared=self.instruction_shared_checkbox.isChecked(),
             shared_text=self.instruction_input.toPlainText(),
@@ -1212,15 +1338,27 @@ class SettingsDialog(QDialog):
         config["prompt_dynamic_rules_prefix"] = normalize_dynamic_rules_prefix_for_save(
             self.prompt_dynamic_rules_prefix_input.toPlainText()
         )
-        config["prompt_chat_context"] = normalize_chat_context_wrapper_for_save(
-            self.prompt_chat_context_input.toPlainText()
+        order, sections, format_guide = self.wrapper_sections_editor.collect()
+        config["prompt_chat_context_order"] = normalize_wrapper_order_for_save(order)
+        config["prompt_chat_context_sections"] = normalize_wrapper_sections_for_save(
+            sections,
+            config=config,
         )
+        config["prompt_chat_context"] = ""
         config["prompt_card_templates_format"] = normalize_card_templates_format_prompt_for_save(
-            self.prompt_card_templates_format_input.toPlainText()
+            format_guide
         )
         config["mathjax_preview_preamble"] = normalize_mathjax_preview_preamble_for_save(
             self.mathjax_preview_preamble_input.toPlainText()
         )
+        config["prompt_cache_enabled"] = self.prompt_cache_enabled_checkbox.isChecked()
+        config["prompt_cache_ttl_seconds"] = self.prompt_cache_ttl_input.value()
+        config["prompt_cache_min_chars"] = self.prompt_cache_min_chars_input.value()
+        config["prompt_cache_custom_text"] = self.prompt_cache_custom_text_input.toPlainText().strip()
+        config["prompt_cache_segments"] = {
+            segment_id: checkbox.isChecked()
+            for segment_id, checkbox in self.prompt_cache_segment_checkboxes.items()
+        }
         for key in DISMISSIBLE_WARNING_KEYS:
             config[key] = bool(config.get(key, False))
         return config
@@ -1298,8 +1436,9 @@ class SettingsDialog(QDialog):
 
     def _enter_advanced_mode(self) -> None:
         self.stack.setCurrentIndex(3)
-        self._update_wrapper_import_warning_banner()
+        self._refresh_prompt_cache_status()
         self._set_subpage_mode("advanced")
+        QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
 
     def _leave_advanced_mode(self) -> None:
         self.stack.setCurrentIndex(0)
@@ -1355,10 +1494,6 @@ class SettingsDialog(QDialog):
             self.chat_streaming_checkbox.setChecked(bool(default_value))
             return
 
-        if key == "chat_prompt_inspection":
-            self.chat_prompt_inspection_checkbox.setChecked(bool(default_value))
-            return
-
         if key == "timeout_seconds":
             self.timeout_input.setValue(int(default_value))
             return
@@ -1371,8 +1506,8 @@ class SettingsDialog(QDialog):
             self.history_input.setValue(int(default_value))
             return
 
-        if key == "chat_token_warning_threshold":
-            self.chat_token_warning_input.setValue(int(default_value))
+        if key == "chat_payload_warning_chars":
+            self.chat_payload_warning_input.setValue(int(default_value))
             return
 
         if key == "temperature_optimize":
@@ -1394,11 +1529,11 @@ class SettingsDialog(QDialog):
             return
 
         if key == "brain_import_templates":
-            self.brain_import_templates_checkbox.setChecked(bool(default_value))
+            self.config["brain_import_templates"] = bool(default_value)
             return
 
         if key == "brain_import_css":
-            self.brain_import_css_checkbox.setChecked(bool(default_value))
+            self.config["brain_import_css"] = bool(default_value)
             return
 
         if key == "system_instruction":
@@ -1449,22 +1584,55 @@ class SettingsDialog(QDialog):
             )
             return
 
-        if key == "prompt_chat_context":
+        if key in {"prompt_chat_context", "prompt_chat_context_order", "prompt_chat_context_sections"}:
             lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
-            self.prompt_chat_context_input.setPlainText(
-                default_chat_context_wrapper({"language": lang})
+            self.wrapper_sections_editor.load_from_config(
+                {
+                    "language": lang,
+                    "prompt_chat_context_order": default_wrapper_section_order(),
+                    "prompt_chat_context_sections": {},
+                    "prompt_card_templates_format": "",
+                }
             )
             return
 
         if key == "prompt_card_templates_format":
             lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
-            self.prompt_card_templates_format_input.setPlainText(
-                default_card_templates_format_prompt({"language": lang})
+            self.wrapper_sections_editor.load_from_config(
+                {
+                    "language": lang,
+                    "prompt_chat_context_order": self._baseline_config.get(
+                        "prompt_chat_context_order",
+                        default_wrapper_section_order(),
+                    ),
+                    "prompt_chat_context_sections": self._baseline_config.get(
+                        "prompt_chat_context_sections",
+                        {},
+                    ),
+                    "prompt_card_templates_format": "",
+                }
             )
             return
 
         if key == "mathjax_preview_preamble":
             self.mathjax_preview_preamble_input.setPlainText("")
+            return
+        if key == "prompt_cache_enabled":
+            self.prompt_cache_enabled_checkbox.setChecked(bool(default_value))
+            return
+        if key == "prompt_cache_ttl_seconds":
+            self.prompt_cache_ttl_input.setValue(int(default_value))
+            return
+        if key == "prompt_cache_min_chars":
+            self.prompt_cache_min_chars_input.setValue(int(default_value))
+            return
+        if key == "prompt_cache_custom_text":
+            self.prompt_cache_custom_text_input.setPlainText("")
+            return
+        if key == "prompt_cache_segments":
+            defaults = default_config_value("prompt_cache_segments")
+            for segment_id, checkbox in self.prompt_cache_segment_checkboxes.items():
+                checkbox.setChecked(bool(defaults.get(segment_id, False)))
             return
 
     def _apply_selected_defaults(self) -> None:
@@ -1498,6 +1666,10 @@ class SettingsDialog(QDialog):
         self._refresh_warning_restore_checkboxes()
         self._leave_restore_warnings_mode()
 
+    def _on_show_text_newlines_toggled(self, checked: bool) -> None:
+        refresh_settings_text_edit_newlines(self, checked)
+        refresh_settings_text_edit_layouts(self)
+
     def _on_language_changed(self) -> None:
         lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
         current_brain = self.brain_message_input.toPlainText().strip()
@@ -1519,16 +1691,10 @@ class SettingsDialog(QDialog):
             self.prompt_dynamic_rules_prefix_input.setPlainText(
                 tr("instructions.dynamic_rules_prefix", lang=lang)
             )
-        current_chat_context = self.prompt_chat_context_input.toPlainText().strip()
-        if is_builtin_chat_context_wrapper(current_chat_context):
-            self.prompt_chat_context_input.setPlainText(
-                tr("instructions.chat_context_wrapper", lang=lang)
-            )
-        current_templates_format = self.prompt_card_templates_format_input.toPlainText().strip()
-        if is_builtin_card_templates_format_prompt(current_templates_format):
-            self.prompt_card_templates_format_input.setPlainText(
-                tr("instructions.card_templates_format", lang=lang)
-            )
+        if is_builtin_wrapper_layout(self._baseline_config):
+            pending = dict(self._baseline_config)
+            pending["language"] = lang
+            self.wrapper_sections_editor.load_from_config(pending)
 
     def _save_and_accept(self) -> None:
         if not self._confirm_save_if_needed():
@@ -1536,8 +1702,70 @@ class SettingsDialog(QDialog):
 
         self.config = self._collect_pending_config()
         save_config(self.config)
+        clear_prompt_cache(config=self.config)
         refresh_chat_from_settings()
         self.accept()
+
+    def _load_prompt_cache_custom_text_from_file(self) -> None:
+        config = self._ui_config()
+        existing = self.prompt_cache_custom_text_input.toPlainText().strip()
+        if existing:
+            confirm = QMessageBox.question(
+                self,
+                tr("settings.prompt_cache_custom_text.load_confirm.title", config=config),
+                tr("settings.prompt_cache_custom_text.load_confirm.message", config=config),
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
+
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            tr("settings.prompt_cache_custom_text.load_file.title", config=config),
+            "",
+            tr("settings.prompt_cache_custom_text.load_file.filter", config=config),
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError as exc:
+            showWarning(
+                tr(
+                    "settings.prompt_cache_custom_text.load_error",
+                    config=config,
+                    error=str(exc),
+                )
+            )
+            return
+
+        self.prompt_cache_custom_text_input.setPlainText(text)
+        custom_checkbox = self.prompt_cache_segment_checkboxes.get("custom_cache_text")
+        if custom_checkbox is not None:
+            custom_checkbox.setChecked(True)
+
+    def _refresh_prompt_cache_status(self) -> None:
+        if not hasattr(self, "prompt_cache_status_label"):
+            return
+        config = self._ui_config() if hasattr(self, "language_combo") else self.config
+        chat_status = prompt_cache_status_text(config, "chat")
+        optimize_status = prompt_cache_status_text(config, "optimize")
+        self.prompt_cache_status_label.setText(f"{chat_status}\n{optimize_status}")
+
+    def _extend_prompt_cache_ttl(self) -> None:
+        config = self._ui_config()
+        extend_prompt_cache_ttl(config=config, purpose="chat")
+        extend_prompt_cache_ttl(config=config, purpose="optimize")
+        self._refresh_prompt_cache_status()
+
+    def _clear_prompt_cache(self) -> None:
+        clear_prompt_cache(config=self._ui_config())
+        self._refresh_prompt_cache_status()
+
+    def _open_prompt_cache_manager(self) -> None:
+        open_prompt_cache_manager(self, config=self._ui_config())
+        self._refresh_prompt_cache_status()
 
     def _open_optimize_prompt_inspection(self) -> None:
         pending = self._collect_pending_config()

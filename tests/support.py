@@ -19,6 +19,7 @@ def _install_anki_mocks() -> None:
         requests_mod.get = MagicMock()
         requests_mod.Timeout = type("Timeout", (Exception,), {})
         requests_mod.ConnectionError = type("ConnectionError", (Exception,), {})
+        requests_mod.RequestException = type("RequestException", (Exception,), {})
         sys.modules["requests"] = requests_mod
 
     if "aqt" in sys.modules:

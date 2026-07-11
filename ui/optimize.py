@@ -9,6 +9,8 @@ from aqt.utils import showInfo, showWarning, tooltip
 from ..config import api_key_configured, is_warning_dismissed, load_config, save_config, uses_default_system_instruction
 from ..gemini_client import GeminiAuthError, GeminiError, GeminiRateLimitError, call_gemini, strip_markdown_fences
 from ..i18n import tr
+from ..prompt_cache import build_prompt_cache_bundle
+from .prompt_cache_confirm import confirm_prompt_cache_recreate_if_needed
 from .preview_dialog import PreviewDialog
 
 _last_undo: dict[int, tuple[int, str]] = {}
@@ -43,6 +45,57 @@ def _apply_optimized_text(editor, field_index: int, original: str, optimized: st
     editor.note.fields[field_index] = optimized
     editor.loadNoteKeepingFocus()
     tooltip(tr("optimize.applied", config=config))
+
+
+def _show_optimize_info(
+    editor,
+    config: dict[str, Any],
+    *,
+    title_key: str,
+    message_key: str,
+    detail_key: str,
+    dismiss_config_key: str,
+    message_kwargs: dict[str, Any] | None = None,
+) -> None:
+    box = QMessageBox(editor.parentWindow)
+    box.setIcon(QMessageBox.Icon.Information)
+    box.setWindowTitle(tr(title_key, config=config))
+    box.setText(tr(message_key, config=config, **(message_kwargs or {})))
+    box.setInformativeText(tr(detail_key, config=config))
+    box.setStandardButtons(QMessageBox.StandardButton.Ok)
+    box.setDefaultButton(QMessageBox.StandardButton.Ok)
+
+    dismiss = QCheckBox(tr("optimize.warning.dismiss", config=config), box)
+    box.setCheckBox(dismiss)
+    box.exec()
+
+    if dismiss.isChecked():
+        updated = load_config()
+        updated[dismiss_config_key] = True
+        save_config(updated)
+
+
+def _notify_optimize_prompt_cache_created(editor, config: dict[str, Any], active) -> None:
+    if is_warning_dismissed(config, "suppress_prompt_cache_created_optimize_notice"):
+        return
+    from ..prompt_cache import prompt_cache_created_stats
+
+    chars, minutes = prompt_cache_created_stats(active)
+    _show_optimize_info(
+        editor,
+        config,
+        title_key="optimize.prompt_cache.created.title",
+        message_key="optimize.prompt_cache.created.message",
+        detail_key="optimize.prompt_cache.created.detail",
+        dismiss_config_key="suppress_prompt_cache_created_optimize_notice",
+        message_kwargs={"chars": chars, "minutes": minutes},
+    )
+
+
+def _schedule_optimize_prompt_cache_created(editor, config: dict[str, Any], active) -> None:
+    mw.taskman.run_on_main(
+        lambda: _notify_optimize_prompt_cache_created(editor, config, active)
+    )
 
 
 def _confirm_optimize_warning(
@@ -139,6 +192,17 @@ def optimize_field_with_gemini(editor) -> None:
     if not _passes_optimize_warnings(editor, config):
         return
 
+    optimize_bundle = build_prompt_cache_bundle(config, purpose="optimize")
+    cache_choice = confirm_prompt_cache_recreate_if_needed(
+        editor.parentWindow,
+        config,
+        optimize_bundle,
+        purpose="optimize",
+    )
+    if cache_choice == "abort":
+        return
+    allow_cache_create = cache_choice != "skip_cache"
+
     tooltip(tr("optimize.in_progress", config=config))
 
     temperature = float(config.get("temperature_optimize", 0.1))
@@ -150,6 +214,12 @@ def optimize_field_with_gemini(editor) -> None:
             temperature=temperature,
             include_meta_rule=False,
             purpose="optimize",
+            allow_prompt_cache_create=allow_cache_create,
+            on_prompt_cache_created=lambda active: _schedule_optimize_prompt_cache_created(
+                editor,
+                config,
+                active,
+            ),
         ),
         lambda future: _handle_optimize_result(future, editor, field_index, original, config),
     )
