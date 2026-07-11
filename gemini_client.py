@@ -175,6 +175,7 @@ def prepare_gemini_request(
     purpose: Purpose,
     cache_session: Any | None = None,
     allow_prompt_cache_create: bool = True,
+    allow_prompt_cache_use: bool = True,
     override_outgoing_payload: str | None = None,
     override_system_instruction: str | None = None,
     override_bundle: Any | None = None,
@@ -200,7 +201,7 @@ def prepare_gemini_request(
         bundle=bundle,
         allow_create=allow_prompt_cache_create,
     )
-    active = ensure_result.active
+    active = ensure_result.active if allow_prompt_cache_use else None
 
     outgoing_text = override_outgoing_payload if override_outgoing_payload is not None else user_text
     if override_outgoing_payload is None and bundle is not None and purpose == "chat" and session is not None:
@@ -585,6 +586,7 @@ def call_gemini(
     purpose: Purpose = "chat",
     cache_session: Any | None = None,
     allow_prompt_cache_create: bool = True,
+    allow_prompt_cache_use: bool = True,
     on_prompt_cache_created: Callable[[Any], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     register_response: Callable[[requests.Response | None], None] | None = None,
@@ -607,6 +609,7 @@ def call_gemini(
         purpose=purpose,
         cache_session=cache_session,
         allow_prompt_cache_create=allow_prompt_cache_create,
+        allow_prompt_cache_use=allow_prompt_cache_use,
         override_outgoing_payload=override_outgoing_payload,
         override_system_instruction=override_system_instruction,
         override_bundle=override_bundle,
@@ -679,6 +682,7 @@ def stream_gemini(
     include_meta_rule: bool = False,
     cache_session: Any | None = None,
     allow_prompt_cache_create: bool = True,
+    allow_prompt_cache_use: bool = True,
     on_prompt_cache_created: Callable[[Any], None] | None = None,
     on_chunk: Callable[[str], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
@@ -704,6 +708,7 @@ def stream_gemini(
         purpose="chat",
         cache_session=cache_session,
         allow_prompt_cache_create=allow_prompt_cache_create,
+        allow_prompt_cache_use=allow_prompt_cache_use,
         override_outgoing_payload=override_outgoing_payload,
         override_system_instruction=override_system_instruction,
         override_bundle=override_bundle,

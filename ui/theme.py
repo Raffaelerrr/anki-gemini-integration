@@ -113,7 +113,10 @@ def get_theme_colors() -> ThemeColors:
 
 
 def muted_hint_html(text: str, *, colors: ThemeColors | None = None) -> str:
+    from .help_icons import expand_help_icons
+
     palette = colors or get_theme_colors()
+    text = expand_help_icons(text)
     return f"<span style='font-size: 11px; color: {palette.text_muted};'>{text}</span>"
 
 
@@ -587,6 +590,8 @@ QToolTip {{
 
 
 _ACTIVE_TOOLTIP_POPUP: QWidget | None = None
+_ACTIVE_TOOLTIP_WIDGET: QWidget | None = None
+INSTRUCTION_TOOLTIP_MAX_WIDTH = 360
 
 
 def apply_widget_tooltip_palette(widget: QWidget) -> None:
@@ -597,18 +602,34 @@ def apply_widget_tooltip_palette(widget: QWidget) -> None:
     widget.setPalette(widget_palette)
 
 
-def show_themed_tooltip(widget: QWidget, global_pos) -> None:
+def _tooltip_anchor_global_pos(widget: QWidget):
+    from aqt.qt import QPoint
+
+    rect = widget.rect()
+    return widget.mapToGlobal(QPoint(rect.center().x(), rect.bottom()))
+
+
+def show_themed_tooltip(widget: QWidget, global_pos=None) -> None:
     from aqt.qt import QLabel, QPoint, Qt
 
-    global _ACTIVE_TOOLTIP_POPUP
-    hide_themed_tooltip()
+    global _ACTIVE_TOOLTIP_POPUP, _ACTIVE_TOOLTIP_WIDGET
 
     text = (widget.toolTip() or "").strip()
     if not text:
         return
 
+    if _ACTIVE_TOOLTIP_POPUP is not None and _ACTIVE_TOOLTIP_WIDGET is widget:
+        return
+
+    hide_themed_tooltip()
+
     colors = get_theme_colors()
-    popup = QLabel(text)
+    popup = QLabel()
+    if "<" in text:
+        popup.setTextFormat(Qt.TextFormat.RichText)
+    popup.setText(text)
+    popup.setWordWrap(True)
+    popup.setMaximumWidth(INSTRUCTION_TOOLTIP_MAX_WIDTH)
     popup.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
     popup.setStyleSheet(
         "QLabel {"
@@ -619,18 +640,25 @@ def show_themed_tooltip(widget: QWidget, global_pos) -> None:
         " }"
     )
     popup.adjustSize()
-    popup.move(global_pos + QPoint(0, 12))
+    anchor = _tooltip_anchor_global_pos(widget) if global_pos is None else global_pos
+    if global_pos is None:
+        popup.move(anchor + QPoint(-popup.width() // 2, 6))
+    else:
+        popup.move(anchor + QPoint(0, 12))
     popup.show()
     _ACTIVE_TOOLTIP_POPUP = popup
+    _ACTIVE_TOOLTIP_WIDGET = widget
 
 
 def hide_themed_tooltip() -> None:
-    global _ACTIVE_TOOLTIP_POPUP
+    global _ACTIVE_TOOLTIP_POPUP, _ACTIVE_TOOLTIP_WIDGET
     if _ACTIVE_TOOLTIP_POPUP is None:
+        _ACTIVE_TOOLTIP_WIDGET = None
         return
     _ACTIVE_TOOLTIP_POPUP.close()
     _ACTIVE_TOOLTIP_POPUP.deleteLater()
     _ACTIVE_TOOLTIP_POPUP = None
+    _ACTIVE_TOOLTIP_WIDGET = None
 
 
 def chat_edit_menu_button_stylesheet() -> str:
@@ -798,7 +826,11 @@ def refresh_native_text_edits_in(host: QWidget) -> None:
 
 def refresh_addon_theme() -> None:
     from .chat_dialog import refresh_chat_theme
+    from .dev_playground_dialog import refresh_dev_playground_theme
     from .settings_dialog import refresh_settings_theme
+    from .themed_windows import refresh_registered_themed_windows
 
     refresh_chat_theme()
     refresh_settings_theme()
+    refresh_dev_playground_theme()
+    refresh_registered_themed_windows()

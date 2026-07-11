@@ -12,15 +12,37 @@ ADDON_DIR = Path(__file__).resolve().parent.parent
 PACKAGE = "Anki_AI_Addon"
 
 
-def _install_anki_mocks() -> None:
-    if "requests" not in sys.modules:
+def _install_requests_mocks() -> None:
+    if "requests" in sys.modules and hasattr(sys.modules["requests"], "exceptions"):
+        return
+
+    requests_mod = sys.modules.get("requests")
+    if requests_mod is None:
         requests_mod = types.ModuleType("requests")
         requests_mod.post = MagicMock()
-        requests_mod.get = MagicMock()
+        requests_mod.get = MagicMock(return_value=MagicMock(
+            ok=True,
+            status_code=200,
+            text="",
+            json=MagicMock(return_value={"cachedContents": []}),
+        ))
+        requests_mod.delete = MagicMock(return_value=MagicMock(ok=True, status_code=200, text=""))
         requests_mod.Timeout = type("Timeout", (Exception,), {})
         requests_mod.ConnectionError = type("ConnectionError", (Exception,), {})
         requests_mod.RequestException = type("RequestException", (Exception,), {})
         sys.modules["requests"] = requests_mod
+
+    requests_exceptions = types.ModuleType("requests.exceptions")
+    requests_exceptions.ChunkedEncodingError = type("ChunkedEncodingError", (Exception,), {})
+    requests_exceptions.ConnectionError = type("ConnectionError", (Exception,), {})
+    requests_exceptions.Timeout = requests_mod.Timeout
+    requests_exceptions.RequestException = requests_mod.RequestException
+    requests_mod.exceptions = requests_exceptions
+    sys.modules["requests.exceptions"] = requests_exceptions
+
+
+def _install_anki_mocks() -> None:
+    _install_requests_mocks()
 
     if "aqt" in sys.modules:
         return
@@ -54,17 +76,50 @@ def _install_anki_mocks() -> None:
         WindowModality = _Enum(NonModal=0)
         ScrollBarPolicy = _Enum(ScrollBarAlwaysOff=0, ScrollBarAsNeeded=1)
         FocusPolicy = _Enum(StrongFocus=1)
+        FocusReason = _Enum(OtherFocusReason=1)
         Key = _Enum(Key_Return=16777220, Key_Enter=16777221)
         KeyboardModifier = _Enum(ShiftModifier=1)
         MatchFlag = _Enum(MatchContains=1)
         CaseSensitivity = _Enum(CaseInsensitive=0)
+        TextFormat = _Enum(RichText=1)
+        AspectRatioMode = _Enum(IgnoreAspectRatio=1)
+        TransformationMode = _Enum(SmoothTransformation=1)
+
+    class _DocumentStub:
+        def setDocumentMargin(self, *args, **kwargs):
+            return None
+
+    class _ScrollBarStub:
+        def setValue(self, *args, **kwargs):
+            return None
+
+        def maximum(self):
+            return 0
+
+    class _Signal:
+        def connect(self, *args, **kwargs):
+            return None
+
+    _SIGNAL_NAMES = frozenset(
+        {
+            "clicked",
+            "toggled",
+            "finished",
+            "timeout",
+            "textChanged",
+            "textEdited",
+            "valueChanged",
+            "currentTextChanged",
+        }
+    )
 
     class _Stub:
         EchoMode = _Enum(Password=1)
         DialogCode = _Enum(Rejected=0, Accepted=1)
-        LineWrapMode = _Enum(NoWrap=0)
+        LineWrapMode = _Enum(NoWrap=0, WidgetWidth=1)
         MoveOperation = _Enum(End=0)
         MoveMode = _Enum(KeepAnchor=1)
+        WrapMode = _Enum(WrapAtWordBoundaryOrAnywhere=1)
 
         def __init__(self, *args, **kwargs):
             pass
@@ -96,6 +151,87 @@ def _install_anki_mocks() -> None:
 
         def setToolTip(self, *args, **kwargs):
             return None
+
+        def setObjectName(self, *args, **kwargs):
+            return None
+
+        def objectName(self):
+            return ""
+
+        def __getattr__(self, name):
+            if name.startswith("_"):
+                raise AttributeError(name)
+            if name in _SIGNAL_NAMES:
+                signal = _Signal()
+                setattr(self, name, signal)
+                return signal
+
+            def _noop(*args, **kwargs):
+                return None
+
+            return _noop
+
+        def document(self):
+            return _DocumentStub()
+
+        def verticalScrollBar(self):
+            return _ScrollBarStub()
+
+        def fontMetrics(self):
+            return QFontMetricsF()
+
+        def sizeHint(self):
+            return QSize()
+
+        def findChildren(self, *args, **kwargs):
+            return []
+
+        def setLineWrapMode(self, *args, **kwargs):
+            return None
+
+        def setWordWrapMode(self, *args, **kwargs):
+            return None
+
+    class _TextEditStub(_Stub):
+        LineWrapMode = _Enum(NoWrap=0, WidgetWidth=1)
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._text = ""
+
+        def toPlainText(self):
+            return self._text
+
+        def setPlainText(self, text):
+            self._text = text
+
+        def clear(self):
+            self._text = ""
+
+        def setReadOnly(self, *args, **kwargs):
+            return None
+
+    class _PlainTextEditStub(_TextEditStub):
+        def appendPlainText(self, text):
+            self._text += text
+
+    class QIcon(_Stub):
+        @staticmethod
+        def fromTheme(*args, **kwargs):
+            return QIcon()
+
+    class QFileDialog(_Stub):
+        @staticmethod
+        def getOpenFileName(*args, **kwargs):
+            return ("", "")
+
+        @staticmethod
+        def getSaveFileName(*args, **kwargs):
+            return ("", "")
+
+    class QTextOption(_Stub):
+        Flag = _Enum(ShowLineAndParagraphSeparators=1)
+        WrapMode = _Enum(WrapAtWordBoundaryOrAnywhere=1)
 
     class _CheckBoxStub(_Stub):
         def __init__(self, *args, **kwargs):
@@ -133,13 +269,14 @@ def _install_anki_mocks() -> None:
             return False
 
     class QMessageBox(_Stub):
-        Icon = _Enum(Warning=1)
-        StandardButton = _Enum(Ok=1, Cancel=2)
+        Icon = _Enum(Warning=1, Question=2)
+        StandardButton = _Enum(Ok=1, Cancel=2, Yes=4, No=8)
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self._exec_result = QMessageBox.StandardButton.Ok
             self._dismiss_checkbox = _CheckBoxStub()
+            self._buttons: dict[int, _Stub] = {}
 
         def setIcon(self, *args, **kwargs):
             return None
@@ -162,14 +299,73 @@ def _install_anki_mocks() -> None:
         def setCheckBox(self, checkbox):
             self._dismiss_checkbox = checkbox
 
+        def button(self, role):
+            if role not in self._buttons:
+                self._buttons[role] = _Stub()
+            return self._buttons[role]
+
         def exec(self):
             return self._exec_result
 
     class QSizePolicy(_Stub):
-        Policy = _Enum(Minimum=1, Fixed=2)
+        Policy = _Enum(Minimum=1, Fixed=2, Preferred=3, Expanding=4)
+
+    class QSize(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            self._w = 16
+            self._h = 16
+
+        def width(self):
+            return self._w
+
+        def height(self):
+            return self._h
+
+        def setWidth(self, w):
+            self._w = w
+
+        def setHeight(self, h):
+            self._h = h
+
+    class QPen(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def setColor(self, *args, **kwargs):
+            return None
+
+        def setWidthF(self, *args, **kwargs):
+            return None
+
+    class QStyle(_Stub):
+        PM_ScrollBarExtent = 1
+        PixelMetric = _Enum(PM_ScrollBarExtent=1)
+        StandardPixmap = _Enum(SP_ArrowUp=1, SP_ArrowDown=2)
+
+        def pixelMetric(self, metric):
+            return 14
+
+        def standardPixmap(self, pixmap):
+            return QIcon()
+
+    class _ApplicationStub(_Stub):
+        @staticmethod
+        def instance():
+            return _ApplicationStub()
+
+        def style(self):
+            return QStyle()
+
+        def primaryScreen(self):
+            return _ScreenStub()
+
+    class _ScreenStub(_Stub):
+        def devicePixelRatio(self):
+            return 1.0
 
     for name, cls in (
-        ("QApplication", _Stub),
+        ("QApplication", _ApplicationStub),
         ("QCheckBox", _CheckBoxStub),
         ("QCloseEvent", _Stub),
         ("QDialog", _Stub),
@@ -179,24 +375,200 @@ def _install_anki_mocks() -> None:
         ("QLabel", _Stub),
         ("QLineEdit", _LineEditStub),
         ("QObject", _Stub),
+        ("QPlainTextEdit", _PlainTextEditStub),
         ("QPushButton", _Stub),
+        ("QResizeEvent", _Stub),
         ("QScrollArea", _Stub),
-        ("QSize", _Stub),
+        ("QScrollBar", _ScrollBarStub),
+        ("QShowEvent", _Stub),
+        ("QSize", QSize),
         ("QSpinBox", _Stub),
         ("QStackedWidget", _Stub),
         ("QTextBrowser", _Stub),
         ("QTextCursor", _Stub),
-        ("QTextEdit", _Stub),
+        ("QTextEdit", _TextEditStub),
+        ("QToolButton", _Stub),
         ("QUrl", _Stub),
         ("QVBoxLayout", _Stub),
         ("QWidget", _Stub),
         ("QAction", _Stub),
+        ("QPoint", _Stub),
     ):
         setattr(aqt_qt, name, cls)
 
-    class _Signal:
-        def connect(self, *args, **kwargs):
+    aqt_qt.QIcon = QIcon
+    aqt_qt.QFileDialog = QFileDialog
+    aqt_qt.QTextOption = QTextOption
+
+    class QFont(_Stub):
+        class StyleHint:
+            Monospace = 1
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def setStyleHint(self, *args, **kwargs):
             return None
+
+    class QFontMetricsF(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def horizontalAdvance(self, text):
+            return len(str(text)) * 8
+
+        def height(self):
+            return 14
+
+    class QPainter(_Stub):
+        class RenderHint:
+            Antialiasing = 1
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def setRenderHint(self, *args, **kwargs):
+            return None
+
+        def fillRect(self, *args, **kwargs):
+            return None
+
+        def drawPixmap(self, *args, **kwargs):
+            return None
+
+        def end(self):
+            return None
+
+    class QPixmap(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def fill(self, *args, **kwargs):
+            return None
+
+        def devicePixelRatio(self):
+            return 1.0
+
+        def setDevicePixelRatio(self, *args, **kwargs):
+            return None
+
+        def size(self):
+            return QSize()
+
+        def isNull(self):
+            return False
+
+        def width(self):
+            return 16
+
+        def height(self):
+            return 16
+
+        def toImage(self):
+            return QImage()
+
+    class QRectF(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+    class QTransform(_Stub):
+        @staticmethod
+        def fromScale(*args, **kwargs):
+            return QTransform()
+
+    class QHeaderView(_Stub):
+        class ResizeMode:
+            ResizeToContents = 0
+            Stretch = 1
+
+        def setSectionResizeMode(self, *args, **kwargs):
+            return None
+
+    class QTableWidget(_Stub):
+        class EditTrigger:
+            NoEditTriggers = 0
+
+        class SelectionBehavior:
+            SelectRows = 0
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._rows = 0
+
+        def setHorizontalHeaderLabels(self, *args, **kwargs):
+            return None
+
+        def horizontalHeader(self):
+            return QHeaderView()
+
+        def verticalHeader(self):
+            return QHeaderView()
+
+        def setEditTriggers(self, *args, **kwargs):
+            return None
+
+        def setSelectionBehavior(self, *args, **kwargs):
+            return None
+
+        def setRowCount(self, count):
+            self._rows = count
+
+        def rowCount(self):
+            return self._rows
+
+        def setItem(self, *args, **kwargs):
+            return None
+
+    class QTableWidgetItem(_Stub):
+        pass
+
+    class QByteArray(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            self._data = b"stub"
+
+        def data(self):
+            return self._data
+
+        def __bytes__(self):
+            return self._data
+
+    class QImage(_Stub):
+        def save(self, buffer, fmt):
+            return True
+
+    class QIODevice(_Stub):
+        class OpenModeFlag:
+            WriteOnly = 1
+
+    class QBuffer(QIODevice):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+        def open(self, *args, **kwargs):
+            return True
+
+        def close(self):
+            return None
+
+        def data(self):
+            return QByteArray()
+
+    aqt_qt.QFont = QFont
+    aqt_qt.QFontMetricsF = QFontMetricsF
+    aqt_qt.QPainter = QPainter
+    aqt_qt.QPixmap = QPixmap
+    aqt_qt.QRectF = QRectF
+    aqt_qt.QTransform = QTransform
+    aqt_qt.QHeaderView = QHeaderView
+    aqt_qt.QTableWidget = QTableWidget
+    aqt_qt.QTableWidgetItem = QTableWidgetItem
+    aqt_qt.QByteArray = QByteArray
+    aqt_qt.QIODevice = QIODevice
+    aqt_qt.QBuffer = QBuffer
+    aqt_qt.QImage = QImage
+    aqt_qt.QPen = QPen
+    aqt_qt.QStyle = QStyle
 
     class _TimerStub(_Stub):
         def __init__(self, *args, **kwargs):
@@ -340,6 +712,39 @@ def _install_anki_mocks() -> None:
     aqt_qt.QCompleter = QCompleter
     aqt_qt.QStringListModel = QStringListModel
     aqt_qt.Qt = Qt
+
+    class QBrush(_Stub):
+        pass
+
+    class QEvent(_Stub):
+        class Type:
+            Wheel = 31
+            Close = 19
+
+    class QDialogButtonBox(_Stub):
+        StandardButton = _Enum(Ok=1, Cancel=2, Save=2, Close=4)
+
+    class QGuiApplication(_ApplicationStub):
+        @staticmethod
+        def applicationDisplayName():
+            return "Anki"
+
+    for extra_name, extra_cls in (
+        ("QBrush", QBrush),
+        ("QDialogButtonBox", QDialogButtonBox),
+        ("QEvent", QEvent),
+        ("QGuiApplication", QGuiApplication),
+        ("QKeyEvent", _Stub),
+        ("QKeySequence", _Stub),
+        ("QMenu", _Stub),
+        ("QPointF", _Stub),
+        ("QSizeF", _Stub),
+        ("QSplitter", _Stub),
+        ("QTextCharFormat", _Stub),
+        ("QTextFormat", type("QTextFormat", (_Stub,), {"UserObject": 1, "UserProperty": 2})),
+        ("QTextObjectInterface", type("QTextObjectInterface", (), {})),
+    ):
+        setattr(aqt_qt, extra_name, extra_cls)
 
     aqt_utils = types.ModuleType("aqt.utils")
     aqt_utils.showInfo = MagicMock()

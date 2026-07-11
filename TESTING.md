@@ -8,7 +8,7 @@ This add-on uses three layers of tests. Run them at different times depending on
 |------|---------|----------------|
 | After most code changes | `py tests/test_offline.py` | Logic, config, API payloads, mocks (no Anki, no network) |
 | On every push to GitHub | CI runs the same offline suite automatically | Same as above |
-| Before a release / Reddit post | `py tests/test_live_api.py` | One real call to Google Gemini |
+| Before a release / Reddit post | `py tests/test_live_api.py` | Real calls to Google Gemini (4 checks when keyed) |
 | After UI changes | Manual checklist in Anki | Buttons, scroll, theme (see README) |
 
 ---
@@ -100,21 +100,48 @@ py tests/test_live_api.py
 
 Without a key, tests are **skipped** (exit code 0) — that is expected in CI.
 
-**Run before:** tagging a release, posting on Reddit, or after changing API URLs, auth headers, or model resolution.
+With a key, the suite runs four checks: optimize call, model list, streaming chat, and prompt-cache create/use/clear (short TTL; remote cache is deleted in teardown).
+
+**Cost note:** the cache test uploads ~8K characters once per run (~0.03¢ on paid tier at typical rates). The other three live tests together are much cheaper (~0.005¢).
+
+**Run before:** tagging a release, posting on Reddit, or after changing API URLs, auth headers, model resolution, or prompt-cache HTTP helpers.
 
 ---
 
 ## 4. Manual Anki smoke tests
 
-Automated tests cannot click editor buttons or verify scroll behavior. After UI work, do a short manual pass in Anki (optimize, chat, settings save, restore defaults).
+Automated tests cannot click editor buttons or verify scroll behavior. After UI work, run this checklist in Anki.
 
-### Chat (after import / preview changes)
+### Global
 
-1. Open a note → **brain icon** — fields appear in the preview above the chat; edit a field and send with **Include note context** checked.
-2. **Edit wrapper** — wrapper editor appears; invalid placeholders show a warning; uncheck saves the template for the session.
-3. Eye icon — hides/shows the preview without losing edits.
-4. Switch Anki **light/dark** theme — preview labels, text areas, and eye icon remain readable.
-5. Switch add-on language **EN/IT** — checkbox labels, tooltips, and wrapper hints update.
+- [ ] Switch Anki **light/dark** theme — chat, settings, pre-send lens, optimize preview, dev playground, and prompt-cache manager stay readable.
+- [ ] Switch add-on language **EN ↔ IT** — menu labels, settings, chat toolbar, and open dialogs update without restart.
+
+### Optimize
+
+- [ ] Editor **optimize** button — preview dialog opens; Apply writes the field; Undo restores.
+- [ ] Settings → **Inspect optimize prompt** — window opens; Refresh updates content; theme/language changes apply while open.
+
+### Chat
+
+- [ ] Open chat from editor or **Tools → Anki AI: Gemini chat**.
+- [ ] **Brain icon** — imported fields appear in preview; send with **Include note context** checked.
+- [ ] **Lens / inspect prompt** — pre-send or read-only preview opens; cached vs live views switch when cache is active.
+- [ ] **Modify prompt before send** (if enabled) — pre-send dialog blocks send until confirmed.
+- [ ] Eye icon — hides/shows preview without losing edits.
+- [ ] **Edit wrapper** — invalid placeholders show a warning; session template persists when unchecked.
+
+### Settings
+
+- [ ] Save settings — values persist after reopening the dialog.
+- [ ] **Restore defaults** on a single field — only that field resets.
+- [ ] **Prompt cache manager** — lists remote caches when API key is set; delete/orphan actions work.
+- [ ] Settings help (?) icons — tooltips readable in both themes.
+
+### Dev playground
+
+- [ ] **Tools → Anki AI: Dev playground** — mock replies without billing; **Reset mock state** clears in-memory caches.
+- [ ] Turn mock mode **off** before expecting real Gemini responses.
 
 ---
 

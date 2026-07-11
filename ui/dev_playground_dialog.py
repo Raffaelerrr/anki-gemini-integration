@@ -20,29 +20,25 @@ from ..dev_mock import (
     reset_dev_mock_state,
     set_dev_mock_log_callback,
 )
+from ..i18n import tr
 from .chat_dialog import open_chat
-from .theme import apply_native_text_edit_surface_theme
+from .theme import apply_native_text_edit_surface_theme, get_theme_colors
 
 
 class DevPlaygroundDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Anki AI — Dev playground")
+        self._config = load_config()
+        self.setWindowTitle(tr("dev.playground.title", config=self._config))
         self.setMinimumSize(560, 420)
         self.resize(620, 480)
 
         root = QVBoxLayout(self)
-        intro = QLabel(
-            "<b>Dev mock mode</b> intercepts Gemini API calls and prompt-cache HTTP requests. "
-            "Use chat, optimize, and caching as usual — nothing is billed.<br><br>"
-            "Mock replies are labeled <code>[Dev mock]</code>. Remote caches live in memory only "
-            "and reset when Anki closes (or when you click <b>Reset mock state</b>).",
-            self,
-        )
-        intro.setWordWrap(True)
-        root.addWidget(intro)
+        self.intro = QLabel(tr("dev.playground.intro", config=self._config), self)
+        self.intro.setWordWrap(True)
+        root.addWidget(self.intro)
 
-        self.mock_checkbox = QCheckBox("Enable dev mock mode (no real Gemini / cache API calls)", self)
+        self.mock_checkbox = QCheckBox(tr("dev.playground.enable", config=self._config), self)
         self.mock_checkbox.setChecked(is_dev_mock_enabled())
         self.mock_checkbox.toggled.connect(self._on_mock_toggled)
         root.addWidget(self.mock_checkbox)
@@ -53,21 +49,25 @@ class DevPlaygroundDialog(QDialog):
         self._refresh_status()
 
         btn_row = QHBoxLayout()
-        self.open_chat_btn = QPushButton("Open chat", self)
+        self.open_chat_btn = QPushButton(tr("dev.playground.open_chat", config=self._config), self)
         self.open_chat_btn.clicked.connect(lambda: open_chat())
         btn_row.addWidget(self.open_chat_btn)
 
-        self.reset_btn = QPushButton("Reset mock state", self)
+        self.reset_btn = QPushButton(tr("dev.playground.reset", config=self._config), self)
         self.reset_btn.clicked.connect(self._reset_mock_state)
         btn_row.addWidget(self.reset_btn)
 
-        self.clear_log_btn = QPushButton("Clear log", self)
+        self.clear_log_btn = QPushButton(tr("dev.playground.clear_log", config=self._config), self)
         self.clear_log_btn.clicked.connect(self._clear_log)
         btn_row.addWidget(self.clear_log_btn)
         btn_row.addStretch(1)
         root.addLayout(btn_row)
 
-        root.addWidget(QLabel("<b>Activity log</b>", self))
+        self.activity_label = QLabel(
+            f"<b>{tr('dev.playground.activity_log', config=self._config)}</b>",
+            self,
+        )
+        root.addWidget(self.activity_label)
         self.log_view = QPlainTextEdit(self)
         self.log_view.setReadOnly(True)
         apply_native_text_edit_surface_theme(self.log_view)
@@ -75,14 +75,14 @@ class DevPlaygroundDialog(QDialog):
 
         close_row = QHBoxLayout()
         close_row.addStretch(1)
-        close_btn = QPushButton("Close", self)
+        close_btn = QPushButton(tr("dev.playground.close", config=self._config), self)
         close_btn.clicked.connect(self.accept)
         close_row.addWidget(close_btn)
         root.addLayout(close_row)
 
         set_dev_mock_log_callback(self._append_log)
         if is_dev_mock_enabled():
-            dev_mock_log("Dev mock mode is active.")
+            dev_mock_log(tr("dev.playground.log.active", config=self._config))
 
     def _append_log(self, message: str) -> None:
         self.log_view.appendPlainText(message)
@@ -93,32 +93,48 @@ class DevPlaygroundDialog(QDialog):
         self.log_view.clear()
 
     def _refresh_status(self) -> None:
+        config = load_config()
+        self._config = config
         if is_dev_mock_enabled():
+            colors = get_theme_colors()
             self.status_label.setText(
-                "<span style='color:#2e7d32;'><b>Active</b> — chat, optimize, prompt caching, "
-                "and model refresh use local mocks. API key is not required.</span>"
+                tr("dev.playground.status.active", config=config, success=colors.success)
             )
         else:
-            self.status_label.setText(
-                "Inactive — normal Gemini API calls. Enable the checkbox above for free local testing."
-            )
+            self.status_label.setText(tr("dev.playground.status.inactive", config=config))
 
     def _on_mock_toggled(self, checked: bool) -> None:
         config = load_config()
         config["dev_mock_mode"] = bool(checked)
         save_config(config)
+        self._config = config
         if checked:
             reset_dev_mock_state()
-            tooltip("Dev mock mode enabled")
-            dev_mock_log("Dev mock mode enabled — local tracking reset.")
+            tooltip(tr("dev.playground.tooltip.enabled", config=config))
+            dev_mock_log(tr("dev.playground.log.enabled", config=config))
         else:
-            tooltip("Dev mock mode disabled")
-            dev_mock_log("Dev mock mode disabled — real API calls will be used.")
+            tooltip(tr("dev.playground.tooltip.disabled", config=config))
+            dev_mock_log(tr("dev.playground.log.disabled", config=config))
         self._refresh_status()
 
     def _reset_mock_state(self) -> None:
         reset_dev_mock_state()
-        tooltip("Mock state reset")
+        tooltip(tr("dev.playground.tooltip.reset", config=load_config()))
+
+    def apply_theme(self) -> None:
+        config = load_config()
+        self._config = config
+        self.setWindowTitle(tr("dev.playground.title", config=config))
+        self.intro.setText(tr("dev.playground.intro", config=config))
+        self.mock_checkbox.setText(tr("dev.playground.enable", config=config))
+        self.open_chat_btn.setText(tr("dev.playground.open_chat", config=config))
+        self.reset_btn.setText(tr("dev.playground.reset", config=config))
+        self.clear_log_btn.setText(tr("dev.playground.clear_log", config=config))
+        self.activity_label.setText(
+            f"<b>{tr('dev.playground.activity_log', config=config)}</b>"
+        )
+        apply_native_text_edit_surface_theme(self.log_view)
+        self._refresh_status()
 
     def closeEvent(self, event) -> None:
         set_dev_mock_log_callback(None)
@@ -131,6 +147,15 @@ _dev_playground_dialog: DevPlaygroundDialog | None = None
 def _clear_dev_playground_dialog_ref(_result: int | None = None) -> None:
     global _dev_playground_dialog
     _dev_playground_dialog = None
+
+
+def refresh_dev_playground_theme() -> None:
+    if _dev_playground_dialog is not None:
+        try:
+            if _dev_playground_dialog.isVisible():
+                _dev_playground_dialog.apply_theme()
+        except RuntimeError:
+            pass
 
 
 def open_dev_playground_dialog(parent: QWidget | None = None) -> DevPlaygroundDialog:

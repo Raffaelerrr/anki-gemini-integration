@@ -20,11 +20,13 @@ from aqt.qt import (
 )
 from ..config import load_config
 from ..i18n import tr
+from ..gemini_client import Purpose, build_optimize_user_text, resolve_model
 from ..prompt_cache import (
     PROMPT_CACHE_SEGMENT_ORDER,
     PromptCacheBundle,
     PromptCacheSessionContext,
     build_live_system_instruction,
+    build_prompt_cache_bundle,
     cached_segment_texts,
     flattened_cache_upload_text,
     rebuild_prompt_cache_bundle,
@@ -43,16 +45,32 @@ from .settings_compact_controls import (
     refresh_settings_text_edit_layouts,
     scroll_area_to_widget,
 )
-from .theme import apply_native_page_scroll_theme, muted_hint_html, strong_label_html
+from .theme import (
+    apply_native_page_scroll_theme,
+    muted_hint_html,
+    refresh_native_text_edits_in,
+    strong_label_html,
+)
+from .themed_windows import register_themed_window
 from .widgets import PlainNoWheelComboBox
 
-_NO_CACHE_EDITABLE_KEYS = frozenset(
+_CHAT_EDITABLE_KEYS = frozenset(
     {
         "prompt.inspect.system_instruction",
         "prompt.inspect.dynamic_rules_prefix",
         "prompt.inspect.dynamic_instructions",
         "prompt.inspect.chat_system_addon",
         "prompt.inspect.next_user_message",
+    }
+)
+
+_OPTIMIZE_EDITABLE_KEYS = frozenset(
+    {
+        "prompt.inspect.system_instruction",
+        "prompt.inspect.dynamic_rules_prefix",
+        "prompt.inspect.dynamic_instructions",
+        "prompt.inspect.optimize_user_prefix",
+        "prompt.inspect.field_content",
     }
 )
 
@@ -72,6 +90,7 @@ class PreSendPromptContext:
     bundle: PromptCacheBundle | None
     model: str
     cache_session: PromptCacheSessionContext | None = None
+    purpose: Purpose = "chat"
 
 
 def _cached_formula_text(bundle: PromptCacheBundle, config: dict[str, Any]) -> str:
@@ -168,11 +187,13 @@ class PreSendPromptDialog(QDialog):
         bundle: PromptCacheBundle | None,
         model: str,
         cache_session: PromptCacheSessionContext | None = None,
+        purpose: Purpose = "chat",
         read_only: bool = False,
         refresh_context: Callable[[], PreSendPromptContext] | None = None,
     ) -> None:
         super().__init__(parent)
         self._read_only = read_only
+        self._purpose = purpose
         self._refresh_context = refresh_context
         self._bundle = bundle
         self._model = model
@@ -199,7 +220,12 @@ class PreSendPromptDialog(QDialog):
             self.setModal(False)
             self.setWindowTitle(tr("prompt.inspect.preview.title", config=config))
         else:
-            self.setWindowTitle(tr("prompt.inspect.pre_send.title", config=config))
+            title_key = (
+                "prompt.inspect.pre_send.optimize.title"
+                if purpose == "optimize"
+                else "prompt.inspect.pre_send.title"
+            )
+            self.setWindowTitle(tr(title_key, config=config))
         self.resize(720, 560)
 
         root = QVBoxLayout(self)
@@ -278,7 +304,9 @@ class PreSendPromptDialog(QDialog):
         else:
             buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
             send_btn = buttons.addButton(
-                tr("chat.send", config=config),
+                tr("optimize.run", config=config)
+                if purpose == "optimize"
+                else tr("chat.send", config=config),
                 QDialogButtonBox.ButtonRole.AcceptRole,
             )
             send_btn.setDefault(True)
@@ -292,6 +320,23 @@ class PreSendPromptDialog(QDialog):
         self._on_stack_page_changed(self._stack.currentIndex())
         self._apply_newline_visibility(config)
         self._schedule_layout_refresh()
+        register_themed_window(self)
+
+    def apply_theme(self) -> None:
+        config = load_config()
+        apply_native_page_scroll_theme(self._live_scroll, allow_horizontal_scroll=False)
+        if self._cache_scroll is not None:
+            apply_native_page_scroll_theme(self._cache_scroll, allow_horizontal_scroll=False)
+        if self._inspection is not None:
+            self._meta_label.setText(
+                muted_hint_html(self._inspection.metadata_text(config))
+            )
+        if hasattr(self, "_refresh_btn"):
+            self._refresh_btn.setText(tr("prompt.inspect.refresh", config=config))
+        self._update_view_switch_button()
+        refresh_native_text_edits_in(self)
+        self._apply_newline_visibility(config)
+        self._schedule_layout_refresh()
 
     def _apply_read_only_mode(self) -> None:
         for editor in self.findChildren(QTextEdit):
@@ -299,6 +344,7 @@ class PreSendPromptDialog(QDialog):
 
     def apply_context(self, context: PreSendPromptContext) -> None:
         config = load_config()
+        self._purpose = context.purpose
         self._inspection = context.inspection
         self._bundle = context.bundle
         self._cache_session = context.cache_session
@@ -319,15 +365,15 @@ class PreSendPromptDialog(QDialog):
             assert self._live_payload_edit is not None
             live_system = build_live_system_instruction(
                 config,
-                purpose="chat",
-                include_meta_rule=True,
+                purpose=self._purpose,
+                include_meta_rule=self._purpose == "chat",
                 bundle=context.bundle,
             )
             self._live_system_edit.setPlainText(live_system)
             self._live_payload_edit.setPlainText(context.outgoing_payload)
             segment_texts = cached_segment_texts(
                 config,
-                purpose="chat",
+                purpose=self._purpose,
                 session=context.cache_session,
                 enabled_segment_ids=context.bundle.enabled_segment_ids,
             )
@@ -390,8 +436,8 @@ class PreSendPromptDialog(QDialog):
 
         live_system = build_live_system_instruction(
             config,
-            purpose="chat",
-            include_meta_rule=True,
+            purpose=self._purpose,
+            include_meta_rule=self._purpose == "chat",
             bundle=bundle,
         )
         for segment in inspection.segments:
@@ -514,7 +560,12 @@ class PreSendPromptDialog(QDialog):
             layout.addWidget(header)
             self._live_jump_targets.append((header, title))
 
-            read_only = self._read_only or segment.label_key not in _NO_CACHE_EDITABLE_KEYS
+            editable_keys = (
+                _OPTIMIZE_EDITABLE_KEYS
+                if self._purpose == "optimize"
+                else _CHAT_EDITABLE_KEYS
+            )
+            read_only = self._read_only or segment.label_key not in editable_keys
             editor = _add_auto_height_editor(
                 layout,
                 host,
@@ -575,7 +626,7 @@ class PreSendPromptDialog(QDialog):
 
         segment_texts = cached_segment_texts(
             config,
-            purpose="chat",
+            purpose=self._purpose,
             session=self._cache_session,
             enabled_segment_ids=bundle.enabled_segment_ids,
         )
@@ -696,7 +747,7 @@ class PreSendPromptDialog(QDialog):
         config = load_config()
         rebuilt = rebuild_prompt_cache_bundle(
             config,
-            purpose="chat",
+            purpose=self._purpose,
             enabled_segment_ids=self._bundle.enabled_segment_ids,
             segment_texts=segment_texts,
             live_system_text=self._bundle.live_system_text,
@@ -767,7 +818,7 @@ class PreSendPromptDialog(QDialog):
             config = load_config()
             rebuilt = rebuild_prompt_cache_bundle(
                 config,
-                purpose="chat",
+                purpose=self._purpose,
                 enabled_segment_ids=bundle.enabled_segment_ids,
                 segment_texts=segment_texts,
                 live_system_text=system_instruction,
@@ -777,9 +828,12 @@ class PreSendPromptDialog(QDialog):
             else:
                 bundle = replace(bundle, live_system_text=system_instruction.strip())
         else:
-            outgoing_payload = self._segment_editors[
-                "prompt.inspect.next_user_message"
-            ].toPlainText()
+            payload_key = (
+                "prompt.inspect.field_content"
+                if self._purpose == "optimize"
+                else "prompt.inspect.next_user_message"
+            )
+            outgoing_payload = self._segment_editors[payload_key].toPlainText()
             system_instruction = _merge_system_from_editors(self._segment_editors)
         self._result = PreSendPromptOverrides(
             outgoing_payload=outgoing_payload,
@@ -805,6 +859,7 @@ def confirm_pre_send_prompt(
         bundle=context.bundle,
         model=context.model,
         cache_session=context.cache_session,
+        purpose=context.purpose,
         read_only=False,
     )
     if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -833,6 +888,7 @@ def open_prompt_preview(
         bundle=context.bundle,
         model=context.model,
         cache_session=context.cache_session,
+        purpose=context.purpose,
         read_only=True,
         refresh_context=refresh_context,
     )

@@ -33,6 +33,19 @@ class TestLiveGeminiApi(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.gc = load_addon_module("gemini_client")
+        cls.pc = load_addon_module("prompt_cache")
+
+    def setUp(self) -> None:
+        self.pc.clear_prompt_cache_store()
+
+    def tearDown(self) -> None:
+        store = self.pc.get_prompt_cache_store("chat")
+        if store.active is not None:
+            try:
+                self.pc.clear_prompt_cache(config=self._cache_live_config(), purpose="chat")
+            except Exception:
+                pass
+        self.pc.clear_prompt_cache_store()
 
     def _live_config(self) -> dict:
         return {
@@ -47,8 +60,28 @@ class TestLiveGeminiApi(unittest.TestCase):
             "temperature_optimize": 0.1,
             "temperature_chat": 0.1,
             "system_instruction_shared": True,
-            "system_instruction": "",
+            "system_instruction": "Reply briefly.",
             "dynamic_instructions": "",
+        }
+
+    def _cache_live_config(self) -> dict:
+        return {
+            **self._live_config(),
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 8192,
+            "prompt_cache_ttl_seconds": 300,
+            "prompt_cache_custom_text": "X" * 8192,
+            "prompt_cache_segments": {
+                "system_instruction": False,
+                "dynamic_rules": False,
+                "chat_system_addon": False,
+                "custom_cache_text": True,
+                "imported_note": False,
+                "card_templates_format_guide": False,
+                "card_templates": False,
+                "notetype_css": False,
+                "context_wrapper": False,
+            },
         }
 
     def test_live_optimize_call_returns_text(self):
@@ -64,6 +97,37 @@ class TestLiveGeminiApi(unittest.TestCase):
     def test_live_list_models_returns_gemini_ids(self):
         models = self.gc.list_gemini_models(config=self._live_config())
         self.assertTrue(any("gemini" in model.casefold() for model in models))
+
+    def test_live_stream_chat_returns_text(self):
+        config = {**self._live_config(), "chat_streaming": True}
+        chunks: list[str] = []
+
+        def on_chunk(text: str) -> None:
+            chunks.append(text)
+
+        result = self.gc.stream_gemini(
+            config=config,
+            user_text="Reply with exactly: STREAM_OK",
+            temperature=0.1,
+            include_meta_rule=False,
+            on_chunk=on_chunk,
+        )
+        combined = result.strip() or "".join(chunks).strip()
+        self.assertTrue(combined)
+
+    def test_live_prompt_cache_create_use_and_clear(self):
+        config = self._cache_live_config()
+        reply = self.gc.call_gemini(
+            config=config,
+            user_text="Reply with exactly: CACHE_OK",
+            temperature=0.1,
+            include_meta_rule=False,
+            purpose="chat",
+            allow_prompt_cache_create=True,
+        )
+        self.assertTrue(reply.strip())
+        store = self.pc.get_prompt_cache_store("chat")
+        self.assertIsNotNone(store.active)
 
 
 class TestLiveApiSkipBehavior(unittest.TestCase):

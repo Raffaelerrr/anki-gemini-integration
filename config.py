@@ -9,6 +9,7 @@ from aqt import mw
 from .constants import (
     DEFAULT_MODEL_CHAT,
     DEFAULT_MODEL_OPTIMIZE,
+    DEFAULT_PROMPT_CACHE_MIN_CHARS,
     DEFAULT_THINKING_BUDGET_CHAT,
     DEFAULT_THINKING_BUDGET_OPTIMIZE,
 )
@@ -28,6 +29,7 @@ _OBSOLETE_CONFIG_KEYS: tuple[str, ...] = (
     "chat_prompt_inspection",
     "prompt_cache_recreate_confirm_usd",
     "prompt_cache_min_tokens",
+    "prompt_cache_import_note_default",
 )
 
 _WRAPPER_RESET_KEYS: tuple[str, ...] = (
@@ -78,8 +80,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "mathjax_preview_preamble": "",
     "prompt_cache_enabled": False,
     "prompt_cache_ttl_seconds": 3600,
-    "prompt_cache_min_chars": 8189,
+    "prompt_cache_min_chars": DEFAULT_PROMPT_CACHE_MIN_CHARS,
     "prompt_cache_custom_text": "",
+    "prompt_cache_custom_text_presets": [],
+    "prompt_cache_active_preset_id": "",
+    "prompt_cache_change_ttl_seconds": 3600,
+    "prompt_cache_recreate_default": "recreate",
+    "prompt_cache_new_conversation_cache_default": "clear",
     "prompt_cache_segments": dict(
         {
             "system_instruction": True,
@@ -95,12 +102,21 @@ DEFAULT_CONFIG: dict[str, Any] = {
     ),
     "chat_send_empty_fields": False,
     "chat_modify_prompt_before_send": False,
+    "chat_download_directory": "",
+    "optimize_modify_prompt_before_send": False,
     "suppress_default_system_instruction_warning": False,
     "suppress_api_key_restore_warning": False,
     "suppress_settings_unsaved_close_warning": False,
     "suppress_settings_save_confirm_warning": True,
     "suppress_settings_cancel_confirm_warning": True,
     "suppress_prompt_cache_created_optimize_notice": False,
+    "suppress_chat_new_conversation_confirm_warning": True,
+    "suppress_prompt_cache_recreate_confirm": False,
+    "suppress_settings_save_cache_clear_warning": False,
+    "suppress_new_conversation_cache_warning": False,
+    "suppress_import_note_cache_warning": False,
+    "suppress_prompt_cache_custom_text_load_confirm": False,
+    "suppress_prompt_cache_delete_orphans_confirm": False,
     "dev_mock_mode": False,
 }
 
@@ -165,8 +181,8 @@ RESTORABLE_SETTING_LABELS: dict[str, str] = {
     "prompt_chat_addon": "settings.prompt_chat_addon",
     "prompt_dynamic_rules_prefix": "settings.prompt_dynamic_rules_prefix",
     "prompt_chat_context": "settings.prompt_chat_context",
-    "prompt_chat_context_order": "settings.prompt_chat_context",
-    "prompt_chat_context_sections": "settings.prompt_chat_context",
+    "prompt_chat_context_order": "settings.prompt_chat_context_order",
+    "prompt_chat_context_sections": "settings.prompt_chat_context_sections",
     "prompt_card_templates_format": "settings.prompt_card_templates_format",
     "mathjax_preview_preamble": "settings.mathjax_preview_preamble",
     "prompt_cache_enabled": "settings.prompt_cache_enabled",
@@ -190,6 +206,13 @@ DISMISSIBLE_WARNING_KEYS: tuple[str, ...] = (
     "suppress_settings_save_confirm_warning",
     "suppress_settings_cancel_confirm_warning",
     "suppress_prompt_cache_created_optimize_notice",
+    "suppress_chat_new_conversation_confirm_warning",
+    "suppress_prompt_cache_recreate_confirm",
+    "suppress_settings_save_cache_clear_warning",
+    "suppress_new_conversation_cache_warning",
+    "suppress_import_note_cache_warning",
+    "suppress_prompt_cache_custom_text_load_confirm",
+    "suppress_prompt_cache_delete_orphans_confirm",
 )
 
 DISMISSIBLE_WARNING_LABELS: dict[str, str] = {
@@ -199,7 +222,27 @@ DISMISSIBLE_WARNING_LABELS: dict[str, str] = {
     "suppress_settings_save_confirm_warning": "warnings.settings_save_confirm",
     "suppress_settings_cancel_confirm_warning": "warnings.settings_cancel_confirm",
     "suppress_prompt_cache_created_optimize_notice": "warnings.prompt_cache_created_optimize",
+    "suppress_chat_new_conversation_confirm_warning": "warnings.chat_new_conversation_confirm",
+    "suppress_prompt_cache_recreate_confirm": "warnings.prompt_cache_recreate_confirm",
+    "suppress_settings_save_cache_clear_warning": "warnings.settings_save_cache_clear",
+    "suppress_new_conversation_cache_warning": "warnings.new_conversation_cache",
+    "suppress_import_note_cache_warning": "warnings.import_note_cache",
+    "suppress_prompt_cache_custom_text_load_confirm": "warnings.prompt_cache_custom_text_load",
+    "suppress_prompt_cache_delete_orphans_confirm": "warnings.prompt_cache_delete_orphans",
 }
+
+DEFAULT_ACTION_SETTINGS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (
+        "prompt_cache_recreate_default",
+        "warnings.default_action.recreate",
+        ("recreate", "skip_cache"),
+    ),
+    (
+        "prompt_cache_new_conversation_cache_default",
+        "warnings.default_action.new_conversation_cache",
+        ("keep", "clear"),
+    ),
+)
 
 
 def default_config_value(key: str) -> Any:
@@ -240,6 +283,34 @@ def _normalize_config(config: dict[str, Any], stored: dict[str, Any] | None = No
         config["prompt_chat_context_order"] = list(
             DEFAULT_CONFIG["prompt_chat_context_order"]
         )
+
+    try:
+        min_chars = int(config.get("prompt_cache_min_chars", 0))
+    except (TypeError, ValueError):
+        min_chars = 0
+    if min_chars == 8189:
+        config["prompt_cache_min_chars"] = DEFAULT_PROMPT_CACHE_MIN_CHARS
+
+    from .prompt_cache_policy import normalize_custom_text_presets
+
+    config["prompt_cache_custom_text_presets"] = normalize_custom_text_presets(
+        config.get("prompt_cache_custom_text_presets")
+    )
+    if not isinstance(config.get("prompt_cache_active_preset_id"), str):
+        config["prompt_cache_active_preset_id"] = ""
+    recreate = str(config.get("prompt_cache_recreate_default") or "recreate")
+    config["prompt_cache_recreate_default"] = (
+        recreate if recreate in ("recreate", "skip_cache") else "recreate"
+    )
+    conv = str(config.get("prompt_cache_new_conversation_cache_default") or "clear")
+    config["prompt_cache_new_conversation_cache_default"] = (
+        conv if conv in ("keep", "clear") else "clear"
+    )
+    try:
+        change_ttl = int(config.get("prompt_cache_change_ttl_seconds", 3600))
+    except (TypeError, ValueError):
+        change_ttl = 3600
+    config["prompt_cache_change_ttl_seconds"] = max(60, change_ttl)
 
     return config
 

@@ -12,7 +12,7 @@ from typing import Any
 import requests
 
 from .config import ADDON_DIR
-from .constants import GEMINI_API_HOST
+from .constants import DEFAULT_PROMPT_CACHE_MIN_CHARS, GEMINI_API_HOST
 from .gemini_client import Purpose, resolve_model
 from .i18n import (
     card_templates_format_addon,
@@ -279,11 +279,25 @@ def prompt_cache_ttl_seconds(config: dict[str, Any]) -> int:
         return 3600
 
 
+def prompt_cache_change_ttl_seconds(config: dict[str, Any]) -> int:
+    try:
+        return max(60, int(config.get("prompt_cache_change_ttl_seconds", 3600)))
+    except (TypeError, ValueError):
+        return 3600
+
+
+def any_tracked_active_cache() -> bool:
+    for purpose in PROMPT_CACHE_PURPOSES:
+        if get_prompt_cache_store(purpose).active is not None:
+            return True
+    return False
+
+
 def prompt_cache_min_chars(config: dict[str, Any]) -> int:
     try:
-        return max(1, int(config.get("prompt_cache_min_chars", 8189)))
+        return max(1, int(config.get("prompt_cache_min_chars", DEFAULT_PROMPT_CACHE_MIN_CHARS)))
     except (TypeError, ValueError):
-        return 8189
+        return DEFAULT_PROMPT_CACHE_MIN_CHARS
 
 
 def segment_label_key(segment_id: str) -> str:
@@ -315,7 +329,9 @@ def _segment_texts(
         if addon.strip():
             texts["chat_system_addon"] = addon
 
-    custom = (config.get("prompt_cache_custom_text") or "").strip()
+    from .prompt_cache_policy import effective_custom_cache_text
+
+    custom = effective_custom_cache_text(config, purpose=purpose)
     if custom:
         texts["custom_cache_text"] = custom
 
@@ -473,6 +489,66 @@ def flattened_cache_upload_text(bundle: PromptCacheBundle) -> str:
             if text:
                 parts.append(text)
     return join_prompt_blocks(*parts)
+
+
+def flatten_bundle_for_live_send(
+    config: dict[str, Any],
+    bundle: PromptCacheBundle,
+    *,
+    purpose: Purpose,
+    include_meta_rule: bool,
+    system_instruction_override: str | None = None,
+    outgoing_payload_override: str | None = None,
+    user_text: str = "",
+    session: PromptCacheSessionContext | None = None,
+) -> tuple[str, str]:
+    """Merge cached bundle material into live system + payload for skip-cache sends."""
+    live_system = (
+        system_instruction_override.strip()
+        if system_instruction_override is not None
+        else bundle.live_system_text.strip()
+    )
+
+    system_parts: list[str] = []
+    if live_system:
+        system_parts.append(live_system)
+    if bundle.cached_system_text.strip():
+        system_parts.append(bundle.cached_system_text.strip())
+
+    system_instruction = join_prompt_blocks(*system_parts)
+
+    if purpose == "chat" and include_meta_rule and "chat_system_addon" not in bundle.enabled_segment_ids:
+        addon = effective_chat_system_addon(config)
+        if addon.strip():
+            system_instruction = join_prompt_blocks(system_instruction, addon)
+
+    cached_user_blocks: list[str] = []
+    for content in bundle.cached_contents:
+        for part in content.get("parts", []):
+            text = str(part.get("text") or "").strip()
+            if text:
+                cached_user_blocks.append(text)
+
+    if purpose == "chat" and session is not None:
+        base_payload = (
+            outgoing_payload_override
+            if outgoing_payload_override is not None
+            else build_live_chat_payload(
+                config,
+                user_text,
+                session=session,
+                bundle=bundle,
+            )
+        )
+    else:
+        base_payload = outgoing_payload_override if outgoing_payload_override is not None else user_text
+
+    outgoing_payload = (
+        join_prompt_blocks(*cached_user_blocks, base_payload)
+        if cached_user_blocks
+        else base_payload
+    )
+    return system_instruction, outgoing_payload
 
 
 def prompt_cache_will_recreate(
@@ -691,12 +767,13 @@ def create_cached_content(
     display_name: str,
     purpose: Purpose,
     timeout: int,
+    config: dict[str, Any] | None = None,
 ) -> ActivePromptCache:
     from .config import load_config
     from .dev_mock import is_dev_mock_enabled, mock_create_cached_content
 
-    config = load_config()
-    if is_dev_mock_enabled(config):
+    cfg = config if config is not None else load_config()
+    if is_dev_mock_enabled(cfg):
         return mock_create_cached_content(
             model=model,
             bundle=bundle,
@@ -752,11 +829,13 @@ def update_cached_content_ttl(
     cache_name: str,
     ttl_seconds: int,
     timeout: int,
+    config: dict[str, Any] | None = None,
 ) -> float:
     from .config import load_config
     from .dev_mock import is_dev_mock_enabled, mock_update_cached_content_ttl
 
-    if is_dev_mock_enabled(load_config()):
+    cfg = config if config is not None else load_config()
+    if is_dev_mock_enabled(cfg):
         return mock_update_cached_content_ttl(cache_name=cache_name, ttl_seconds=ttl_seconds)
 
     resource = cache_name.split("/")[-1]
@@ -776,11 +855,18 @@ def update_cached_content_ttl(
     return expire_at
 
 
-def delete_cached_content(*, api_key: str, cache_name: str, timeout: int) -> None:
+def delete_cached_content(
+    *,
+    api_key: str,
+    cache_name: str,
+    timeout: int,
+    config: dict[str, Any] | None = None,
+) -> None:
     from .config import load_config
     from .dev_mock import is_dev_mock_enabled, mock_delete_cached_content
 
-    if is_dev_mock_enabled(load_config()):
+    cfg = config if config is not None else load_config()
+    if is_dev_mock_enabled(cfg):
         mock_delete_cached_content(cache_name=cache_name)
         return
 
@@ -795,11 +881,18 @@ def delete_cached_content(*, api_key: str, cache_name: str, timeout: int) -> Non
         raise PromptCacheError(response.text[:500])
 
 
-def get_cached_content(*, api_key: str, cache_name: str, timeout: int) -> dict[str, Any]:
+def get_cached_content(
+    *,
+    api_key: str,
+    cache_name: str,
+    timeout: int,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     from .config import load_config
     from .dev_mock import is_dev_mock_enabled, mock_get_cached_content
 
-    if is_dev_mock_enabled(load_config()):
+    cfg = config if config is not None else load_config()
+    if is_dev_mock_enabled(cfg):
         return mock_get_cached_content(cache_name=cache_name)
 
     resource = cache_name.split("/")[-1]
@@ -819,11 +912,17 @@ def get_cached_content(*, api_key: str, cache_name: str, timeout: int) -> dict[s
     return data
 
 
-def list_remote_cached_contents(*, api_key: str, timeout: int) -> list[dict[str, Any]]:
+def list_remote_cached_contents(
+    *,
+    api_key: str,
+    timeout: int,
+    config: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     from .config import load_config
     from .dev_mock import is_dev_mock_enabled, mock_list_remote_cached_contents
 
-    if is_dev_mock_enabled(load_config()):
+    cfg = config if config is not None else load_config()
+    if is_dev_mock_enabled(cfg):
         return mock_list_remote_cached_contents()
 
     items: list[dict[str, Any]] = []
@@ -883,7 +982,7 @@ def list_addon_remote_caches(config: dict[str, Any]) -> list[RemotePromptCacheEn
         if (store := get_prompt_cache_store(purpose)).active is not None
     }
     entries: list[RemotePromptCacheEntry] = []
-    for item in list_remote_cached_contents(api_key=api_key, timeout=timeout):
+    for item in list_remote_cached_contents(api_key=api_key, timeout=timeout, config=config):
         entry = _remote_entry_from_api(item, tracked_names=tracked_names)
         if entry is not None:
             entries.append(entry)
@@ -896,9 +995,15 @@ def _delete_remote_cache_best_effort(
     api_key: str,
     cache_name: str,
     timeout: int,
+    config: dict[str, Any] | None = None,
 ) -> None:
     try:
-        delete_cached_content(api_key=api_key, cache_name=cache_name, timeout=timeout)
+        delete_cached_content(
+            api_key=api_key,
+            cache_name=cache_name,
+            timeout=timeout,
+            config=config,
+        )
     except PromptCacheError:
         pass
 
@@ -918,7 +1023,12 @@ def delete_remote_prompt_cache(
     api_key = (config.get("api_key") or "").strip()
     timeout = int(config.get("timeout_seconds") or 30)
     if api_key:
-        _delete_remote_cache_best_effort(api_key=api_key, cache_name=cache_name, timeout=timeout)
+        _delete_remote_cache_best_effort(
+            api_key=api_key,
+            cache_name=cache_name,
+            timeout=timeout,
+            config=config,
+        )
     if purpose is not None:
         _clear_store_if_matches(get_prompt_cache_store(purpose), cache_name)
     else:
@@ -962,6 +1072,7 @@ def cleanup_orphan_remote_caches(
                 api_key=api_key,
                 cache_name=entry.name,
                 timeout=timeout,
+                config=config,
             )
             _clear_store_if_matches(get_prompt_cache_store(purpose), entry.name)
     except PromptCacheError:
@@ -993,7 +1104,12 @@ def _verify_active_remote_cache(
         return False
     timeout = int(config.get("timeout_seconds") or 30)
     try:
-        get_cached_content(api_key=api_key, cache_name=active.name, timeout=timeout)
+        get_cached_content(
+            api_key=api_key,
+            cache_name=active.name,
+            timeout=timeout,
+            config=config,
+        )
         return True
     except PromptCacheNotFoundError:
         return False
@@ -1014,10 +1130,17 @@ def abandon_stale_prompt_cache(
     model = resolve_model(config, purpose)
     if _cache_is_valid(active, model=model, fingerprint=bundle.fingerprint):
         return
+    from .dev_mock import is_dev_mock_enabled
+
     api_key = (config.get("api_key") or "").strip()
     timeout = int(config.get("timeout_seconds") or 30)
-    if api_key:
-        _delete_remote_cache_best_effort(api_key=api_key, cache_name=active.name, timeout=timeout)
+    if api_key or is_dev_mock_enabled(config):
+        _delete_remote_cache_best_effort(
+            api_key=api_key,
+            cache_name=active.name,
+            timeout=timeout,
+            config=config,
+        )
     _set_store_active(store, None)
 
 
@@ -1089,7 +1212,12 @@ def ensure_prompt_cache(
     ttl_seconds = prompt_cache_ttl_seconds(config)
 
     if active is not None:
-        _delete_remote_cache_best_effort(api_key=api_key, cache_name=active.name, timeout=timeout)
+        _delete_remote_cache_best_effort(
+            api_key=api_key,
+            cache_name=active.name,
+            timeout=timeout,
+            config=config,
+        )
         _set_store_active(cache_store, None)
 
     cleanup_orphan_remote_caches(config, purpose, keep_name=None)
@@ -1103,6 +1231,7 @@ def ensure_prompt_cache(
             display_name=display_name_for_purpose(purpose),
             purpose=purpose,
             timeout=timeout,
+            config=config,
         )
         _set_store_active(cache_store, created)
         cleanup_orphan_remote_caches(config, purpose, keep_name=created.name)
@@ -1128,7 +1257,7 @@ def extend_prompt_cache_ttl(
     api_key = (config.get("api_key") or "").strip()
     if not api_key and not is_dev_mock_enabled(config):
         return False
-    ttl_seconds = extra_seconds if extra_seconds is not None else prompt_cache_ttl_seconds(config)
+    ttl_seconds = extra_seconds if extra_seconds is not None else prompt_cache_change_ttl_seconds(config)
     timeout = int(config.get("timeout_seconds") or 30)
     try:
         expire_at = update_cached_content_ttl(
@@ -1136,6 +1265,7 @@ def extend_prompt_cache_ttl(
             cache_name=active.name,
             ttl_seconds=ttl_seconds,
             timeout=timeout,
+            config=config,
         )
         active.expire_at = expire_at
         active.ttl_seconds = ttl_seconds
@@ -1159,17 +1289,20 @@ def clear_prompt_cache(
     config: dict[str, Any],
     purpose: Purpose | None = None,
 ) -> None:
+    from .dev_mock import is_dev_mock_enabled
+
     api_key = (config.get("api_key") or "").strip()
     timeout = int(config.get("timeout_seconds") or 30)
     purposes: list[Purpose] = [purpose] if purpose is not None else list(PROMPT_CACHE_PURPOSES)
     for item in purposes:
         store = get_prompt_cache_store(item)
         active = store.active
-        if active is not None and api_key:
+        if active is not None and (api_key or is_dev_mock_enabled(config)):
             _delete_remote_cache_best_effort(
                 api_key=api_key,
                 cache_name=active.name,
                 timeout=timeout,
+                config=config,
             )
         _set_store_active(store, None)
         store.last_error = ""

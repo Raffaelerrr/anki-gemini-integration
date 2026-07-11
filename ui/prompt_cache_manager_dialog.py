@@ -25,6 +25,7 @@ from ..prompt_cache import (
     delete_untracked_addon_caches,
     list_addon_remote_caches,
 )
+from .prompt_cache_confirm import confirm_delete_orphan_caches
 
 
 class PromptCacheManagerDialog(QDialog):
@@ -87,6 +88,10 @@ class PromptCacheManagerDialog(QDialog):
         root.addLayout(btn_row)
 
         self._refresh()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        register_themed_window(self)
 
     def _purpose_label(self, purpose: str | None) -> str:
         if purpose == "chat":
@@ -182,19 +187,33 @@ class PromptCacheManagerDialog(QDialog):
         orphans = [entry for entry in self._entries if not entry.tracked]
         if not orphans:
             return
-        confirm = QMessageBox.question(
+        if not confirm_delete_orphan_caches(
             self,
-            tr("settings.prompt_cache.manager.delete_orphans.title", config=self.config),
-            tr(
-                "settings.prompt_cache.manager.delete_orphans.message",
-                config=self.config,
-                count=len(orphans),
-            ),
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
+            self.config,
+            count=len(orphans),
+        ):
             return
         delete_untracked_addon_caches(self.config)
         self._refresh()
+
+    def apply_theme(self) -> None:
+        config = self.config
+        self.setWindowTitle(tr("settings.prompt_cache.manager.title", config=config))
+        self._intro_label.setText(tr("settings.prompt_cache.manager.intro", config=config))
+        self._table.setHorizontalHeaderLabels(
+            [
+                tr("settings.prompt_cache.manager.col.purpose", config=config),
+                tr("settings.prompt_cache.manager.col.model", config=config),
+                tr("settings.prompt_cache.manager.col.expires", config=config),
+                tr("settings.prompt_cache.manager.col.tracked", config=config),
+                tr("settings.prompt_cache.manager.col.actions", config=config),
+            ]
+        )
+        self._refresh_btn.setText(tr("settings.prompt_cache.manager.refresh", config=config))
+        self._delete_orphans_btn.setText(
+            tr("settings.prompt_cache.manager.delete_orphans", config=config)
+        )
+        self._close_btn.setText(tr("settings.prompt_cache.manager.close", config=config))
 
 
 def open_prompt_cache_manager(parent: QWidget | None, *, config: dict[str, Any]) -> None:

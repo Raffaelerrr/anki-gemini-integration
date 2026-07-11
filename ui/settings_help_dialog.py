@@ -23,7 +23,11 @@ from ..constants import (
     GEMINI_API_BILLING_DOCS_URL,
 )
 from ..i18n import tr
-from .settings_compact_controls import apply_settings_icon_row_height
+from .help_icons import expand_help_icons, instruction_html
+from .settings_compact_controls import (
+    apply_settings_icon_row_height,
+    create_settings_help_list_label,
+)
 from .theme import (
     apply_native_page_scroll_theme,
     configure_circular_icon_button,
@@ -91,6 +95,7 @@ class SettingsHelpDialog(QDialog):
         page = QWidget(self)
         outer = QVBoxLayout(page)
         outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(6)
 
         self.intro_label = QLabel(muted_hint_html(tr("settings.help.intro", config=self.config)))
         outer.addWidget(self.intro_label)
@@ -135,26 +140,28 @@ class SettingsHelpDialog(QDialog):
         host = QWidget(scroll)
         layout = QVBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
 
         for key in RESTORABLE_SETTING_KEYS:
             label_key = RESTORABLE_SETTING_LABELS.get(key, key)
             row_widget = QWidget(host)
             apply_settings_icon_row_height(row_widget, allow_multiline=True)
             row = QHBoxLayout(row_widget)
-            row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(4)
-            label = QLabel(tr(label_key, config=self.config), row_widget)
-            label.setWordWrap(True)
-            row_align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-            row.addWidget(label, stretch=1, alignment=row_align)
+            row.setContentsMargins(0, 2, 0, 4)
+            row.setSpacing(6)
+            row.setAlignment(Qt.AlignmentFlag.AlignTop)
+            label = create_settings_help_list_label(
+                row_widget,
+                instruction_html(tr(label_key, config=self.config)),
+            )
+            row.addWidget(label, stretch=1)
 
             btn_info = _make_info_button(row_widget, self.config)
             btn_info.clicked.connect(lambda _checked=False, setting_key=key: self._show_detail(setting_key))
             self._info_buttons.append(btn_info)
-            row.addWidget(btn_info, 0, row_align)
+            row.addWidget(btn_info, 0, Qt.AlignmentFlag.AlignTop)
             layout.addWidget(row_widget)
 
-        layout.addStretch(1)
         scroll.setWidget(host)
         outer.addWidget(scroll, 1)
         return page
@@ -165,6 +172,7 @@ class SettingsHelpDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.detail_title = QLabel(page)
+        self.detail_title.setTextFormat(Qt.TextFormat.RichText)
         self.detail_title.setWordWrap(True)
         layout.addWidget(self.detail_title)
 
@@ -196,11 +204,14 @@ class SettingsHelpDialog(QDialog):
         self.stack.setCurrentIndex(0)
         self._set_help_page("list")
 
+    def _set_detail_html(self, html: str) -> None:
+        self.detail_body.setHtml(expand_help_icons(html))
+
     def _show_prompts_overview(self) -> None:
         self.detail_title.setText(
             f"<b>{tr('settings.help.prompts_overview.title', config=self.config)}</b>"
         )
-        self.detail_body.setHtml(tr("settings.help.prompts_overview", config=self.config))
+        self._set_detail_html(tr("settings.help.prompts_overview", config=self.config))
         self.stack.setCurrentIndex(1)
         self._set_help_page("detail")
 
@@ -208,7 +219,7 @@ class SettingsHelpDialog(QDialog):
         self.detail_title.setText(
             f"<b>{tr('settings.help.chat_live_settings.title', config=self.config)}</b>"
         )
-        self.detail_body.setHtml(tr("settings.help.chat_live_settings", config=self.config))
+        self._set_detail_html(tr("settings.help.chat_live_settings", config=self.config))
         self.stack.setCurrentIndex(1)
         self._set_help_page("detail")
 
@@ -216,7 +227,7 @@ class SettingsHelpDialog(QDialog):
         self.detail_title.setText(
             f"<b>{tr('settings.help.chat_toolbar_icons.title', config=self.config)}</b>"
         )
-        self.detail_body.setHtml(tr("settings.help.chat_toolbar_icons", config=self.config))
+        self._set_detail_html(tr("settings.help.chat_toolbar_icons", config=self.config))
         self.stack.setCurrentIndex(1)
         self._set_help_page("detail")
 
@@ -224,7 +235,7 @@ class SettingsHelpDialog(QDialog):
         self.detail_title.setText(
             f"<b>{tr('settings.help.track_api_costs.title', config=self.config)}</b>"
         )
-        self.detail_body.setHtml(
+        self._set_detail_html(
             tr(
                 "settings.help.track_api_costs",
                 config=self.config,
@@ -240,7 +251,7 @@ class SettingsHelpDialog(QDialog):
         self.detail_title.setText(
             f"<b>{tr('settings.help.addon_payload_sizes.title', config=self.config)}</b>"
         )
-        self.detail_body.setHtml(
+        self._set_detail_html(
             tr(
                 "settings.help.addon_payload_sizes",
                 config=self.config,
@@ -253,8 +264,10 @@ class SettingsHelpDialog(QDialog):
     def _show_detail(self, setting_key: str) -> None:
         label_key = RESTORABLE_SETTING_LABELS.get(setting_key, setting_key)
         help_key = SETTING_HELP_KEYS.get(setting_key, setting_key)
-        self.detail_title.setText(f"<b>{tr(label_key, config=self.config)}</b>")
-        self.detail_body.setHtml(tr(help_key, config=self.config))
+        self.detail_title.setText(
+            instruction_html(f"<b>{tr(label_key, config=self.config)}</b>")
+        )
+        self._set_detail_html(tr(help_key, config=self.config))
         self.stack.setCurrentIndex(1)
         self._set_help_page("detail")
 

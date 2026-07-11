@@ -82,13 +82,26 @@ def apply_settings_icon_row_height(
     allow_multiline: bool = False,
     top_inset: int = 0,
 ) -> None:
-    """Reserve the full circular icon-button height for horizontal label+button rows."""
-    min_height = ICON_BUTTON_SIZE + top_inset
+    """Reserve icon-button height for single-line rows; grow for wrapped labels."""
     row.setSizePolicy(
         QSizePolicy.Policy.Preferred,
         QSizePolicy.Policy.Minimum,
     )
-    row.setMinimumHeight(min_height)
+    if allow_multiline:
+        row.setMinimumHeight(0)
+        return
+    row.setMinimumHeight(ICON_BUTTON_SIZE + top_inset)
+
+
+def create_settings_help_list_label(parent: QWidget, text: str) -> QLabel:
+    label = QLabel(parent)
+    label.setTextFormat(Qt.TextFormat.RichText)
+    label.setText(text)
+    label.setWordWrap(True)
+    label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
+    label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+    label.setContentsMargins(0, 0, 0, 0)
+    return label
 
 
 def create_settings_checkbox_info_row(
@@ -268,13 +281,21 @@ def _ideal_compact_control_width(control: QWidget) -> int:
             control.sizeHint().width(),
         )
     if isinstance(control, QComboBox):
+        fm = control.fontMetrics()
+        max_text_width = 0
+        for index in range(control.count()):
+            item_text = control.itemText(index)
+            max_text_width = max(max_text_width, fm.horizontalAdvance(item_text or ""))
         text = control.currentText()
         line_edit = control.lineEdit()
         if line_edit is not None and line_edit.text():
             text = line_edit.text()
         if not text:
             text = control.itemText(control.currentIndex())
-        width = control.fontMetrics().horizontalAdvance(text or "") + SETTINGS_COMBO_HORIZONTAL_PADDING
+        width = max(
+            max_text_width,
+            fm.horizontalAdvance(text or ""),
+        ) + SETTINGS_COMBO_HORIZONTAL_PADDING
         return max(width, control.minimumSizeHint().width() + 16, control.sizeHint().width())
     return control.sizeHint().width()
 

@@ -114,7 +114,11 @@ class TestGeminiClient(unittest.TestCase):
         self.assertTrue(user_text.endswith("Hello"))
         self.assertEqual(payload["generationConfig"]["thinkingConfig"]["thinkingBudget"], 0)
         system_text = payload["systemInstruction"]["parts"][0]["text"]
-        self.assertEqual(system_text, "Rules\n\nADDITIONAL DYNAMIC RULES PREVIOUSLY STORED (Lower priority than the rules above):\nBe concise")
+        self.assertEqual(
+            system_text,
+            "Rules\n\nADDITIONAL DYNAMIC RULES PREVIOUSLY STORED "
+            "(Lower priority than the rules above)\nBe concise",
+        )
         self.assertNotIn("OUTPUT (mandatory)", system_text)
 
     def test_build_request_payload_uses_custom_dynamic_prefix(self):
@@ -198,6 +202,77 @@ class TestGeminiClient(unittest.TestCase):
             payload["systemInstruction"]["parts"][0]["text"],
             "Live rules only",
         )
+
+    def test_prepare_gemini_request_skip_cache_omits_cached_content(self):
+        pc = _load_addon_module("prompt_cache")
+        pc.clear_prompt_cache_store()
+        config = {
+            "language": "en",
+            "api_key": "test-key",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {"system_instruction": True},
+            "system_instruction": "X" * 9000,
+            "thinking_budget_chat": -1,
+        }
+        bundle = pc.build_prompt_cache_bundle(config, purpose="chat")
+        assert bundle is not None
+        pc.ensure_prompt_cache(config=config, purpose="chat", bundle=bundle)
+        prepared = self.gc.prepare_gemini_request(
+            config=config,
+            user_text="Hello",
+            history=None,
+            temperature=0.2,
+            include_meta_rule=False,
+            purpose="chat",
+            allow_prompt_cache_create=False,
+            allow_prompt_cache_use=False,
+        )
+        self.assertNotIn("cachedContent", prepared.payload)
+
+    def test_prepare_gemini_request_skip_cache_uses_flattened_overrides(self):
+        pc = _load_addon_module("prompt_cache")
+        pc.clear_prompt_cache_store()
+        config = {
+            "language": "en",
+            "api_key": "test-key",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {"system_instruction": True},
+            "system_instruction": "X" * 9000,
+            "thinking_budget_chat": -1,
+        }
+        bundle = pc.build_prompt_cache_bundle(config, purpose="chat")
+        assert bundle is not None
+        edited = pc.rebuild_prompt_cache_bundle(
+            config,
+            purpose="chat",
+            enabled_segment_ids=bundle.enabled_segment_ids,
+            segment_texts={"system_instruction": "Y" * 9000},
+            live_system_text="",
+        )
+        assert edited is not None
+        system, payload = pc.flatten_bundle_for_live_send(
+            config,
+            edited,
+            purpose="chat",
+            include_meta_rule=False,
+            user_text="Question?",
+        )
+        prepared = self.gc.prepare_gemini_request(
+            config=config,
+            user_text="Question?",
+            history=None,
+            temperature=0.2,
+            include_meta_rule=False,
+            purpose="chat",
+            allow_prompt_cache_create=False,
+            allow_prompt_cache_use=False,
+            override_outgoing_payload=payload,
+            override_system_instruction=system,
+        )
+        self.assertNotIn("cachedContent", prepared.payload)
+        self.assertIn("Y" * 9000, prepared.payload["systemInstruction"]["parts"][0]["text"])
 
     def test_prepare_gemini_request_falls_back_when_cache_create_fails(self):
         pc = _load_addon_module("prompt_cache")
@@ -401,8 +476,18 @@ class TestI18n(unittest.TestCase):
         cls.wrapper = _load_addon_module("chat_context_wrapper")
 
     def test_all_keys_have_both_languages(self):
+        allow_empty = {
+            "chat.include_context.icon",
+            "chat.include_context.icon.excluded",
+            "chat.edit.menu.icon",
+            "chat.inspect_prompt",
+            "chat.stop_before_send.icon",
+            "chat.modify_prompt_before_send",
+        }
         missing = []
         for key, translations in self.i18n._STRINGS.items():
+            if key in allow_empty:
+                continue
             for lang in self.i18n.SUPPORTED_LANGUAGES:
                 if lang not in translations or not translations[lang].strip():
                     missing.append(f"{key}.{lang}")
@@ -419,6 +504,16 @@ class TestI18n(unittest.TestCase):
         config = {"language": "en"}
         msg = self.i18n.tr("chat.error", config=config, error="timeout")
         self.assertEqual(msg, "Error: timeout")
+
+    def test_tr_interpolation_preserves_icon_placeholders(self):
+        config = {"language": "en"}
+        msg = self.i18n.tr(
+            "settings.help.addon_payload_sizes",
+            config=config,
+            billing_url="https://example.com/billing",
+        )
+        self.assertIn("{icon:lens}", msg)
+        self.assertIn("https://example.com/billing", msg)
 
     def test_edit_wrapper_strings(self):
         en = {"language": "en"}
@@ -448,7 +543,7 @@ class TestI18n(unittest.TestCase):
         self.assertEqual(self.i18n.tr("chat.preview.refresh", config=en), "Refresh preview")
         self.assertEqual(
             self.i18n.tr("chat.preview.open_window.tooltip", config=en),
-            "Open the imported note preview in a separate window",
+            "{icon:eye} Open the imported note preview in a separate window",
         )
         templates_title = self.i18n.chat_edit_templates_title_text(
             {"language": "en", "brain_import_templates": True, "brain_import_css": True}
@@ -1100,7 +1195,7 @@ class TestChatFormatter(unittest.TestCase):
         self.assertIn("⧉", html_out)
         self.assertNotIn(">Copy<", html_out)
         self.assertNotIn("chat-html-endcap", html_out)
-        self.assertIn("<table class='chat-code-block'", html_out)
+        self.assertIn("class='chat-code-block", html_out)
         self.assertEqual(store["t1-0"], "<b>Hi</b>")
 
     def test_format_reply_legacy_endcap(self):
@@ -1309,6 +1404,55 @@ class TestSvgIcons(unittest.TestCase):
         addon_dir = Path(__file__).resolve().parent.parent
         path = addon_dir / "ui" / "icons" / "stop_circle.svg"
         self.assertTrue(path.is_file(), msg=str(path))
+
+
+class TestHelpIcons(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.help_icons = _load_addon_module("ui.help_icons")
+
+    def test_expand_help_icons_replaces_brain_token(self):
+        original = self.help_icons._help_icon_html_by_key
+        try:
+            self.help_icons._help_icon_html_by_key = lambda: {
+                "brain": '<img src="data:image/png;base64,test" />',
+                "plus": '<img src="data:image/png;base64,plus" />',
+            }
+            out = self.help_icons.expand_help_icons(
+                "({icon:brain} = included, {icon:plus} New conversation)"
+            )
+            self.assertIn('<img src="data:image/png;base64,test" />', out)
+            self.assertIn('<img src="data:image/png;base64,plus" />', out)
+            self.assertNotIn("{icon:brain}", out)
+            self.assertNotIn("{icon:plus}", out)
+        finally:
+            self.help_icons._help_icon_html_by_key = original
+
+    def test_chat_toolbar_help_icon_keys(self):
+        self.assertEqual(
+            set(self.help_icons.CHAT_TOOLBAR_HELP_ICON_KEYS),
+            {
+                "brain",
+                "barred_brain",
+                "pencil",
+                "eye",
+                "lens",
+                "plus",
+                "stop",
+                "priority",
+            },
+        )
+
+    def test_help_icon_target_physical_pixels_matches_display_without_screen(self):
+        self.assertEqual(self.help_icons._help_icon_target_physical_pixels(16), 16)
+
+    def test_help_icon_render_pixels_supersamples_target_physical_size(self):
+        physical = self.help_icons._help_icon_target_physical_pixels(16)
+        pixels = self.help_icons._help_icon_render_pixels(16)
+        self.assertGreaterEqual(
+            pixels,
+            round(physical * self.help_icons.MIN_HELP_ICON_SUPERSAMPLE),
+        )
 
 
 class TestModelSelector(unittest.TestCase):
@@ -1554,6 +1698,78 @@ class TestChatLogRenderer(unittest.TestCase):
         self.assertNotIn("chat-html-endcap", html)
 
 
+class TestChatExport(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.chat_export = _load_addon_module("ui.chat_export")
+        cls.messages = _load_addon_module("ui.chat_messages")
+
+    def test_format_chat_messages_as_text(self):
+        text = self.chat_export.format_chat_messages_as_text(
+            [
+                self.messages.ChatMessage(
+                    label_class="chat-label-you",
+                    label="You",
+                    body_html="Hello<br>world",
+                ),
+                self.messages.ChatMessage(
+                    label_class="chat-label-gemini",
+                    label="Gemini",
+                    body_html="Hi &amp; bye",
+                ),
+            ]
+        )
+        self.assertIn("You:\nHello", text)
+        self.assertIn("world", text)
+        self.assertIn("Gemini:\nHi & bye", text)
+
+    def test_format_chat_export_text_includes_metadata_header(self):
+        from datetime import datetime
+
+        config = {
+            "language": "en",
+            "model_chat": "gemini-2.5-flash",
+            "temperature_chat": 0.2,
+            "thinking_budget_chat": -1,
+            "chat_streaming": True,
+            "max_history_turns": 10,
+        }
+        text = self.chat_export.format_chat_export_text(
+            [
+                self.messages.ChatMessage(
+                    label_class="chat-label-gemini",
+                    label="Gemini",
+                    body_html="Hello",
+                ),
+            ],
+            config,
+            api_history=[
+                {"role": "user", "parts": [{"text": "Hi"}]},
+                {"role": "model", "parts": [{"text": "Hello"}]},
+            ],
+            exported_at=datetime(2026, 7, 11, 23, 45, 10),
+        )
+        self.assertIn("Anki AI chat export", text)
+        self.assertIn("Exported at: 2026-07-11 23:45:10", text)
+        self.assertIn("Model: gemini-2.5-flash", text)
+        self.assertIn("Temperature: 0.2", text)
+        self.assertIn("---", text)
+        self.assertIn("Gemini:\nHello", text)
+
+    def test_default_chat_export_filename(self):
+        from datetime import datetime
+
+        stamp = datetime(2026, 7, 11, 23, 45, 10)
+        self.assertEqual(
+            self.chat_export.default_chat_export_filename(now=stamp),
+            "anki-ai-chat-2026-07-11-234510.txt",
+        )
+
+    def test_default_chat_download_directory_uses_documents(self):
+        path = self.chat_export.default_chat_download_directory()
+        self.assertEqual(path.name, "Documents")
+
+
 class TestHtmlUtils(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -1618,6 +1834,7 @@ class TestConfig(unittest.TestCase):
             "model": "old-model",
             "thinking_budget": 512,
             "prompt_cache_min_tokens": 2048,
+            "prompt_cache_import_note_default": "cancel",
         }
         merged = self.config._normalize_config(
             {**self.config.DEFAULT_CONFIG, **stored},
@@ -1626,6 +1843,23 @@ class TestConfig(unittest.TestCase):
         self.assertNotIn("model", merged)
         self.assertNotIn("thinking_budget", merged)
         self.assertNotIn("prompt_cache_min_tokens", merged)
+        self.assertNotIn("prompt_cache_import_note_default", merged)
+
+    def test_apply_config_normalization_migrates_legacy_prompt_cache_min_chars(self):
+        for stored_value in (8189, "8189"):
+            with self.subTest(stored_value=stored_value):
+                stored = {
+                    "config_version": self.config.CONFIG_VERSION,
+                    "prompt_cache_min_chars": stored_value,
+                }
+                merged = self.config._normalize_config(
+                    {**self.config.DEFAULT_CONFIG, **stored},
+                    stored,
+                )
+                self.assertEqual(
+                    merged["prompt_cache_min_chars"],
+                    _load_addon_module("constants").DEFAULT_PROMPT_CACHE_MIN_CHARS,
+                )
 
     def test_restorable_settings_cover_defaults(self):
         self.assertLessEqual(
@@ -1639,12 +1873,25 @@ class TestConfig(unittest.TestCase):
                 "config_version",
                 "chat_send_empty_fields",
                 "chat_modify_prompt_before_send",
+                "optimize_modify_prompt_before_send",
                 "suppress_default_system_instruction_warning",
                 "suppress_api_key_restore_warning",
                 "suppress_settings_unsaved_close_warning",
                 "suppress_settings_save_confirm_warning",
                 "suppress_settings_cancel_confirm_warning",
                 "suppress_prompt_cache_created_optimize_notice",
+                "suppress_chat_new_conversation_confirm_warning",
+                "suppress_prompt_cache_recreate_confirm",
+                "suppress_settings_save_cache_clear_warning",
+                "suppress_new_conversation_cache_warning",
+                "suppress_import_note_cache_warning",
+                "suppress_prompt_cache_custom_text_load_confirm",
+                "suppress_prompt_cache_delete_orphans_confirm",
+                "prompt_cache_change_ttl_seconds",
+                "prompt_cache_recreate_default",
+                "prompt_cache_new_conversation_cache_default",
+                "prompt_cache_custom_text_presets",
+                "prompt_cache_active_preset_id",
                 "settings_show_text_newlines",
                 "dev_mock_mode",
             },
@@ -1652,6 +1899,15 @@ class TestConfig(unittest.TestCase):
 
     def test_setting_help_keys_cover_all_settings(self):
         self.assertEqual(set(self.config.SETTING_HELP_KEYS.keys()), set(self.config.RESTORABLE_SETTING_KEYS))
+
+    def test_setting_help_strings_exist_in_i18n(self):
+        i18n = _load_addon_module("i18n")
+        missing = [
+            self.config.SETTING_HELP_KEYS[key]
+            for key in self.config.RESTORABLE_SETTING_KEYS
+            if self.config.SETTING_HELP_KEYS[key] not in i18n._STRINGS
+        ]
+        self.assertEqual(missing, [])
 
     def test_default_config_value(self):
         self.assertEqual(self.config.default_config_value("model_optimize"), "gemini-2.5-flash-lite")
@@ -1704,6 +1960,7 @@ class TestConfig(unittest.TestCase):
         self.assertFalse(defaults["suppress_settings_unsaved_close_warning"])
         self.assertTrue(defaults["suppress_settings_save_confirm_warning"])
         self.assertTrue(defaults["suppress_settings_cancel_confirm_warning"])
+        self.assertTrue(defaults["suppress_chat_new_conversation_confirm_warning"])
 
     def test_dismissed_warning_keys(self):
         self.assertEqual(
@@ -2355,6 +2612,77 @@ class TestPromptCache(unittest.TestCase):
         self.assertIn("Custom rules here.", flat)
         self.assertLess(flat.index("=== System instructions ==="), flat.index("=== Custom cache text ==="))
 
+    def test_flatten_bundle_for_live_send_merges_cached_segments(self) -> None:
+        config = {
+            "language": "en",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {
+                "system_instruction": True,
+                "custom_cache_text": True,
+            },
+            "system_instruction": "A" * 9000,
+            "prompt_cache_custom_text": "Original custom rules.",
+        }
+        bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
+        assert bundle is not None
+        edited = self.pc.rebuild_prompt_cache_bundle(
+            config,
+            purpose="chat",
+            enabled_segment_ids=bundle.enabled_segment_ids,
+            segment_texts={
+                "system_instruction": "B" * 9000,
+                "custom_cache_text": "Edited custom rules.",
+            },
+            live_system_text="Live addon text.",
+        )
+        assert edited is not None
+        system, payload = self.pc.flatten_bundle_for_live_send(
+            config,
+            edited,
+            purpose="chat",
+            include_meta_rule=False,
+            user_text="User question?",
+        )
+        self.assertIn("Live addon text.", system)
+        self.assertIn("B" * 9000, system)
+        self.assertIn("Edited custom rules.", payload)
+        self.assertIn("User question?", payload)
+
+    def test_flatten_bundle_for_live_send_optimize(self) -> None:
+        config = {
+            "language": "en",
+            "prompt_cache_enabled": True,
+            "prompt_cache_min_chars": 37,
+            "prompt_cache_segments": {"system_instruction": True},
+            "system_instruction": "A" * 9000,
+        }
+        bundle = self.pc.build_prompt_cache_bundle(config, purpose="optimize")
+        assert bundle is not None
+        edited = self.pc.rebuild_prompt_cache_bundle(
+            config,
+            purpose="optimize",
+            enabled_segment_ids=bundle.enabled_segment_ids,
+            segment_texts={"system_instruction": "C" * 9000},
+            live_system_text="",
+        )
+        assert edited is not None
+        system, payload = self.pc.flatten_bundle_for_live_send(
+            config,
+            edited,
+            purpose="optimize",
+            include_meta_rule=False,
+            user_text="Field body",
+        )
+        self.assertIn("C" * 9000, system)
+        self.assertEqual(payload, "Field body")
+
+    def test_confirm_new_conversation_returns_none_without_tracked_cache(self) -> None:
+        pcc = _load_addon_module("ui.prompt_cache_confirm")
+        config = {"language": "en"}
+        with patch.object(pcc, "has_tracked_active_cache", return_value=False):
+            self.assertIsNone(pcc.confirm_new_conversation_cache_if_needed(None, config))
+
     def test_cached_fingerprint_ignores_live_system_text(self) -> None:
         config = {
             "language": "en",
@@ -2597,6 +2925,203 @@ class TestDevMock(unittest.TestCase):
             )
         post.assert_not_called()
         self.assertIn("[Dev mock", reply)
+
+
+class TestPromptCachePolicy(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.policy = _load_addon_module("prompt_cache_policy")
+
+    def test_temperature_change_does_not_invalidate_cache(self) -> None:
+        old = {
+            "prompt_cache_enabled": True,
+            "temperature_chat": 0.2,
+            "model_chat": "gemini-2.5-flash",
+        }
+        new = dict(old)
+        new["temperature_chat"] = 0.5
+        self.assertEqual(self.policy.purposes_requiring_cache_invalidation(old, new), ())
+
+    def test_model_change_invalidates_chat_cache(self) -> None:
+        old = {
+            "prompt_cache_enabled": True,
+            "model_chat": "gemini-2.5-flash",
+        }
+        new = dict(old)
+        new["model_chat"] = "gemini-2.5-pro"
+        self.assertEqual(
+            self.policy.purposes_requiring_cache_invalidation(old, new),
+            ("chat",),
+        )
+
+    def test_global_only_when_session_segments_disabled(self) -> None:
+        config = {
+            "prompt_cache_enabled": True,
+            "prompt_cache_segments": {"system_instruction": True},
+        }
+        self.assertTrue(self.policy.cache_enabled_segments_are_global_only(config))
+
+    def test_not_global_only_when_note_cached(self) -> None:
+        config = {
+            "prompt_cache_enabled": True,
+            "prompt_cache_segments": {
+                "system_instruction": True,
+                "imported_note": True,
+            },
+        }
+        self.assertFalse(self.policy.cache_enabled_segments_are_global_only(config))
+
+    def test_effective_custom_cache_text_uses_active_preset(self) -> None:
+        config = {
+            "prompt_cache_custom_text": "Legacy text",
+            "prompt_cache_active_preset_id": "preset-a",
+            "prompt_cache_custom_text_presets": [
+                {
+                    "id": "preset-a",
+                    "name": "Rules",
+                    "text": "Preset rules",
+                    "chat": True,
+                    "optimize": False,
+                }
+            ],
+        }
+        self.assertEqual(
+            self.policy.effective_custom_cache_text(config, purpose="chat"),
+            "Preset rules",
+        )
+        self.assertEqual(
+            self.policy.effective_custom_cache_text(config, purpose="optimize"),
+            "",
+        )
+
+
+class TestPromptCacheConfirmLogic(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.pcc = _load_addon_module("ui.prompt_cache_confirm")
+
+    def test_recreate_default_skip_cache(self) -> None:
+        config = {"prompt_cache_recreate_default": "skip_cache"}
+        self.assertEqual(self.pcc._recreate_default_choice(config), "skip_cache")
+
+    def test_recreate_default_unknown_falls_back_to_proceed(self) -> None:
+        config = {"prompt_cache_recreate_default": "unexpected"}
+        self.assertEqual(self.pcc._recreate_default_choice(config), "proceed")
+
+    def test_recreate_confirm_uses_default_when_dismissed(self) -> None:
+        config = {
+            "language": "en",
+            "suppress_prompt_cache_recreate_confirm": True,
+            "prompt_cache_recreate_default": "skip_cache",
+        }
+        with patch.object(self.pcc, "needs_prompt_cache_recreate_confirm", return_value=True):
+            choice = self.pcc.confirm_prompt_cache_recreate_if_needed(
+                None,
+                config,
+                MagicMock(),
+                purpose="chat",
+            )
+        self.assertEqual(choice, "skip_cache")
+
+    def test_import_note_dismissed_always_proceeds(self) -> None:
+        config = {
+            "language": "en",
+            "suppress_import_note_cache_warning": True,
+        }
+        with patch.object(self.pcc, "has_tracked_active_cache", return_value=True):
+            with patch.object(self.pcc, "chat_cache_includes_session_content", return_value=True):
+                choice = self.pcc.confirm_import_note_cache_if_needed(None, config)
+        self.assertEqual(choice, "proceed")
+
+    def test_default_action_settings_exclude_import_note(self) -> None:
+        config_mod = _load_addon_module("config")
+        keys = {entry[0] for entry in config_mod.DEFAULT_ACTION_SETTINGS}
+        self.assertNotIn("prompt_cache_import_note_default", keys)
+
+
+class TestSettingsCompactControls(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.controls = _load_addon_module("ui.settings_compact_controls")
+
+    def test_configure_text_edit_helpers_exist(self) -> None:
+        self.assertTrue(callable(self.controls.configure_addon_text_edit))
+        self.assertTrue(callable(self.controls.configure_settings_text_edit))
+
+    def test_configure_addon_text_edit_marks_editor(self) -> None:
+        editor = MagicMock()
+        editor.document.return_value = MagicMock()
+        with patch.object(self.controls, "load_config", return_value={"settings_show_text_newlines": False}):
+            with patch.object(self.controls, "bind_text_edit_auto_height"):
+                self.controls.configure_addon_text_edit(editor, scroll_free=True)
+        self.assertTrue(getattr(editor, "_addon_text_edit", False))
+
+    def test_configure_settings_text_edit_marks_editor(self) -> None:
+        editor = MagicMock()
+        editor.document.return_value = MagicMock()
+        with patch.object(self.controls, "bind_text_edit_auto_height"):
+            self.controls.configure_settings_text_edit(editor)
+        self.assertTrue(getattr(editor, "_settings_text_edit", False))
+
+
+class TestSettingsWarningsLogic(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.settings = _load_addon_module("ui.settings_dialog")
+        cls.config_mod = _load_addon_module("config")
+
+    def test_refresh_warning_restore_checkboxes_unchecks_all(self) -> None:
+        dialog = MagicMock()
+        first = MagicMock()
+        second = MagicMock()
+        dialog._warning_restore_checkboxes = {"a": first, "b": second}
+        self.settings.SettingsDialog._refresh_warning_restore_checkboxes(dialog)
+        first.setChecked.assert_called_once_with(False)
+        second.setChecked.assert_called_once_with(False)
+
+    def test_apply_warning_restores_saves_default_actions_without_warning_selection(self) -> None:
+        dialog = MagicMock()
+        dialog.config = {
+            "language": "en",
+            "prompt_cache_recreate_default": "recreate",
+        }
+        dialog._baseline_config = dict(dialog.config)
+        dialog._selected_warning_restore_keys = MagicMock(return_value=[])
+        combo = MagicMock()
+        combo.currentData.return_value = "skip_cache"
+        dialog._default_action_combos = {"prompt_cache_recreate_default": combo}
+        with patch.object(self.settings, "save_config") as save:
+            self.settings.SettingsDialog._apply_selected_warning_restores(dialog)
+        self.assertEqual(dialog.config["prompt_cache_recreate_default"], "skip_cache")
+        self.assertEqual(
+            dialog._baseline_config["prompt_cache_recreate_default"],
+            "skip_cache",
+        )
+        save.assert_called_once()
+
+
+class TestUiModuleImports(unittest.TestCase):
+    _CORE_MODULES = (
+        "prompt_cache_policy",
+        "prompt_inspection",
+        "dev_mock",
+        "prompt_compose",
+        "note_context_fields",
+    )
+
+    def test_core_addon_modules_import_under_mocks(self) -> None:
+        for module_name in self._CORE_MODULES:
+            with self.subTest(module=module_name):
+                _load_addon_module(module_name)
+
+    def test_all_ui_modules_import_under_mocks(self) -> None:
+        ui_dir = Path(__file__).resolve().parent.parent / "ui"
+        for path in sorted(ui_dir.glob("*.py")):
+            if path.name.startswith("_"):
+                continue
+            module_name = f"ui.{path.stem}"
+            with self.subTest(module=module_name):
+                _load_addon_module(module_name)
 
 
 if __name__ == "__main__":

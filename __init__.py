@@ -19,7 +19,6 @@ from .ui.svg_icons import (
 )
 from .ui.optimize import optimize_field_with_gemini, undo_last_optimization
 from .ui.dev_playground_dialog import open_dev_playground_dialog
-from .ui.scroll_test_dialog import open_scroll_test_dialog
 from .ui.settings_dialog import open_settings_dialog
 from .ui.theme import refresh_addon_theme
 
@@ -79,10 +78,7 @@ def init_tools_menu() -> None:
     action.setShortcut("Ctrl+Alt+C")
     action.triggered.connect(lambda: open_chat())
     mw.form.menuTools.addAction(action)
-    scroll_test_action = QAction("Anki AI: Scroll test (debug)", mw)
-    scroll_test_action.triggered.connect(lambda: open_scroll_test_dialog(mw))
-    mw.form.menuTools.addAction(scroll_test_action)
-    dev_playground_action = QAction("Anki AI: Dev playground", mw)
+    dev_playground_action = QAction(tr("menu.tools.dev_playground", config=config), mw)
     dev_playground_action.triggered.connect(lambda: open_dev_playground_dialog(mw))
     mw.form.menuTools.addAction(dev_playground_action)
 

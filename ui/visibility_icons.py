@@ -151,9 +151,8 @@ class VisibilityToggleButton(QWidget):
 
     def enterEvent(self, event) -> None:
         from .theme import show_themed_tooltip
-        from .widgets import _event_global_pos
 
-        show_themed_tooltip(self, _event_global_pos(event))
+        show_themed_tooltip(self)
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:

@@ -22,7 +22,13 @@ from .settings_compact_controls import (
     create_ui_text_edit,
     refresh_settings_text_edit_layouts,
 )
-from .theme import apply_native_page_scroll_theme, muted_hint_html, strong_label_html
+from .theme import (
+    apply_native_page_scroll_theme,
+    muted_hint_html,
+    refresh_native_text_edits_in,
+    strong_label_html,
+)
+from .themed_windows import register_themed_window
 
 
 class PromptInspectionWindow(QWidget):
@@ -44,6 +50,8 @@ class PromptInspectionWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self._refresh_callback = refresh_callback
+        self._last_inspection: PromptInspection | None = None
+        self._last_config: dict | None = None
         self.resize(640, 520)
         self.setWindowTitle(title)
 
@@ -85,12 +93,24 @@ class PromptInspectionWindow(QWidget):
 
         self.apply_language()
 
+        register_themed_window(self)
+
+    def apply_theme(self) -> None:
+        apply_native_page_scroll_theme(self._scroll, allow_horizontal_scroll=False)
+        config = self._last_config or load_config()
+        self.apply_language(config)
+        if self._last_inspection is not None:
+            self.set_inspection(self._last_inspection, config)
+        refresh_native_text_edits_in(self)
+
     def apply_language(self, config: dict | None = None) -> None:
         config = config or load_config()
         self._refresh_btn.setText(tr("prompt.inspect.refresh", config=config))
 
     def set_inspection(self, inspection: PromptInspection, config: dict | None = None) -> None:
         config = config or load_config()
+        self._last_inspection = inspection
+        self._last_config = config
         self._formula_label.setText(
             strong_label_html(
                 tr(

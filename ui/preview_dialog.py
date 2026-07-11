@@ -24,9 +24,12 @@ from aqt.qt import (
 
 
 
+from ..config import load_config
 from ..i18n import tr
 
 from .settings_compact_controls import create_ui_text_edit
+from .theme import refresh_native_text_edits_in
+from .themed_windows import register_themed_window
 
 
 
@@ -117,3 +120,21 @@ class PreviewDialog(QDialog):
         btn_row.addWidget(btn_cancel)
 
         layout.addLayout(btn_row)
+
+        self._intro_label = layout.itemAt(0).widget()
+        self._original_label = left.itemAt(0).widget()
+        self._optimized_label = right.itemAt(0).widget()
+        self._btn_apply = btn_apply
+        self._btn_cancel = btn_cancel
+
+        register_themed_window(self)
+
+    def apply_theme(self) -> None:
+        config = load_config()
+        self.setWindowTitle(tr("preview.title", config=config))
+        self._intro_label.setText(tr("preview.intro", config=config))
+        self._original_label.setText(f"<b>{tr('preview.original', config=config)}</b>")
+        self._optimized_label.setText(f"<b>{tr('preview.optimized', config=config)}</b>")
+        self._btn_apply.setText(tr("preview.apply", config=config))
+        self._btn_cancel.setText(tr("preview.cancel", config=config))
+        refresh_native_text_edits_in(self)

@@ -12,14 +12,6 @@ An Anki add-on that integrates **Google Gemini** into the note editor: optimize 
 
 ---
 
-## Screenshots
-
-| Editor buttons | Settings dialog |
-|----------------|-----------------|
-| ![Editor toolbar buttons](docs/screenshots/editor-buttons.png) | ![Settings dialog](docs/screenshots/settings-dialog.png) |
-
----
-
 ## Features
 
 ### Field optimization (`Gemini` · `Ctrl+Shift+G` / `Cmd+Shift+G`)
@@ -35,6 +27,17 @@ Imports **all fields** of the current note into chat and asks Gemini whether the
 Streaming chat with Markdown replies. When Gemini suggests Anki field content, **copy buttons** appear on code blocks. Also in **Tools → Chat with Gemini**.
 
 After **brain icon** note import, imported fields appear in an **editable preview** above the chat log (eye icon to show/hide). Check **Include note context in the next message** to wrap your next send with the note fields; use **Edit wrapper** to adjust the `{{context}}` / `{{request}}` template for that session. Field edits in the preview are included when context is sent.
+
+**Chat toolbar (compact icons — hover for tooltips):**
+
+- **Brain** — include/exclude imported note in the next message
+- **Pencil menu** — edit note fields, context wrapper, or card templates (session only)
+- **Eye** — open imported-note preview in a separate window
+- **Lens** — read-only **prompt inspect** (preview full outgoing prompt without sending)
+- **Stop / priority** — toggle **pre-send review** (edit prompt before Gemini) vs send directly
+- **Plus** — new conversation (applies settings that require a fresh session)
+
+From **Edit note**, you can optionally **send empty fields** when building note context.
 
 ### Settings (settings button)
 
@@ -117,7 +120,7 @@ Use the **settings** dialog for normal setup; manual file copy is rarely needed.
 | `temperature_chat` | `0.2` | Creativity for chat |
 | `timeout_seconds` | `30` | API timeout |
 | `max_retries` | `2` | Retries on transient errors |
-| `max_history_turns` | `20` | Chat history length |
+| `max_history_turns` | `10` | Chat history length (one turn = your message + Gemini reply) |
 | `confirm_before_apply` | `true` | Preview before applying optimization |
 | `system_instruction_shared` | `true` | One instruction set for optimize + chat |
 | `system_instruction` | *(built-in)* | Shared static instructions (when shared) |
@@ -127,7 +130,7 @@ Use the **settings** dialog for normal setup; manual file copy is rarely needed.
 | `brain_import_message` | *(built-in)* | Prompt for brain icon note import |
 | `prompt_cache_enabled` | `false` | Use Gemini explicit prompt caching |
 | `prompt_cache_ttl_seconds` | `3600` | Cache lifetime (seconds) |
-| `prompt_cache_min_tokens` | `2048` | Minimum estimated cached tokens before creating a cache (internal Gemini check) |
+| `prompt_cache_min_chars` | `8192` | Minimum cached characters before creating a cache (~2048 tokens × 4 chars/token) |
 | `prompt_cache_custom_text` | `""` | Optional extra reference text to cache |
 | `prompt_cache_segments` | *(see example)* | Which prompt parts to include in the cache |
 | `chat_payload_warning_chars` | `12000` | Warn before chat send when total input characters exceed this |
@@ -155,7 +158,11 @@ Legacy single `model` / `thinking_budget` keys migrate automatically.
 
 Git ignores secrets and generated files (`meta.json`, `config_gemini.json`, `__pycache__/`, etc.).
 
-`vendor/` bundles [Python-Markdown](https://python-markdown.github.io/) for chat formatting.
+`vendor/` bundles [Python-Markdown](https://python-markdown.github.io/) 3.10.2 for chat formatting.
+
+### Dev playground (no billing)
+
+**Tools → Anki AI: Dev playground** enables **dev mock mode**: fake Gemini replies (with streaming), in-memory prompt caches, and model list refresh — no API key required. See [TESTING.md](TESTING.md) §5.
 
 ### Run offline tests
 
@@ -209,7 +216,7 @@ The add-on does **not** show Gemini token counts or dollar amounts. Where helpfu
 |------|----------|-------|
 | Chat send warning | `estimate_chat_request_chars()` | Sum of system + history + outgoing message |
 | Cache status / recreate confirm | `cached_char_count` on cache bundle | Characters of cached text |
-| Cache minimum threshold | `estimate_text_tokens()` (internal) | ~4 chars/token; aligns with Gemini ~2048 minimum |
+| Cache minimum threshold | `prompt_cache_min_chars` | Character count; ~4 chars/token aligns with Gemini ~2048-token minimum |
 
 In Anki: **Settings guide** (info button) → **Add-on payload sizes…** for the full explanation.
 

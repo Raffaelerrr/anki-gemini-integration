@@ -7,9 +7,24 @@ from aqt.qt import QCheckBox, QDialog, QMessageBox
 from aqt.utils import showInfo, showWarning, tooltip
 
 from ..config import api_key_configured, is_warning_dismissed, load_config, save_config, uses_default_system_instruction
-from ..gemini_client import GeminiAuthError, GeminiError, GeminiRateLimitError, call_gemini, strip_markdown_fences
+from ..gemini_client import (
+    GeminiAuthError,
+    GeminiError,
+    GeminiRateLimitError,
+    build_optimize_user_text,
+    call_gemini,
+    merge_system_instructions,
+    resolve_model,
+    strip_markdown_fences,
+)
 from ..i18n import tr
-from ..prompt_cache import build_prompt_cache_bundle
+from ..prompt_cache import (
+    build_live_system_instruction,
+    build_prompt_cache_bundle,
+    flatten_bundle_for_live_send,
+)
+from ..prompt_inspection import build_optimize_prompt_inspection
+from .pre_send_prompt_dialog import PreSendPromptContext, PreSendPromptOverrides, confirm_pre_send_prompt
 from .prompt_cache_confirm import confirm_prompt_cache_recreate_if_needed
 from .preview_dialog import PreviewDialog
 
@@ -149,6 +164,36 @@ def _passes_optimize_warnings(editor, config: dict[str, Any]) -> bool:
     return True
 
 
+def build_optimize_pre_send_context(
+    config: dict[str, Any],
+    field_content: str,
+) -> PreSendPromptContext:
+    bundle = build_prompt_cache_bundle(config, purpose="optimize")
+    if bundle is not None:
+        system_instruction = build_live_system_instruction(
+            config,
+            purpose="optimize",
+            include_meta_rule=False,
+            bundle=bundle,
+        )
+    else:
+        system_instruction = merge_system_instructions(
+            config,
+            include_meta_rule=False,
+            purpose="optimize",
+        )
+    inspection = build_optimize_prompt_inspection(config, field_content=field_content)
+    return PreSendPromptContext(
+        inspection=inspection,
+        outgoing_payload=field_content,
+        system_instruction=system_instruction,
+        bundle=bundle,
+        model=resolve_model(config, "optimize"),
+        cache_session=None,
+        purpose="optimize",
+    )
+
+
 def _handle_optimize_result(future, editor, field_index: int, original: str, config: dict[str, Any]) -> None:
     from .window_lifecycle import is_shutting_down
 
@@ -192,34 +237,81 @@ def optimize_field_with_gemini(editor) -> None:
     if not _passes_optimize_warnings(editor, config):
         return
 
-    optimize_bundle = build_prompt_cache_bundle(config, purpose="optimize")
+    pre_send_context = build_optimize_pre_send_context(config, original)
+    pre_send_overrides: PreSendPromptOverrides | None = None
+    if bool(config.get("optimize_modify_prompt_before_send", False)):
+        pre_send_overrides = confirm_pre_send_prompt(
+            editor.parentWindow,
+            context=pre_send_context,
+        )
+        if pre_send_overrides is None:
+            return
+
+    bundle = (
+        pre_send_overrides.bundle
+        if pre_send_overrides is not None and pre_send_overrides.bundle is not None
+        else pre_send_context.bundle
+    )
+    user_text = (
+        pre_send_overrides.outgoing_payload
+        if pre_send_overrides is not None
+        else original
+    )
+    system_instruction = (
+        pre_send_overrides.system_instruction
+        if pre_send_overrides is not None
+        else pre_send_context.system_instruction
+    )
+
     cache_choice = confirm_prompt_cache_recreate_if_needed(
         editor.parentWindow,
         config,
-        optimize_bundle,
+        bundle,
         purpose="optimize",
     )
     if cache_choice == "abort":
         return
     allow_cache_create = cache_choice != "skip_cache"
+    allow_cache_use = cache_choice != "skip_cache"
+    if bundle is not None and not allow_cache_use:
+        system_instruction, user_text = flatten_bundle_for_live_send(
+            config,
+            bundle,
+            purpose="optimize",
+            include_meta_rule=False,
+            system_instruction_override=(
+                system_instruction if pre_send_overrides is not None else None
+            ),
+            outgoing_payload_override=user_text if pre_send_overrides is not None else None,
+            user_text=user_text,
+        )
 
     tooltip(tr("optimize.in_progress", config=config))
 
     temperature = float(config.get("temperature_optimize", 0.1))
+    api_user_text = build_optimize_user_text(config, user_text)
+
+    call_kwargs: dict[str, Any] = {
+        "config": config,
+        "user_text": api_user_text,
+        "temperature": temperature,
+        "include_meta_rule": False,
+        "purpose": "optimize",
+        "allow_prompt_cache_create": allow_cache_create,
+        "allow_prompt_cache_use": allow_cache_use,
+        "on_prompt_cache_created": lambda active: _schedule_optimize_prompt_cache_created(
+            editor,
+            config,
+            active,
+        ),
+    }
+    if pre_send_overrides is not None or (not allow_cache_use and bundle is not None):
+        call_kwargs["override_outgoing_payload"] = api_user_text
+        call_kwargs["override_system_instruction"] = system_instruction
+        if allow_cache_use and bundle is not None:
+            call_kwargs["override_bundle"] = bundle
 
     mw.taskman.run_in_background(
-        lambda: call_gemini(
-            config=config,
-            user_text=original,
-            temperature=temperature,
-            include_meta_rule=False,
-            purpose="optimize",
-            allow_prompt_cache_create=allow_cache_create,
-            on_prompt_cache_created=lambda active: _schedule_optimize_prompt_cache_created(
-                editor,
-                config,
-                active,
-            ),
-        ),
+        lambda: call_gemini(**call_kwargs),
         lambda future: _handle_optimize_result(future, editor, field_index, original, config),
     )

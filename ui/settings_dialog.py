@@ -23,11 +23,12 @@ from aqt.qt import (
     QWidget,
 )
 from aqt import mw
-from aqt.utils import showInfo, showWarning
+from aqt.utils import showInfo, showWarning, tooltip
 
 from ..constants import (
     DEFAULT_MODEL_CHAT,
     DEFAULT_MODEL_OPTIMIZE,
+    DEFAULT_PROMPT_CACHE_MIN_CHARS,
     DEFAULT_THINKING_BUDGET_CHAT,
     DEFAULT_THINKING_BUDGET_OPTIMIZE,
     GEMINI_AI_STUDIO_BILLING_URL,
@@ -35,6 +36,7 @@ from ..constants import (
     GEMINI_API_BILLING_DOCS_URL,
 )
 from ..config import (
+    DEFAULT_ACTION_SETTINGS,
     DISMISSIBLE_WARNING_KEYS,
     DISMISSIBLE_WARNING_LABELS,
     RESTORABLE_SETTING_KEYS,
@@ -48,12 +50,23 @@ from ..config import (
 )
 from ..prompt_cache import (
     PROMPT_CACHE_USER_SEGMENT_ORDER,
+    any_tracked_active_cache,
     clear_prompt_cache,
     extend_prompt_cache_ttl,
+    get_prompt_cache_store,
+    prompt_cache_change_ttl_seconds,
     prompt_cache_segments,
     prompt_cache_status_text,
     segment_label_key,
 )
+from ..prompt_cache_policy import (
+    MAX_CUSTOM_TEXT_PRESETS,
+    clone_presets,
+    new_preset,
+    normalize_custom_text_presets,
+    purposes_requiring_cache_invalidation,
+)
+from .prompt_cache_confirm import confirm_custom_text_load_replace
 from .prompt_cache_manager_dialog import open_prompt_cache_manager
 from ..i18n import (
     LANG_EN,
@@ -93,6 +106,7 @@ from .wrapper_sections_editor import WrapperSectionsEditor
 from .chat_dialog import refresh_chat_from_settings, refresh_chat_language
 from .prompt_inspection_dialog import PromptInspectionWindow
 from .settings_help_dialog import _make_info_button, open_settings_help_dialog
+from .help_icons import instruction_html
 from .model_selector import (
     create_model_selector,
     model_selector_value,
@@ -160,8 +174,9 @@ class SettingsDialog(QDialog):
         self.config = dict(config)
         self._restore_checkboxes: dict[str, QCheckBox] = {}
         self._warning_restore_checkboxes: dict[str, QCheckBox] = {}
+        self._default_action_combos: dict[str, Any] = {}
         self._all_restore_checked = True
-        self._all_warnings_checked = True
+        self._all_warnings_checked = False
         self._model_refresh_busy = False
         self._settings_help_dialog = None
         self._optimize_prompt_inspection_window: PromptInspectionWindow | None = None
@@ -273,6 +288,14 @@ class SettingsDialog(QDialog):
 
         self._warnings_btn_layout = QHBoxLayout()
         self._warnings_btn_layout.setSpacing(8)
+        self.btn_check_dismissed_warnings = QPushButton(
+            tr("settings.warnings.check_dismissed", config=config), self
+        )
+        self.btn_check_dismissed_warnings.clicked.connect(self._check_all_dismissed_warning_restores)
+        _setup_footer_button(
+            self.btn_check_dismissed_warnings,
+            tooltip=tr("settings.warnings.check_dismissed", config=config),
+        )
         self.btn_warnings_toggle_all = QPushButton(tr("settings.restore.toggle_all", config=config), self)
         self.btn_warnings_toggle_all.clicked.connect(self._toggle_all_warning_restore_checks)
         _setup_footer_button(
@@ -291,6 +314,7 @@ class SettingsDialog(QDialog):
             self.btn_warnings_back,
             tooltip=tr("settings.restore.back", config=config),
         )
+        self._warnings_btn_layout.addWidget(self.btn_check_dismissed_warnings)
         self._warnings_btn_layout.addWidget(self.btn_warnings_toggle_all)
         self._warnings_btn_layout.addStretch(1)
         self._warnings_btn_layout.addWidget(self.btn_apply_warning_restore)
@@ -566,7 +590,12 @@ class SettingsDialog(QDialog):
         self.btn_inspect_optimize_prompt.clicked.connect(self._open_optimize_prompt_inspection)
         layout.addWidget(self.btn_inspect_optimize_prompt)
 
-        layout.addWidget(QLabel(f"<br><b>{tr('settings.brain_message', config=config)}</b>"))
+        brain_message_title = QLabel(form_host)
+        brain_message_title.setTextFormat(Qt.TextFormat.RichText)
+        brain_message_title.setText(
+            instruction_html(f"<br><b>{tr('settings.brain_message', config=config)}</b>")
+        )
+        layout.addWidget(brain_message_title)
         self.brain_message_hint = create_settings_hint_label(
             form_host,
             tr("settings.brain_message.hint", config=config),
@@ -736,9 +765,36 @@ class SettingsDialog(QDialog):
         for key in DISMISSIBLE_WARNING_KEYS:
             label_key = DISMISSIBLE_WARNING_LABELS.get(key, key)
             checkbox = QCheckBox(tr(label_key, config=config), host)
-            checkbox.setChecked(is_warning_dismissed(self.config, key))
+            checkbox.setChecked(False)
             layout.addWidget(checkbox)
             self._warning_restore_checkboxes[key] = checkbox
+
+        layout.addSpacing(SETTINGS_SECTION_GAP)
+        layout.addWidget(
+            QLabel(f"<b>{tr('warnings.default_actions.title', config=config)}</b>")
+        )
+        layout.addWidget(
+            create_settings_hint_label(
+                host,
+                tr("warnings.default_actions.hint", config=config),
+            )
+        )
+        self._default_action_combos.clear()
+        for config_key, label_key, values in DEFAULT_ACTION_SETTINGS:
+            combo_shell, combo = create_settings_combo(host)
+            for value in values:
+                option_key = f"{label_key}.{value}"
+                combo.addItem(tr(option_key, config=config), value)
+            current = str(self.config.get(config_key) or values[0])
+            index = combo.findData(current)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            add_settings_labeled_field(
+                layout,
+                host,
+                tr(label_key, config=config),
+                combo_shell,
+            )
+            self._default_action_combos[config_key] = combo
 
         layout.addStretch(1)
         scroll.setWidget(host)
@@ -885,7 +941,7 @@ class SettingsDialog(QDialog):
         min_chars_shell, self.prompt_cache_min_chars_input = create_settings_spinbox(host)
         self.prompt_cache_min_chars_input.setRange(256, 1_000_000)
         self.prompt_cache_min_chars_input.setValue(
-            int(config.get("prompt_cache_min_chars", 8189))
+            int(config.get("prompt_cache_min_chars", DEFAULT_PROMPT_CACHE_MIN_CHARS))
         )
         min_row.addWidget(min_chars_shell)
         min_row.addStretch(1)
@@ -951,18 +1007,119 @@ class SettingsDialog(QDialog):
 
         self.prompt_cache_status_label = QLabel(host)
         layout.addWidget(self.prompt_cache_status_label)
+
+        change_ttl_row = QHBoxLayout()
+        change_ttl_row.addWidget(
+            QLabel(tr("settings.prompt_cache.change_ttl_seconds", config=config), host)
+        )
+        change_ttl_shell, self.prompt_cache_change_ttl_input = create_settings_spinbox(host)
+        self.prompt_cache_change_ttl_input.setRange(60, 7 * 24 * 3600)
+        self.prompt_cache_change_ttl_input.setSingleStep(300)
+        self.prompt_cache_change_ttl_input.setValue(
+            int(config.get("prompt_cache_change_ttl_seconds", 3600))
+        )
+        change_ttl_row.addWidget(change_ttl_shell)
+        change_ttl_row.addStretch(1)
+        layout.addLayout(change_ttl_row)
+
         cache_btn_row = QHBoxLayout()
-        self.prompt_cache_extend_btn = QPushButton(tr("settings.prompt_cache.extend", config=config), host)
-        self.prompt_cache_extend_btn.clicked.connect(self._extend_prompt_cache_ttl)
+        self.prompt_cache_change_ttl_btn = QPushButton(
+            tr("settings.prompt_cache.change_ttl", config=config),
+            host,
+        )
+        self.prompt_cache_change_ttl_btn.clicked.connect(self._change_prompt_cache_ttl)
         self.prompt_cache_clear_btn = QPushButton(tr("settings.prompt_cache.clear", config=config), host)
         self.prompt_cache_clear_btn.clicked.connect(self._clear_prompt_cache)
         self.prompt_cache_manage_btn = QPushButton(tr("settings.prompt_cache.manage", config=config), host)
         self.prompt_cache_manage_btn.clicked.connect(self._open_prompt_cache_manager)
-        cache_btn_row.addWidget(self.prompt_cache_extend_btn)
+        cache_btn_row.addWidget(self.prompt_cache_change_ttl_btn)
         cache_btn_row.addWidget(self.prompt_cache_clear_btn)
         cache_btn_row.addWidget(self.prompt_cache_manage_btn)
         cache_btn_row.addStretch(1)
         layout.addLayout(cache_btn_row)
+
+        layout.addSpacing(SETTINGS_SECTION_GAP)
+        layout.addWidget(
+            create_settings_section_label(host, tr("settings.prompt_cache_presets", config=config))
+        )
+        layout.addWidget(
+            create_settings_hint_label(
+                host,
+                tr("settings.prompt_cache_presets.hint", config=config),
+            )
+        )
+        preset_select_row = QHBoxLayout()
+        preset_select_row.addWidget(
+            QLabel(tr("settings.prompt_cache_presets.active", config=config), host)
+        )
+        preset_combo_shell, self.prompt_cache_preset_combo = create_settings_combo(host)
+        self.prompt_cache_preset_combo.addItem(
+            tr("settings.prompt_cache_presets.manual", config=config),
+            "",
+        )
+        for preset in normalize_custom_text_presets(config.get("prompt_cache_custom_text_presets")):
+            self.prompt_cache_preset_combo.addItem(preset["name"], preset["id"])
+        active_id = str(config.get("prompt_cache_active_preset_id") or "")
+        active_index = self.prompt_cache_preset_combo.findData(active_id)
+        self.prompt_cache_preset_combo.setCurrentIndex(active_index if active_index >= 0 else 0)
+        self.prompt_cache_preset_combo.currentIndexChanged.connect(
+            self._on_prompt_cache_preset_changed
+        )
+        preset_select_row.addWidget(preset_combo_shell, 1)
+        layout.addLayout(preset_select_row)
+
+        preset_meta_row = QHBoxLayout()
+        preset_meta_row.addWidget(
+            QLabel(tr("settings.prompt_cache_presets.name", config=config), host)
+        )
+        name_shell, self.prompt_cache_preset_name_input = create_settings_line_edit(host)
+        preset_meta_row.addWidget(name_shell, 1)
+        self.prompt_cache_preset_chat_checkbox = QCheckBox(
+            tr("settings.prompt_cache_presets.for_chat", config=config),
+            host,
+        )
+        self.prompt_cache_preset_optimize_checkbox = QCheckBox(
+            tr("settings.prompt_cache_presets.for_optimize", config=config),
+            host,
+        )
+        preset_meta_row.addWidget(self.prompt_cache_preset_chat_checkbox)
+        preset_meta_row.addWidget(self.prompt_cache_preset_optimize_checkbox)
+        layout.addLayout(preset_meta_row)
+
+        preset_btn_row = QHBoxLayout()
+        self.prompt_cache_preset_add_btn = QPushButton(
+            tr("settings.prompt_cache_presets.add", config=config),
+            host,
+        )
+        self.prompt_cache_preset_add_btn.clicked.connect(self._add_prompt_cache_preset)
+        self.prompt_cache_preset_remove_btn = QPushButton(
+            tr("settings.prompt_cache_presets.remove", config=config),
+            host,
+        )
+        self.prompt_cache_preset_remove_btn.clicked.connect(self._remove_prompt_cache_preset)
+        preset_btn_row.addWidget(self.prompt_cache_preset_add_btn)
+        preset_btn_row.addWidget(self.prompt_cache_preset_remove_btn)
+        preset_btn_row.addStretch(1)
+        layout.addLayout(preset_btn_row)
+        self._prompt_cache_presets: list[dict[str, Any]] = clone_presets(config)
+        self._manual_custom_cache_text = (config.get("prompt_cache_custom_text") or "").strip()
+        self._sync_prompt_cache_preset_fields()
+
+        layout.addSpacing(SETTINGS_SECTION_GAP)
+        self.optimize_modify_prompt_checkbox = QCheckBox(
+            tr("settings.optimize_modify_prompt_before_send", config=config),
+            host,
+        )
+        self.optimize_modify_prompt_checkbox.setChecked(
+            bool(config.get("optimize_modify_prompt_before_send", False))
+        )
+        layout.addWidget(self.optimize_modify_prompt_checkbox)
+        layout.addWidget(
+            create_settings_hint_label(
+                host,
+                tr("settings.optimize_modify_prompt_before_send.hint", config=config),
+            )
+        )
 
         billing_link = QLabel(host)
         billing_link.setTextFormat(Qt.TextFormat.RichText)
@@ -1232,6 +1389,7 @@ class SettingsDialog(QDialog):
         self.btn_apply_restore.setVisible(on_defaults)
         self.btn_restore_back.setVisible(on_defaults)
 
+        self.btn_check_dismissed_warnings.setVisible(on_warnings)
         self.btn_warnings_toggle_all.setVisible(on_warnings)
         self.btn_apply_warning_restore.setVisible(on_warnings)
         self.btn_warnings_back.setVisible(on_warnings)
@@ -1252,8 +1410,8 @@ class SettingsDialog(QDialog):
             _set_dialog_default_button(self.btn_advanced_back)
 
     def _refresh_warning_restore_checkboxes(self) -> None:
-        for key, checkbox in self._warning_restore_checkboxes.items():
-            checkbox.setChecked(is_warning_dismissed(self.config, key))
+        for checkbox in self._warning_restore_checkboxes.values():
+            checkbox.setChecked(False)
 
     def _enter_restore_mode(self) -> None:
         self._all_restore_checked = False
@@ -1354,11 +1512,26 @@ class SettingsDialog(QDialog):
         config["prompt_cache_enabled"] = self.prompt_cache_enabled_checkbox.isChecked()
         config["prompt_cache_ttl_seconds"] = self.prompt_cache_ttl_input.value()
         config["prompt_cache_min_chars"] = self.prompt_cache_min_chars_input.value()
+        self._commit_prompt_cache_preset_editor()
         config["prompt_cache_custom_text"] = self.prompt_cache_custom_text_input.toPlainText().strip()
+        config["prompt_cache_custom_text_presets"] = normalize_custom_text_presets(
+            self._prompt_cache_presets
+        )
+        config["prompt_cache_active_preset_id"] = str(
+            self.prompt_cache_preset_combo.currentData() or ""
+        )
+        config["prompt_cache_change_ttl_seconds"] = self.prompt_cache_change_ttl_input.value()
+        config["optimize_modify_prompt_before_send"] = (
+            self.optimize_modify_prompt_checkbox.isChecked()
+        )
         config["prompt_cache_segments"] = {
             segment_id: checkbox.isChecked()
             for segment_id, checkbox in self.prompt_cache_segment_checkboxes.items()
         }
+        for config_key, combo in self._default_action_combos.items():
+            value = combo.currentData()
+            if value is not None:
+                config[config_key] = value
         for key in DISMISSIBLE_WARNING_KEYS:
             config[key] = bool(config.get(key, False))
         return config
@@ -1393,6 +1566,19 @@ class SettingsDialog(QDialog):
     def _confirm_save_if_needed(self) -> bool:
         if not self._has_unsaved_changes():
             return True
+        pending = self._collect_pending_config()
+        affected = purposes_requiring_cache_invalidation(self._baseline_config, pending)
+        active = [
+            purpose
+            for purpose in affected
+            if get_prompt_cache_store(purpose).active is not None
+        ]
+        if active and not is_warning_dismissed(
+            self.config,
+            "suppress_settings_save_cache_clear_warning",
+        ):
+            if not self._confirm_save_cache_clear(active, pending):
+                return False
         if is_warning_dismissed(self.config, "suppress_settings_save_confirm_warning"):
             return True
         return self._confirm_dismissible_warning(
@@ -1401,6 +1587,41 @@ class SettingsDialog(QDialog):
             detail_key="settings.save_confirm.detail",
             dismiss_config_key="suppress_settings_save_confirm_warning",
         )
+
+    def _confirm_save_cache_clear(
+        self,
+        purposes: list[str],
+        config: dict[str, Any],
+    ) -> bool:
+        purpose_labels = ", ".join(
+            tr(f"settings.prompt_cache.manager.purpose.{purpose}", config=config)
+            for purpose in purposes
+        )
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("settings.save_cache_clear.title", config=config))
+        box.setText(
+            tr(
+                "settings.save_cache_clear.message",
+                config=config,
+                purposes=purpose_labels,
+            )
+        )
+        box.setInformativeText(tr("settings.save_cache_clear.detail", config=config))
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        dismiss = QCheckBox(tr("optimize.warning.dismiss", config=config), box)
+        box.setCheckBox(dismiss)
+        if box.exec() != QMessageBox.StandardButton.Ok:
+            return False
+        if dismiss.isChecked():
+            updated = load_config()
+            updated["suppress_settings_save_cache_clear_warning"] = True
+            save_config(updated)
+            self.config["suppress_settings_save_cache_clear_warning"] = True
+        return True
 
     def _cancel_and_reject(self) -> None:
         self.reject()
@@ -1423,12 +1644,14 @@ class SettingsDialog(QDialog):
 
     def _enter_restore_warnings_mode(self) -> None:
         self._refresh_warning_restore_checkboxes()
-        dismissed = dismissed_warning_keys(self.config)
-        self._all_warnings_checked = bool(dismissed) and len(dismissed) == len(DISMISSIBLE_WARNING_KEYS)
-        for key, checkbox in self._warning_restore_checkboxes.items():
-            checkbox.setChecked(key in dismissed)
+        self._all_warnings_checked = False
+        for config_key, combo in self._default_action_combos.items():
+            current = str(self.config.get(config_key) or combo.itemData(0))
+            index = combo.findData(current)
+            combo.setCurrentIndex(index if index >= 0 else 0)
         self.stack.setCurrentIndex(2)
         self._set_subpage_mode("warnings")
+        QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
 
     def _leave_restore_warnings_mode(self) -> None:
         self.stack.setCurrentIndex(0)
@@ -1443,6 +1666,15 @@ class SettingsDialog(QDialog):
     def _leave_advanced_mode(self) -> None:
         self.stack.setCurrentIndex(0)
         self._set_subpage_mode(None)
+
+    def _check_all_dismissed_warning_restores(self) -> None:
+        dismissed = dismissed_warning_keys(self.config)
+        if not dismissed:
+            showInfo(tr("settings.restore_warnings.none_dismissed", config=self._ui_config()))
+            return
+        for key, checkbox in self._warning_restore_checkboxes.items():
+            checkbox.setChecked(key in dismissed)
+        self._all_warnings_checked = len(dismissed) == len(DISMISSIBLE_WARNING_KEYS)
 
     def _toggle_all_warning_restore_checks(self) -> None:
         self._all_warnings_checked = not self._all_warnings_checked
@@ -1656,13 +1888,16 @@ class SettingsDialog(QDialog):
 
     def _apply_selected_warning_restores(self) -> None:
         selected = self._selected_warning_restore_keys()
-        if not selected:
-            showInfo(tr("settings.warnings.none_selected", config=self._ui_config()))
-            return
-
         for key in selected:
             self.config[key] = False
 
+        for config_key, combo in self._default_action_combos.items():
+            value = combo.currentData()
+            if value is not None:
+                self.config[config_key] = value
+                self._baseline_config[config_key] = value
+
+        save_config(self.config)
         self._refresh_warning_restore_checkboxes()
         self._leave_restore_warnings_mode()
 
@@ -1700,23 +1935,20 @@ class SettingsDialog(QDialog):
         if not self._confirm_save_if_needed():
             return
 
-        self.config = self._collect_pending_config()
+        pending = self._collect_pending_config()
+        affected = purposes_requiring_cache_invalidation(self._baseline_config, pending)
+        self.config = pending
         save_config(self.config)
-        clear_prompt_cache(config=self.config)
+        for purpose in affected:
+            clear_prompt_cache(config=self.config, purpose=purpose)
         refresh_chat_from_settings()
         self.accept()
 
     def _load_prompt_cache_custom_text_from_file(self) -> None:
         config = self._ui_config()
         existing = self.prompt_cache_custom_text_input.toPlainText().strip()
-        if existing:
-            confirm = QMessageBox.question(
-                self,
-                tr("settings.prompt_cache_custom_text.load_confirm.title", config=config),
-                tr("settings.prompt_cache_custom_text.load_confirm.message", config=config),
-            )
-            if confirm != QMessageBox.StandardButton.Yes:
-                return
+        if existing and not confirm_custom_text_load_replace(self, config):
+            return
 
         path, _selected_filter = QFileDialog.getOpenFileName(
             self,
@@ -1752,12 +1984,139 @@ class SettingsDialog(QDialog):
         chat_status = prompt_cache_status_text(config, "chat")
         optimize_status = prompt_cache_status_text(config, "optimize")
         self.prompt_cache_status_label.setText(f"{chat_status}\n{optimize_status}")
+        if hasattr(self, "prompt_cache_change_ttl_btn"):
+            self.prompt_cache_change_ttl_btn.setEnabled(any_tracked_active_cache())
 
-    def _extend_prompt_cache_ttl(self) -> None:
+    def _change_prompt_cache_ttl(self) -> None:
         config = self._ui_config()
-        extend_prompt_cache_ttl(config=config, purpose="chat")
-        extend_prompt_cache_ttl(config=config, purpose="optimize")
+        if not any_tracked_active_cache():
+            showWarning(tr("settings.prompt_cache.change_ttl.none", config=config))
+            return
+        ttl_seconds = self.prompt_cache_change_ttl_input.value()
+        config = dict(config)
+        config["prompt_cache_change_ttl_seconds"] = ttl_seconds
+        updated = 0
+        failed = False
+        for purpose in ("chat", "optimize"):
+            if extend_prompt_cache_ttl(
+                config=config,
+                purpose=purpose,
+                extra_seconds=ttl_seconds,
+            ):
+                updated += 1
+            elif get_prompt_cache_store(purpose).active is not None:
+                failed = True
         self._refresh_prompt_cache_status()
+        if updated > 0:
+            tooltip(
+                tr(
+                    "settings.prompt_cache.change_ttl.partial",
+                    config=config,
+                    count=updated,
+                )
+            )
+        elif failed:
+            showWarning(tr("settings.prompt_cache.change_ttl.failed", config=config))
+        else:
+            showWarning(tr("settings.prompt_cache.change_ttl.none", config=config))
+
+    def _selected_prompt_cache_preset_id(self) -> str:
+        if not hasattr(self, "prompt_cache_preset_combo"):
+            return ""
+        return str(self.prompt_cache_preset_combo.currentData() or "")
+
+    def _find_prompt_cache_preset(self, preset_id: str) -> dict[str, Any] | None:
+        for preset in self._prompt_cache_presets:
+            if preset.get("id") == preset_id:
+                return preset
+        return None
+
+    def _commit_prompt_cache_preset_editor(self) -> None:
+        if not hasattr(self, "prompt_cache_custom_text_input"):
+            return
+        text = self.prompt_cache_custom_text_input.toPlainText()
+        preset_id = self._selected_prompt_cache_preset_id()
+        if preset_id:
+            preset = self._find_prompt_cache_preset(preset_id)
+            if preset is not None:
+                preset["text"] = text
+                preset["name"] = self.prompt_cache_preset_name_input.text().strip() or preset["name"]
+                preset["chat"] = self.prompt_cache_preset_chat_checkbox.isChecked()
+                preset["optimize"] = self.prompt_cache_preset_optimize_checkbox.isChecked()
+        else:
+            self._manual_custom_cache_text = text
+
+    def _sync_prompt_cache_preset_fields(self) -> None:
+        if not hasattr(self, "prompt_cache_preset_combo"):
+            return
+        preset_id = self._selected_prompt_cache_preset_id()
+        editing_preset = bool(preset_id)
+        self.prompt_cache_preset_name_input.setEnabled(editing_preset)
+        self.prompt_cache_preset_chat_checkbox.setEnabled(editing_preset)
+        self.prompt_cache_preset_optimize_checkbox.setEnabled(editing_preset)
+        self.prompt_cache_preset_remove_btn.setEnabled(editing_preset)
+        if editing_preset:
+            preset = self._find_prompt_cache_preset(preset_id)
+            if preset is None:
+                return
+            self.prompt_cache_preset_name_input.setText(str(preset.get("name") or ""))
+            self.prompt_cache_preset_chat_checkbox.setChecked(bool(preset.get("chat", True)))
+            self.prompt_cache_preset_optimize_checkbox.setChecked(
+                bool(preset.get("optimize", True))
+            )
+            self.prompt_cache_custom_text_input.setPlainText(str(preset.get("text") or ""))
+        else:
+            self.prompt_cache_preset_name_input.clear()
+            self.prompt_cache_preset_chat_checkbox.setChecked(True)
+            self.prompt_cache_preset_optimize_checkbox.setChecked(True)
+            self.prompt_cache_custom_text_input.setPlainText(self._manual_custom_cache_text)
+
+    def _on_prompt_cache_preset_changed(self) -> None:
+        self._commit_prompt_cache_preset_editor()
+        self._sync_prompt_cache_preset_fields()
+
+    def _rebuild_prompt_cache_preset_combo(self, *, select_id: str = "") -> None:
+        config = self._ui_config()
+        self.prompt_cache_preset_combo.blockSignals(True)
+        self.prompt_cache_preset_combo.clear()
+        self.prompt_cache_preset_combo.addItem(
+            tr("settings.prompt_cache_presets.manual", config=config),
+            "",
+        )
+        for preset in self._prompt_cache_presets:
+            self.prompt_cache_preset_combo.addItem(str(preset.get("name") or ""), preset["id"])
+        target = select_id or self._selected_prompt_cache_preset_id()
+        index = self.prompt_cache_preset_combo.findData(target)
+        self.prompt_cache_preset_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.prompt_cache_preset_combo.blockSignals(False)
+
+    def _add_prompt_cache_preset(self) -> None:
+        config = self._ui_config()
+        if len(self._prompt_cache_presets) >= MAX_CUSTOM_TEXT_PRESETS:
+            showWarning(
+                tr(
+                    "settings.prompt_cache_presets.limit",
+                    config=config,
+                    max=MAX_CUSTOM_TEXT_PRESETS,
+                )
+            )
+            return
+        self._commit_prompt_cache_preset_editor()
+        text = self.prompt_cache_custom_text_input.toPlainText()
+        preset = new_preset(name=f"preset-{len(self._prompt_cache_presets) + 1}", text=text)
+        self._prompt_cache_presets.append(preset)
+        self._rebuild_prompt_cache_preset_combo(select_id=preset["id"])
+        self._sync_prompt_cache_preset_fields()
+
+    def _remove_prompt_cache_preset(self) -> None:
+        preset_id = self._selected_prompt_cache_preset_id()
+        if not preset_id:
+            return
+        self._prompt_cache_presets = [
+            preset for preset in self._prompt_cache_presets if preset.get("id") != preset_id
+        ]
+        self._rebuild_prompt_cache_preset_combo(select_id="")
+        self._sync_prompt_cache_preset_fields()
 
     def _clear_prompt_cache(self) -> None:
         clear_prompt_cache(config=self._ui_config())

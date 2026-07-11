@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import html
 import threading
+from pathlib import Path
 from typing import Any
 
 from aqt import mw
 from aqt.qt import (
     QApplication,
+    QCheckBox,
     QCloseEvent,
     QShowEvent,
+    QFileDialog,
     QHBoxLayout,
     QIcon,
     QLabel,
@@ -27,7 +30,7 @@ from aqt.qt import (
     QVBoxLayout,
     QWidget,
 )
-from aqt.utils import tooltip
+from aqt.utils import showWarning, tooltip
 
 from ..i18n import (
     effective_brain_import_message,
@@ -38,12 +41,13 @@ from ..i18n import (
     tr,
 )
 from ..note_context_fields import fields_for_note_preview, format_note_context
-from ..config import api_key_configured, load_config, save_config
+from ..config import api_key_configured, is_warning_dismissed, load_config, save_config
 from ..prompt_cache import (
     PromptCacheSessionContext,
     build_live_chat_payload,
     build_prompt_cache_bundle,
     clear_prompt_cache,
+    flatten_bundle_for_live_send,
 )
 from .chat_templates_edit_window import ChatTemplatesEditWindow
 from .chat_wrapper_edit_window import ChatWrapperEditWindow
@@ -53,7 +57,11 @@ from ..prompt_inspection import (
     chat_session_config_fingerprint,
 )
 from ..token_estimate import estimate_chat_request_chars
-from .prompt_cache_confirm import confirm_prompt_cache_recreate_if_needed
+from .prompt_cache_confirm import (
+    confirm_import_note_cache_if_needed,
+    confirm_new_conversation_cache_if_needed,
+    confirm_prompt_cache_recreate_if_needed,
+)
 from .pre_send_prompt_dialog import (
     PreSendPromptContext,
     confirm_pre_send_prompt,
@@ -76,6 +84,11 @@ from .card_templates import (
     extract_notetype_context,
     format_card_templates_block,
 )
+from .chat_export import (
+    default_chat_download_directory,
+    default_chat_export_filename,
+    format_chat_export_text,
+)
 from .chat_formatter import format_gemini_reply_html, format_streaming_reply_html
 from .chat_body_splitter import ChatBodySplitter
 from .chat_log_renderer import render_chat_document
@@ -92,11 +105,13 @@ from .chat_math_log import (
 from .chat_note_edit_window import ChatNoteEditWindow
 from .chat_messages import ChatMessage
 from .imported_note_preview_window import ImportedNotePreviewWindow
+from .help_icons import set_instruction_tooltip
 from .settings_compact_controls import create_ui_text_edit, refresh_settings_text_edit_newlines
 from .svg_icons import (
     LoadingStatusIcon,
     barred_brain_icon,
     brain_icon,
+    download_icon,
     eye_icon,
     lens_icon,
     pencil_icon,
@@ -254,6 +269,20 @@ class ChatWindow(QWidget):
             True,
         )
         toolbar.addWidget(self.stop_before_send_btn)
+
+        self.btn_download = QPushButton(self)
+        self.btn_download.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
+        self.btn_download.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.btn_download.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_download.setAttribute(
+            Qt.WidgetAttribute.WA_AlwaysShowToolTips,
+            True,
+        )
+        self.btn_download.clicked.connect(self._download_chat)
+        toolbar.addWidget(self.btn_download)
 
         self.btn_clear = QPushButton(self)
         self.btn_clear.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
@@ -438,6 +467,7 @@ class ChatWindow(QWidget):
         self._set_toolbar_icon(self.btn_edit_menu, pencil_icon(icon_size))
         self._set_toolbar_icon(self.btn_inspect_prompt, lens_icon(icon_size))
         self._set_toolbar_icon(self.btn_note_preview, eye_icon(icon_size))
+        self._set_toolbar_icon(self.btn_download, download_icon(icon_size))
         self._set_toolbar_icon(self.btn_clear, plus_icon(icon_size))
         self._apply_stop_before_send_icon()
 
@@ -448,6 +478,7 @@ class ChatWindow(QWidget):
         self.btn_edit_menu.setStyleSheet(icon_style)
         self.btn_inspect_prompt.setStyleSheet(icon_style)
         self.btn_note_preview.setStyleSheet(icon_style)
+        self.btn_download.setStyleSheet(icon_style)
         self.btn_clear.setStyleSheet(icon_style)
         self.stop_before_send_btn.setStyleSheet(checkable_style)
 
@@ -555,14 +586,34 @@ class ChatWindow(QWidget):
     def _apply_static_texts(self) -> None:
         config = load_config()
         self.setWindowTitle(tr("chat.title", config=config))
-        self.btn_include_context.setToolTip(tr("chat.include_context", config=config))
-        self.btn_edit_menu.setToolTip(tr("chat.edit.menu.tooltip", config=config))
+        set_instruction_tooltip(
+            self.btn_include_context,
+            tr("chat.include_context", config=config),
+        )
+        set_instruction_tooltip(
+            self.btn_edit_menu,
+            tr("chat.edit.menu.tooltip", config=config),
+        )
         self._refresh_edit_menu_actions(config)
-        self.btn_note_preview.setToolTip(tr("chat.preview.open_window.tooltip", config=config))
-        self.btn_clear.setToolTip(tr("chat.new_conversation", config=config))
-        self.btn_inspect_prompt.setToolTip(tr("chat.inspect_prompt.tooltip", config=config))
-        self.stop_before_send_btn.setToolTip(
-            tr("chat.modify_prompt_before_send.tooltip", config=config)
+        set_instruction_tooltip(
+            self.btn_note_preview,
+            tr("chat.preview.open_window.tooltip", config=config),
+        )
+        set_instruction_tooltip(
+            self.btn_clear,
+            tr("chat.new_conversation", config=config),
+        )
+        set_instruction_tooltip(
+            self.btn_inspect_prompt,
+            tr("chat.inspect_prompt.tooltip", config=config),
+        )
+        set_instruction_tooltip(
+            self.btn_download,
+            tr("chat.download.tooltip", config=config),
+        )
+        set_instruction_tooltip(
+            self.stop_before_send_btn,
+            tr("chat.modify_prompt_before_send.tooltip", config=config),
         )
         self.stop_before_send_btn.blockSignals(True)
         self.stop_before_send_btn.setChecked(
@@ -778,12 +829,93 @@ class ChatWindow(QWidget):
                 return True
         return super().eventFilter(obj, event)
 
+    def _conversation_has_clearable_content(self) -> bool:
+        if self.api_history:
+            return True
+        if self.note_context or self._imported_fields:
+            return True
+        return any(
+            message.label_class in ("chat-label-you", "chat-label-gemini")
+            for message in self._messages
+        )
+
+    def _confirm_new_conversation(self, config: dict[str, Any]) -> bool:
+        if is_warning_dismissed(config, "suppress_chat_new_conversation_confirm_warning"):
+            return True
+        if not self._conversation_has_clearable_content():
+            return True
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("chat.new_conversation.confirm.title", config=config))
+        box.setText(tr("chat.new_conversation.confirm.message", config=config))
+        box.setInformativeText(tr("chat.new_conversation.confirm.detail", config=config))
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+
+        dismiss = QCheckBox(tr("optimize.warning.dismiss", config=config), box)
+        box.setCheckBox(dismiss)
+
+        if box.exec() != QMessageBox.StandardButton.Ok:
+            return False
+
+        if dismiss.isChecked():
+            updated = load_config()
+            updated["suppress_chat_new_conversation_confirm_warning"] = True
+            save_config(updated)
+
+        return True
+
+    def _download_chat(self) -> None:
+        config = load_config()
+        text = format_chat_export_text(
+            self._messages,
+            config,
+            api_history=self.api_history,
+        )
+        if not text.strip():
+            return
+
+        start_dir = str(config.get("chat_download_directory") or "").strip()
+        if not start_dir:
+            start_dir = str(default_chat_download_directory())
+        default_name = default_chat_export_filename()
+        initial_path = str(Path(start_dir) / default_name)
+
+        path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            tr("chat.download.title", config=config),
+            initial_path,
+            tr("chat.download.filter", config=config),
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+        except OSError as exc:
+            showWarning(tr("chat.download.error", config=config, error=str(exc)))
+            return
+
+        updated = dict(config)
+        updated["chat_download_directory"] = str(Path(path).parent)
+        save_config(updated)
+        tooltip(tr("chat.download.saved", config=config))
+
     def clear_conversation(self) -> None:
+        config = load_config()
+        cache_choice = confirm_new_conversation_cache_if_needed(self, config)
+        if cache_choice == "abort":
+            return
+        if not self._confirm_new_conversation(config):
+            return
         if self._request_in_flight:
             self._request_token += 1
             self._restorable_user_text = ""
             self._cancel_in_flight_request()
-        config = load_config()
         self.api_history.clear()
         self.note_context = None
         self._imported_fields = []
@@ -800,7 +932,8 @@ class ChatWindow(QWidget):
         self.btn_edit_menu.setEnabled(False)
         self._close_session_edit_windows()
         self._on_body_section_visibility_changed()
-        clear_prompt_cache(config=config, purpose="chat")
+        if cache_choice == "clear":
+            clear_prompt_cache(config=config, purpose="chat")
         self._close_note_preview_window()
         self.btn_note_preview.setEnabled(False)
         self._add_system_message(
@@ -812,6 +945,9 @@ class ChatWindow(QWidget):
 
     def import_note_from_editor(self, editor) -> None:
         config = load_config()
+        import_cache_choice = confirm_import_note_cache_if_needed(self, config)
+        if import_cache_choice == "abort":
+            return
         note = editor.note
         imported_fields: list[tuple[str, str]] = list(note.items())
 
@@ -830,7 +966,8 @@ class ChatWindow(QWidget):
         self._imported_notetype_css = raw_css
         self.note_context = format_note_context(imported_fields, config)
         self._session_wrapper_override = None
-        clear_prompt_cache(config=config, purpose="chat")
+        if import_cache_choice == "proceed":
+            clear_prompt_cache(config=config, purpose="chat")
         self.btn_include_context.setEnabled(True)
         self.btn_include_context.setChecked(True)
         self._close_session_edit_windows()
@@ -1182,11 +1319,23 @@ class ChatWindow(QWidget):
         if cache_choice == "abort":
             return
         allow_cache_create = cache_choice != "skip_cache"
-        if bundle is not None and not allow_cache_create:
-            payload_text = self._build_outgoing_payload(config, user_text)
-            if pre_send_overrides is not None:
-                payload_text = pre_send_overrides.outgoing_payload
-        max_turns = int(config.get("max_history_turns", 20))
+        allow_cache_use = cache_choice != "skip_cache"
+        if bundle is not None and not allow_cache_use:
+            system_instruction, payload_text = flatten_bundle_for_live_send(
+                config,
+                bundle,
+                purpose="chat",
+                include_meta_rule=True,
+                system_instruction_override=(
+                    system_instruction if pre_send_overrides is not None else None
+                ),
+                outgoing_payload_override=(
+                    payload_text if pre_send_overrides is not None else None
+                ),
+                user_text=user_text,
+                session=cache_session,
+            )
+        max_turns = int(config.get("max_history_turns", 10))
         history_for_request = trim_history(self.api_history, max_turns)
         char_count = estimate_chat_request_chars(
             payload_text,
@@ -1238,14 +1387,15 @@ class ChatWindow(QWidget):
             "include_meta_rule": True,
             "cache_session": cache_session,
             "allow_prompt_cache_create": allow_cache_create,
+            "allow_prompt_cache_use": allow_cache_use,
             "on_prompt_cache_created": self._schedule_prompt_cache_created_notice,
             "should_cancel": cancel_check,
             "register_response": register_response,
         }
-        if pre_send_overrides is not None:
+        if pre_send_overrides is not None or (not allow_cache_use and bundle is not None):
             request_kwargs["override_outgoing_payload"] = payload_text
             request_kwargs["override_system_instruction"] = system_instruction
-            if allow_cache_create:
+            if allow_cache_use and bundle is not None:
                 request_kwargs["override_bundle"] = bundle
 
         if use_streaming:
