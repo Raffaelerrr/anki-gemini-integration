@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
+from typing import Any, NamedTuple
 
 from aqt.qt import (
     QCheckBox,
@@ -49,7 +50,7 @@ from ..config import (
     save_config,
 )
 from ..prompt_cache import (
-    PROMPT_CACHE_USER_SEGMENT_ORDER,
+    PROMPT_CACHE_OPTIMIZE_USER_SEGMENT_ORDER,
     any_tracked_active_cache,
     clear_prompt_cache,
     extend_prompt_cache_ttl,
@@ -61,12 +62,22 @@ from ..prompt_cache import (
 )
 from ..prompt_cache_policy import (
     MAX_CUSTOM_TEXT_PRESETS,
+    chat_prompt_cache_summary,
     clone_presets,
     new_preset,
     normalize_custom_text_presets,
     purposes_requiring_cache_invalidation,
 )
-from .prompt_cache_confirm import confirm_custom_text_load_replace
+from .chat_prompt_cache_dialog import ChatPromptCacheDialog
+from .chat_export import (
+    MAX_CHAT_EXPORT_QUICK_FOLDERS,
+    default_chat_download_directory,
+    normalize_chat_export_quick_folders,
+)
+from .prompt_cache_confirm import (
+    choose_prompt_cache_ttl_targets,
+    confirm_custom_text_load_replace,
+)
 from .prompt_cache_manager_dialog import open_prompt_cache_manager
 from ..i18n import (
     LANG_EN,
@@ -103,10 +114,18 @@ from ..i18n import (
     tr,
 )
 from .wrapper_sections_editor import WrapperSectionsEditor
+from .themed_windows import configure_snappable_window
 from .chat_dialog import refresh_chat_from_settings, refresh_chat_language
 from .prompt_inspection_dialog import PromptInspectionWindow
-from .settings_help_dialog import _make_info_button, open_settings_help_dialog
-from .help_icons import instruction_html
+from .settings_help_dialog import (
+    _make_info_button,
+    open_settings_help_dialog,
+)
+from .help_icons import (
+    instruction_html,
+    refresh_info_button_explanation,
+    wire_info_button_explanation,
+)
 from .model_selector import (
     create_model_selector,
     model_selector_value,
@@ -117,14 +136,18 @@ from .settings_compact_controls import (
     SETTINGS_SECTION_GAP,
     SETTINGS_SECTION_INNER_SPACING,
     add_settings_labeled_field,
+    add_settings_section_break,
+    add_settings_stacked_field,
     apply_settings_icon_row_height,
     create_settings_auto_height_text_edit,
+    create_settings_row_auto_height_text_edit,
     create_settings_checkbox_info_row,
     create_settings_combo,
     create_settings_double_spinbox,
     create_settings_hint_label,
     create_settings_line_edit,
     create_settings_panel,
+    create_settings_restore_checkbox_row,
     create_settings_section_label,
     create_settings_spinbox,
     refresh_settings_text_edit_layouts,
@@ -143,6 +166,17 @@ from .theme import (
 
 
 _settings_dialog: SettingsDialog | None = None
+
+_QUICK_FOLDER_ROW_TEXT_MIN_HEIGHT = 32
+_QUICK_FOLDER_ROW_TEXT_MAX_HEIGHT = 120
+_QUICK_FOLDER_AFTER_BUTTONS_SPACING = 12
+
+
+class _ChatExportQuickFolderRow(NamedTuple):
+    host: QWidget
+    checkbox: QCheckBox
+    label_input: ScrollAwareTextEdit
+    path_input: ScrollAwareTextEdit
 
 _FOOTER_BUTTON_STYLE = """
 QPushButton {
@@ -179,17 +213,14 @@ class SettingsDialog(QDialog):
         self._all_warnings_checked = False
         self._model_refresh_busy = False
         self._settings_help_dialog = None
+        self._chat_prompt_cache_dialog: ChatPromptCacheDialog | None = None
         self._optimize_prompt_inspection_window: PromptInspectionWindow | None = None
         self._force_shutdown = False
         self.silentlyClose = True
         self.setWindowModality(Qt.WindowModality.NonModal)
 
         self.setWindowTitle(tr("settings.title", config=config))
-        self.setWindowFlags(
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowCloseButtonHint
-        )
+        configure_snappable_window(self)
         self.setMinimumSize(680, 420)
         self.resize(780, 760)
 
@@ -378,6 +409,9 @@ class SettingsDialog(QDialog):
         if self._settings_help_dialog is not None:
             self._settings_help_dialog.close()
             self._settings_help_dialog = None
+        if self._chat_prompt_cache_dialog is not None:
+            self._chat_prompt_cache_dialog.close()
+            self._chat_prompt_cache_dialog = None
         self.reject()
 
     def _build_form_page(self) -> QWidget:
@@ -566,6 +600,45 @@ class SettingsDialog(QDialog):
         self.chat_streaming_checkbox.setChecked(bool(self.config.get("chat_streaming", True)))
         layout.addWidget(self.chat_streaming_checkbox)
 
+        layout.addWidget(
+            create_settings_section_label(
+                form_host,
+                tr("settings.chat_export_quick_folders", config=config),
+            )
+        )
+        layout.addWidget(
+            create_settings_hint_label(
+                form_host,
+                tr("settings.chat_export_quick_folders.hint", config=config),
+            )
+        )
+        self._chat_export_quick_folder_rows: list[_ChatExportQuickFolderRow] = []
+        self._chat_export_quick_folders_container = QWidget(form_host)
+        self._chat_export_quick_folders_layout = QVBoxLayout(self._chat_export_quick_folders_container)
+        self._chat_export_quick_folders_layout.setContentsMargins(0, 0, 0, 0)
+        self._chat_export_quick_folders_layout.setSpacing(6)
+        layout.addWidget(self._chat_export_quick_folders_container)
+        quick_folder_btn_row = QHBoxLayout()
+        self.chat_export_quick_folder_add_btn = QPushButton(
+            tr("settings.chat_export_quick_folders.add", config=config),
+            form_host,
+        )
+        self.chat_export_quick_folder_add_btn.clicked.connect(
+            self._add_chat_export_quick_folder_row
+        )
+        self.chat_export_quick_folder_remove_btn = QPushButton(
+            tr("settings.chat_export_quick_folders.remove", config=config),
+            form_host,
+        )
+        self.chat_export_quick_folder_remove_btn.clicked.connect(
+            self._remove_chat_export_quick_folder_row
+        )
+        quick_folder_btn_row.addWidget(self.chat_export_quick_folder_add_btn)
+        quick_folder_btn_row.addWidget(self.chat_export_quick_folder_remove_btn)
+        quick_folder_btn_row.addStretch(1)
+        layout.addLayout(quick_folder_btn_row)
+        layout.addSpacing(_QUICK_FOLDER_AFTER_BUTTONS_SPACING)
+
         self.show_text_newlines_checkbox = QCheckBox(
             tr("settings.show_text_newlines", config=config),
             form_host,
@@ -580,6 +653,13 @@ class SettingsDialog(QDialog):
             tr("settings.show_text_newlines.hint", config=config),
         )
         layout.addWidget(self.show_text_newlines_hint)
+
+        self._load_chat_export_quick_folder_rows(
+            normalize_chat_export_quick_folders(
+                self.config.get("chat_export_quick_folders")
+            )
+        )
+        self._sync_chat_export_quick_folder_buttons()
 
         self.btn_inspect_optimize_prompt = QPushButton(
             tr("settings.inspect_optimize_prompt", config=config),
@@ -724,15 +804,37 @@ class SettingsDialog(QDialog):
             tr("settings.restore.hint", config=config),
         )
         layout.addWidget(self.restore_hint_label)
+        self.chat_cache_restore_hint_label = create_settings_hint_label(
+            host,
+            tr("settings.restore.chat_cache.hint", config=config),
+        )
+        self.chat_cache_restore_hint_label.setOpenExternalLinks(False)
+        self.chat_cache_restore_hint_label.linkActivated.connect(
+            self._on_restore_chat_cache_link_activated
+        )
+        layout.addWidget(self.chat_cache_restore_hint_label)
         layout.addWidget(QLabel("<br>"))
 
         self._restore_checkboxes.clear()
+        restore_list_host = QWidget(host)
+        restore_list_layout = QVBoxLayout(restore_list_host)
+        restore_list_layout.setContentsMargins(0, 0, 0, 0)
+        restore_list_layout.setSpacing(4)
         for key in RESTORABLE_SETTING_KEYS:
             label_key = RESTORABLE_SETTING_LABELS.get(key, key)
-            checkbox = QCheckBox(tr(label_key, config=config), host)
+            checkbox = QCheckBox(host)
             checkbox.setChecked(key != "api_key")
-            layout.addWidget(checkbox)
+            restore_list_layout.addWidget(
+                create_settings_restore_checkbox_row(
+                    restore_list_host,
+                    checkbox,
+                    label_key,
+                    config=config,
+                )
+            )
             self._restore_checkboxes[key] = checkbox
+
+        layout.addWidget(restore_list_host)
 
         layout.addStretch(1)
         scroll.setWidget(host)
@@ -769,7 +871,7 @@ class SettingsDialog(QDialog):
             layout.addWidget(checkbox)
             self._warning_restore_checkboxes[key] = checkbox
 
-        layout.addSpacing(SETTINGS_SECTION_GAP)
+        add_settings_section_break(layout)
         layout.addWidget(
             QLabel(f"<b>{tr('warnings.default_actions.title', config=config)}</b>")
         )
@@ -821,7 +923,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(
             create_settings_hint_label(host, tr("settings.advanced.hint", config=config))
         )
-        layout.addSpacing(SETTINGS_SECTION_GAP)
+        add_settings_section_break(layout)
 
         layout.addWidget(create_settings_section_label(host, tr("settings.prompt_optimize_user", config=config)))
         layout.addWidget(
@@ -834,7 +936,7 @@ class SettingsDialog(QDialog):
         self.prompt_optimize_user_input.setPlainText(effective_optimize_user_prompt(config))
         layout.addWidget(optimize_prompt_shell)
 
-        layout.addSpacing(SETTINGS_SECTION_GAP)
+        add_settings_section_break(layout)
         layout.addWidget(create_settings_section_label(host, tr("settings.prompt_chat_addon", config=config)))
         layout.addWidget(
             create_settings_hint_label(host, tr("settings.prompt_chat_addon.hint", config=config))
@@ -846,7 +948,7 @@ class SettingsDialog(QDialog):
         self.prompt_chat_addon_input.setPlainText(effective_chat_system_addon(config))
         layout.addWidget(chat_addon_shell)
 
-        layout.addSpacing(SETTINGS_SECTION_GAP)
+        add_settings_section_break(layout)
         layout.addWidget(
             create_settings_section_label(host, tr("settings.prompt_dynamic_rules_prefix", config=config))
         )
@@ -863,7 +965,7 @@ class SettingsDialog(QDialog):
         self.prompt_dynamic_rules_prefix_input.setPlainText(effective_dynamic_rules_prefix(config))
         layout.addWidget(dynamic_prefix_shell)
 
-        layout.addSpacing(SETTINGS_SECTION_GAP)
+        add_settings_section_break(layout)
         wrapper_title_row = QWidget(host)
         apply_settings_icon_row_height(wrapper_title_row)
         wrapper_header = QHBoxLayout(wrapper_title_row)
@@ -888,7 +990,6 @@ class SettingsDialog(QDialog):
         layout.addWidget(
             create_settings_hint_label(host, tr("settings.prompt_chat_context.hint", config=config))
         )
-        layout.addSpacing(SETTINGS_SECTION_INNER_SPACING)
 
         self.wrapper_sections_editor = WrapperSectionsEditor(
             host,
@@ -897,7 +998,7 @@ class SettingsDialog(QDialog):
         self.wrapper_sections_editor.load_from_config(config)
         layout.addWidget(self.wrapper_sections_editor)
 
-        layout.addSpacing(SETTINGS_SECTION_GAP)
+        add_settings_section_break(layout)
         layout.addWidget(
             create_settings_section_label(host, tr("settings.mathjax_preview_preamble", config=config))
         )
@@ -914,24 +1015,65 @@ class SettingsDialog(QDialog):
         self.mathjax_preview_preamble_input.setPlainText(effective_mathjax_preview_preamble(config))
         layout.addWidget(preamble_shell)
 
-        layout.addSpacing(SETTINGS_SECTION_GAP)
-        layout.addWidget(create_settings_section_label(host, tr("settings.prompt_cache_enabled", config=config)))
+        add_settings_section_break(layout)
         layout.addWidget(
-            create_settings_hint_label(host, tr("settings.prompt_cache.hint", config=config))
+            create_settings_section_label(
+                host,
+                tr("settings.prompt_cache.section.optimize", config=config),
+            )
         )
-        self.prompt_cache_enabled_checkbox = QCheckBox(
-            tr("settings.prompt_cache_enabled", config=config),
+        layout.addWidget(
+            create_settings_hint_label(
+                host,
+                tr("settings.prompt_cache.hint.optimize", config=config),
+            )
+        )
+        self.chat_prompt_cache_summary_label = create_settings_hint_label(
+            host,
+            chat_prompt_cache_summary(config),
+        )
+        layout.addWidget(self.chat_prompt_cache_summary_label)
+        self.btn_open_chat_prompt_cache_settings = QPushButton(
+            tr("settings.prompt_cache.open_chat_settings", config=config),
             host,
         )
-        self.prompt_cache_enabled_checkbox.setChecked(bool(config.get("prompt_cache_enabled", False)))
-        layout.addWidget(self.prompt_cache_enabled_checkbox)
+        self.btn_open_chat_prompt_cache_settings.clicked.connect(
+            self._open_chat_prompt_cache_settings
+        )
+        layout.addWidget(self.btn_open_chat_prompt_cache_settings)
+
+        self.prompt_cache_enabled_optimize_checkbox = QCheckBox(
+            tr("settings.prompt_cache_enabled_optimize", config=config),
+            host,
+        )
+        self.prompt_cache_enabled_optimize_checkbox.setChecked(
+            bool(config.get("prompt_cache_enabled_optimize", False))
+        )
+        layout.addWidget(self.prompt_cache_enabled_optimize_checkbox)
+
+        self.optimize_modify_prompt_checkbox = QCheckBox(
+            tr("settings.optimize_modify_prompt_before_send", config=config),
+            host,
+        )
+        self.optimize_modify_prompt_checkbox.setChecked(
+            bool(config.get("optimize_modify_prompt_before_send", False))
+        )
+        layout.addWidget(self.optimize_modify_prompt_checkbox)
+        layout.addWidget(
+            create_settings_hint_label(
+                host,
+                tr("settings.optimize_modify_prompt_before_send.hint", config=config),
+            )
+        )
 
         ttl_row = QHBoxLayout()
         ttl_row.addWidget(QLabel(tr("settings.prompt_cache_ttl", config=config), host))
         ttl_shell, self.prompt_cache_ttl_input = create_settings_spinbox(host)
         self.prompt_cache_ttl_input.setRange(60, 7 * 24 * 3600)
         self.prompt_cache_ttl_input.setSingleStep(300)
-        self.prompt_cache_ttl_input.setValue(int(config.get("prompt_cache_ttl_seconds", 3600)))
+        self.prompt_cache_ttl_input.setValue(
+            int(config.get("prompt_cache_ttl_seconds_optimize", 3600))
+        )
         ttl_row.addWidget(ttl_shell)
         ttl_row.addStretch(1)
         layout.addLayout(ttl_row)
@@ -941,69 +1083,11 @@ class SettingsDialog(QDialog):
         min_chars_shell, self.prompt_cache_min_chars_input = create_settings_spinbox(host)
         self.prompt_cache_min_chars_input.setRange(256, 1_000_000)
         self.prompt_cache_min_chars_input.setValue(
-            int(config.get("prompt_cache_min_chars", DEFAULT_PROMPT_CACHE_MIN_CHARS))
+            int(config.get("prompt_cache_min_chars_optimize", DEFAULT_PROMPT_CACHE_MIN_CHARS))
         )
         min_row.addWidget(min_chars_shell)
         min_row.addStretch(1)
         layout.addLayout(min_row)
-
-        layout.addSpacing(SETTINGS_SECTION_GAP)
-        layout.addWidget(
-            create_settings_section_label(host, tr("settings.prompt_cache_segments", config=config))
-        )
-        layout.addWidget(
-            create_settings_hint_label(
-                host,
-                tr("settings.prompt_cache_segments.hint", config=config),
-            )
-        )
-        segments = prompt_cache_segments(config)
-        self.prompt_cache_segment_checkboxes: dict[str, QCheckBox] = {}
-        for segment_id in PROMPT_CACHE_USER_SEGMENT_ORDER:
-            label = tr(segment_label_key(segment_id), config=config)
-            checkbox = QCheckBox(label, host)
-            checkbox.setChecked(bool(segments.get(segment_id, False)))
-
-            if segment_id == "system_instruction":
-                info_btn = _make_info_button(host, config)
-                info_btn.setToolTip(
-                    tr("settings.prompt_cache.system_instruction_cache_info", config=config)
-                )
-                layout.addWidget(create_settings_checkbox_info_row(host, checkbox, info_btn))
-            else:
-                layout.addWidget(checkbox)
-
-            self.prompt_cache_segment_checkboxes[segment_id] = checkbox
-
-        layout.addSpacing(SETTINGS_SECTION_GAP)
-        layout.addWidget(
-            create_settings_section_label(host, tr("settings.prompt_cache_custom_text", config=config))
-        )
-        layout.addWidget(
-            create_settings_hint_label(
-                host,
-                tr("settings.prompt_cache_custom_text.hint", config=config),
-            )
-        )
-        custom_cache_shell, self.prompt_cache_custom_text_input = create_settings_auto_height_text_edit(
-            host,
-            show_newlines=self.show_text_newlines_checkbox.isChecked(),
-        )
-        self.prompt_cache_custom_text_input.setPlainText(
-            (config.get("prompt_cache_custom_text") or "").strip()
-        )
-        layout.addWidget(custom_cache_shell)
-        custom_cache_btn_row = QHBoxLayout()
-        self.prompt_cache_custom_text_load_btn = QPushButton(
-            tr("settings.prompt_cache_custom_text.load_file", config=config),
-            host,
-        )
-        self.prompt_cache_custom_text_load_btn.clicked.connect(
-            self._load_prompt_cache_custom_text_from_file
-        )
-        custom_cache_btn_row.addWidget(self.prompt_cache_custom_text_load_btn)
-        custom_cache_btn_row.addStretch(1)
-        layout.addLayout(custom_cache_btn_row)
 
         self.prompt_cache_status_label = QLabel(host)
         layout.addWidget(self.prompt_cache_status_label)
@@ -1028,29 +1112,62 @@ class SettingsDialog(QDialog):
             host,
         )
         self.prompt_cache_change_ttl_btn.clicked.connect(self._change_prompt_cache_ttl)
+        self.prompt_cache_clear_optimize_btn = QPushButton(
+            tr("settings.prompt_cache.clear_optimize", config=config),
+            host,
+        )
+        self.prompt_cache_clear_optimize_btn.clicked.connect(self._clear_optimize_prompt_cache)
         self.prompt_cache_clear_btn = QPushButton(tr("settings.prompt_cache.clear", config=config), host)
         self.prompt_cache_clear_btn.clicked.connect(self._clear_prompt_cache)
         self.prompt_cache_manage_btn = QPushButton(tr("settings.prompt_cache.manage", config=config), host)
         self.prompt_cache_manage_btn.clicked.connect(self._open_prompt_cache_manager)
         cache_btn_row.addWidget(self.prompt_cache_change_ttl_btn)
+        cache_btn_row.addWidget(self.prompt_cache_clear_optimize_btn)
         cache_btn_row.addWidget(self.prompt_cache_clear_btn)
         cache_btn_row.addWidget(self.prompt_cache_manage_btn)
         cache_btn_row.addStretch(1)
         layout.addLayout(cache_btn_row)
 
-        layout.addSpacing(SETTINGS_SECTION_GAP)
+        add_settings_section_break(layout)
         layout.addWidget(
-            create_settings_section_label(host, tr("settings.prompt_cache_presets", config=config))
+            create_settings_section_label(host, tr("settings.prompt_cache_segments", config=config))
         )
         layout.addWidget(
             create_settings_hint_label(
                 host,
-                tr("settings.prompt_cache_presets.hint", config=config),
+                tr("settings.prompt_cache_segments.hint", config=config),
             )
         )
-        preset_select_row = QHBoxLayout()
-        preset_select_row.addWidget(
-            QLabel(tr("settings.prompt_cache_presets.active", config=config), host)
+        segments = prompt_cache_segments(config, "optimize")
+        self.prompt_cache_segment_checkboxes: dict[str, QCheckBox] = {}
+        for segment_id in PROMPT_CACHE_OPTIMIZE_USER_SEGMENT_ORDER:
+            label = tr(segment_label_key(segment_id), config=config)
+            checkbox = QCheckBox(label, host)
+            checkbox.setChecked(bool(segments.get(segment_id, False)))
+
+            if segment_id == "system_instruction":
+                info_btn = _make_info_button(host, config)
+                wire_info_button_explanation(
+                    info_btn,
+                    config=config,
+                    message_key="settings.prompt_cache.system_instruction_cache_info",
+                )
+                layout.addWidget(create_settings_checkbox_info_row(host, checkbox, info_btn))
+                self._prompt_cache_system_instruction_info_btn = info_btn
+            else:
+                layout.addWidget(checkbox)
+
+            self.prompt_cache_segment_checkboxes[segment_id] = checkbox
+
+        add_settings_section_break(layout)
+        layout.addWidget(
+            create_settings_section_label(host, tr("settings.prompt_cache_custom_text", config=config))
+        )
+        layout.addWidget(
+            create_settings_hint_label(
+                host,
+                tr("settings.prompt_cache_custom_text.hint", config=config),
+            )
         )
         preset_combo_shell, self.prompt_cache_preset_combo = create_settings_combo(host)
         self.prompt_cache_preset_combo.addItem(
@@ -1058,22 +1175,52 @@ class SettingsDialog(QDialog):
             "",
         )
         for preset in normalize_custom_text_presets(config.get("prompt_cache_custom_text_presets")):
-            self.prompt_cache_preset_combo.addItem(preset["name"], preset["id"])
-        active_id = str(config.get("prompt_cache_active_preset_id") or "")
+            if preset.get("optimize"):
+                self.prompt_cache_preset_combo.addItem(
+                    str(preset.get("name") or ""),
+                    str(preset.get("id") or ""),
+                )
+        active_id = str(config.get("prompt_cache_active_preset_id_optimize") or "")
         active_index = self.prompt_cache_preset_combo.findData(active_id)
         self.prompt_cache_preset_combo.setCurrentIndex(active_index if active_index >= 0 else 0)
         self.prompt_cache_preset_combo.currentIndexChanged.connect(
             self._on_prompt_cache_preset_changed
         )
-        preset_select_row.addWidget(preset_combo_shell, 1)
-        layout.addLayout(preset_select_row)
-
-        preset_meta_row = QHBoxLayout()
-        preset_meta_row.addWidget(
-            QLabel(tr("settings.prompt_cache_presets.name", config=config), host)
+        add_settings_stacked_field(
+            layout,
+            host,
+            tr("settings.prompt_cache_presets.active", config=config),
+            preset_combo_shell,
         )
+
+        custom_cache_shell, self.prompt_cache_custom_text_input = create_settings_auto_height_text_edit(
+            host,
+            show_newlines=self.show_text_newlines_checkbox.isChecked(),
+        )
+        self.prompt_cache_custom_text_input.setPlainText(
+            (config.get("prompt_cache_custom_text_optimize") or "").strip()
+        )
+        layout.addWidget(custom_cache_shell)
+        custom_cache_btn_row = QHBoxLayout()
+        self.prompt_cache_custom_text_load_btn = QPushButton(
+            tr("settings.prompt_cache_custom_text.load_file", config=config),
+            host,
+        )
+        self.prompt_cache_custom_text_load_btn.clicked.connect(
+            self._load_prompt_cache_custom_text_from_file
+        )
+        custom_cache_btn_row.addWidget(self.prompt_cache_custom_text_load_btn)
+        custom_cache_btn_row.addStretch(1)
+        layout.addLayout(custom_cache_btn_row)
+
         name_shell, self.prompt_cache_preset_name_input = create_settings_line_edit(host)
-        preset_meta_row.addWidget(name_shell, 1)
+        add_settings_stacked_field(
+            layout,
+            host,
+            tr("settings.prompt_cache_presets.name", config=config),
+            name_shell,
+        )
+
         self.prompt_cache_preset_chat_checkbox = QCheckBox(
             tr("settings.prompt_cache_presets.for_chat", config=config),
             host,
@@ -1082,9 +1229,12 @@ class SettingsDialog(QDialog):
             tr("settings.prompt_cache_presets.for_optimize", config=config),
             host,
         )
-        preset_meta_row.addWidget(self.prompt_cache_preset_chat_checkbox)
-        preset_meta_row.addWidget(self.prompt_cache_preset_optimize_checkbox)
-        layout.addLayout(preset_meta_row)
+        preset_checks_row = QHBoxLayout()
+        preset_checks_row.setSpacing(SETTINGS_SECTION_GAP)
+        preset_checks_row.addWidget(self.prompt_cache_preset_chat_checkbox)
+        preset_checks_row.addWidget(self.prompt_cache_preset_optimize_checkbox)
+        preset_checks_row.addStretch(1)
+        layout.addLayout(preset_checks_row)
 
         preset_btn_row = QHBoxLayout()
         self.prompt_cache_preset_add_btn = QPushButton(
@@ -1102,24 +1252,10 @@ class SettingsDialog(QDialog):
         preset_btn_row.addStretch(1)
         layout.addLayout(preset_btn_row)
         self._prompt_cache_presets: list[dict[str, Any]] = clone_presets(config)
-        self._manual_custom_cache_text = (config.get("prompt_cache_custom_text") or "").strip()
+        self._manual_custom_cache_text = (
+            (config.get("prompt_cache_custom_text_optimize") or "").strip()
+        )
         self._sync_prompt_cache_preset_fields()
-
-        layout.addSpacing(SETTINGS_SECTION_GAP)
-        self.optimize_modify_prompt_checkbox = QCheckBox(
-            tr("settings.optimize_modify_prompt_before_send", config=config),
-            host,
-        )
-        self.optimize_modify_prompt_checkbox.setChecked(
-            bool(config.get("optimize_modify_prompt_before_send", False))
-        )
-        layout.addWidget(self.optimize_modify_prompt_checkbox)
-        layout.addWidget(
-            create_settings_hint_label(
-                host,
-                tr("settings.optimize_modify_prompt_before_send.hint", config=config),
-            )
-        )
 
         billing_link = QLabel(host)
         billing_link.setTextFormat(Qt.TextFormat.RichText)
@@ -1285,6 +1421,16 @@ class SettingsDialog(QDialog):
         self.restore_hint_label.setText(
             muted_hint_html(tr("settings.restore.hint", config=config))
         )
+        if hasattr(self, "chat_cache_restore_hint_label"):
+            self.chat_cache_restore_hint_label.setText(
+                muted_hint_html(tr("settings.restore.chat_cache.hint", config=config))
+            )
+        if hasattr(self, "btn_open_chat_prompt_cache_settings"):
+            self.btn_open_chat_prompt_cache_settings.setText(
+                tr("settings.prompt_cache.open_chat_settings", config=config)
+            )
+        if hasattr(self, "chat_prompt_cache_summary_label"):
+            self.chat_prompt_cache_summary_label.setText(chat_prompt_cache_summary(config))
         self.restore_warnings_hint_label.setText(
             muted_hint_html(tr("settings.warnings.hint", config=config))
         )
@@ -1295,6 +1441,15 @@ class SettingsDialog(QDialog):
         self._update_api_key_status()
         if hasattr(self, "btn_wrapper_context_help"):
             self.btn_wrapper_context_help.setStyleSheet(info_button_stylesheet())
+        if hasattr(self, "_prompt_cache_system_instruction_info_btn"):
+            self._prompt_cache_system_instruction_info_btn.setStyleSheet(
+                info_button_stylesheet()
+            )
+            refresh_info_button_explanation(
+                self._prompt_cache_system_instruction_info_btn,
+                config=config,
+                message_key="settings.prompt_cache.system_instruction_cache_info",
+            )
         if self._settings_help_dialog is not None:
             self._settings_help_dialog.apply_theme()
 
@@ -1463,6 +1618,9 @@ class SettingsDialog(QDialog):
         config["thinking_budget_optimize"] = self.thinking_budget_optimize_input.value()
         config["thinking_budget_chat"] = self.thinking_budget_chat_input.value()
         config["chat_streaming"] = self.chat_streaming_checkbox.isChecked()
+        config["chat_export_quick_folders"] = normalize_chat_export_quick_folders(
+            self._collect_chat_export_quick_folders_from_ui()
+        )
         config.pop("chat_prompt_inspection", None)
         config.pop("model", None)
         config.pop("thinking_budget", None)
@@ -1509,22 +1667,26 @@ class SettingsDialog(QDialog):
         config["mathjax_preview_preamble"] = normalize_mathjax_preview_preamble_for_save(
             self.mathjax_preview_preamble_input.toPlainText()
         )
-        config["prompt_cache_enabled"] = self.prompt_cache_enabled_checkbox.isChecked()
-        config["prompt_cache_ttl_seconds"] = self.prompt_cache_ttl_input.value()
-        config["prompt_cache_min_chars"] = self.prompt_cache_min_chars_input.value()
+        config["prompt_cache_enabled_optimize"] = (
+            self.prompt_cache_enabled_optimize_checkbox.isChecked()
+        )
+        config["prompt_cache_ttl_seconds_optimize"] = self.prompt_cache_ttl_input.value()
+        config["prompt_cache_min_chars_optimize"] = self.prompt_cache_min_chars_input.value()
         self._commit_prompt_cache_preset_editor()
-        config["prompt_cache_custom_text"] = self.prompt_cache_custom_text_input.toPlainText().strip()
+        config["prompt_cache_custom_text_optimize"] = (
+            self.prompt_cache_custom_text_input.toPlainText().strip()
+        )
         config["prompt_cache_custom_text_presets"] = normalize_custom_text_presets(
             self._prompt_cache_presets
         )
-        config["prompt_cache_active_preset_id"] = str(
+        config["prompt_cache_active_preset_id_optimize"] = str(
             self.prompt_cache_preset_combo.currentData() or ""
         )
         config["prompt_cache_change_ttl_seconds"] = self.prompt_cache_change_ttl_input.value()
         config["optimize_modify_prompt_before_send"] = (
             self.optimize_modify_prompt_checkbox.isChecked()
         )
-        config["prompt_cache_segments"] = {
+        config["prompt_cache_segments_optimize"] = {
             segment_id: checkbox.isChecked()
             for segment_id, checkbox in self.prompt_cache_segment_checkboxes.items()
         }
@@ -1726,6 +1888,12 @@ class SettingsDialog(QDialog):
             self.chat_streaming_checkbox.setChecked(bool(default_value))
             return
 
+        if key == "chat_export_quick_folders":
+            self._load_chat_export_quick_folder_rows(
+                normalize_chat_export_quick_folders(default_value)
+            )
+            return
+
         if key == "timeout_seconds":
             self.timeout_input.setValue(int(default_value))
             return
@@ -1849,20 +2017,20 @@ class SettingsDialog(QDialog):
         if key == "mathjax_preview_preamble":
             self.mathjax_preview_preamble_input.setPlainText("")
             return
-        if key == "prompt_cache_enabled":
-            self.prompt_cache_enabled_checkbox.setChecked(bool(default_value))
+        if key == "prompt_cache_enabled_optimize":
+            self.prompt_cache_enabled_optimize_checkbox.setChecked(bool(default_value))
             return
-        if key == "prompt_cache_ttl_seconds":
+        if key == "prompt_cache_ttl_seconds_optimize":
             self.prompt_cache_ttl_input.setValue(int(default_value))
             return
-        if key == "prompt_cache_min_chars":
+        if key == "prompt_cache_min_chars_optimize":
             self.prompt_cache_min_chars_input.setValue(int(default_value))
             return
-        if key == "prompt_cache_custom_text":
+        if key == "prompt_cache_custom_text_optimize":
             self.prompt_cache_custom_text_input.setPlainText("")
             return
-        if key == "prompt_cache_segments":
-            defaults = default_config_value("prompt_cache_segments")
+        if key == "prompt_cache_segments_optimize":
+            defaults = default_config_value("prompt_cache_segments_optimize")
             for segment_id, checkbox in self.prompt_cache_segment_checkboxes.items():
                 checkbox.setChecked(bool(defaults.get(segment_id, False)))
             return
@@ -1981,11 +2149,45 @@ class SettingsDialog(QDialog):
         if not hasattr(self, "prompt_cache_status_label"):
             return
         config = self._ui_config() if hasattr(self, "language_combo") else self.config
-        chat_status = prompt_cache_status_text(config, "chat")
-        optimize_status = prompt_cache_status_text(config, "optimize")
-        self.prompt_cache_status_label.setText(f"{chat_status}\n{optimize_status}")
+        self.prompt_cache_status_label.setText(prompt_cache_status_text(config, "optimize"))
+        if hasattr(self, "chat_prompt_cache_summary_label"):
+            self.chat_prompt_cache_summary_label.setText(chat_prompt_cache_summary(config))
         if hasattr(self, "prompt_cache_change_ttl_btn"):
             self.prompt_cache_change_ttl_btn.setEnabled(any_tracked_active_cache())
+        if hasattr(self, "prompt_cache_clear_optimize_btn"):
+            self.prompt_cache_clear_optimize_btn.setEnabled(
+                get_prompt_cache_store("optimize").active is not None
+            )
+
+    def _on_restore_chat_cache_link_activated(self, href: str) -> None:
+        if href == "chat-cache-settings":
+            self._open_chat_prompt_cache_settings()
+
+    def _open_chat_prompt_cache_settings(self) -> None:
+        if (
+            self._chat_prompt_cache_dialog is not None
+            and self._chat_prompt_cache_dialog.isVisible()
+        ):
+            self._chat_prompt_cache_dialog.raise_()
+            self._chat_prompt_cache_dialog.activateWindow()
+            return
+        dialog = ChatPromptCacheDialog(
+            self,
+            config=self._ui_config(),
+            on_finished=self._on_chat_prompt_cache_settings_finished,
+        )
+        self._chat_prompt_cache_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _on_chat_prompt_cache_settings_finished(self, accepted: bool) -> None:
+        self._chat_prompt_cache_dialog = None
+        if not accepted:
+            return
+        self.config = load_config()
+        self._refresh_prompt_cache_status()
+        refresh_chat_from_settings(self.config)
 
     def _change_prompt_cache_ttl(self) -> None:
         config = self._ui_config()
@@ -1993,11 +2195,18 @@ class SettingsDialog(QDialog):
             showWarning(tr("settings.prompt_cache.change_ttl.none", config=config))
             return
         ttl_seconds = self.prompt_cache_change_ttl_input.value()
+        purposes = choose_prompt_cache_ttl_targets(
+            self,
+            config,
+            ttl_seconds=ttl_seconds,
+        )
+        if not purposes:
+            return
         config = dict(config)
         config["prompt_cache_change_ttl_seconds"] = ttl_seconds
         updated = 0
         failed = False
-        for purpose in ("chat", "optimize"):
+        for purpose in purposes:
             if extend_prompt_cache_ttl(
                 config=config,
                 purpose=purpose,
@@ -2084,7 +2293,11 @@ class SettingsDialog(QDialog):
             "",
         )
         for preset in self._prompt_cache_presets:
-            self.prompt_cache_preset_combo.addItem(str(preset.get("name") or ""), preset["id"])
+            if preset.get("optimize"):
+                self.prompt_cache_preset_combo.addItem(
+                    str(preset.get("name") or ""),
+                    str(preset.get("id") or ""),
+                )
         target = select_id or self._selected_prompt_cache_preset_id()
         index = self.prompt_cache_preset_combo.findData(target)
         self.prompt_cache_preset_combo.setCurrentIndex(index if index >= 0 else 0)
@@ -2118,6 +2331,10 @@ class SettingsDialog(QDialog):
         self._rebuild_prompt_cache_preset_combo(select_id="")
         self._sync_prompt_cache_preset_fields()
 
+    def _clear_optimize_prompt_cache(self) -> None:
+        clear_prompt_cache(config=self._ui_config(), purpose="optimize")
+        self._refresh_prompt_cache_status()
+
     def _clear_prompt_cache(self) -> None:
         clear_prompt_cache(config=self._ui_config())
         self._refresh_prompt_cache_status()
@@ -2125,6 +2342,140 @@ class SettingsDialog(QDialog):
     def _open_prompt_cache_manager(self) -> None:
         open_prompt_cache_manager(self, config=self._ui_config())
         self._refresh_prompt_cache_status()
+
+    def _collect_chat_export_quick_folders_from_ui(self) -> list[dict[str, str]]:
+        folders: list[dict[str, str]] = []
+        for row in self._chat_export_quick_folder_rows:
+            path = row.path_input.toPlainText().strip()
+            if not path:
+                continue
+            label = row.label_input.toPlainText().strip() or Path(path).name
+            folders.append({"label": label, "path": path})
+        return folders
+
+    def _clear_chat_export_quick_folder_rows(self) -> None:
+        while self._chat_export_quick_folders_layout.count():
+            item = self._chat_export_quick_folders_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._chat_export_quick_folder_rows.clear()
+
+    def _load_chat_export_quick_folder_rows(
+        self,
+        folders: list[dict[str, str]],
+    ) -> None:
+        self._clear_chat_export_quick_folder_rows()
+        for folder in folders:
+            self._add_chat_export_quick_folder_row(
+                label=str(folder.get("label") or ""),
+                path=str(folder.get("path") or ""),
+            )
+
+    def _add_chat_export_quick_folder_row(
+        self,
+        *,
+        label: str = "",
+        path: str = "",
+    ) -> None:
+        if len(self._chat_export_quick_folder_rows) >= MAX_CHAT_EXPORT_QUICK_FOLDERS:
+            return
+        config = self._ui_config()
+        show_newlines = self.show_text_newlines_checkbox.isChecked()
+        row_host = QWidget(self._chat_export_quick_folders_container)
+        row = QHBoxLayout(row_host)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        row.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        checkbox = QCheckBox(row_host)
+        checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        checkbox.toggled.connect(self._sync_chat_export_quick_folder_buttons)
+        row.addWidget(checkbox, 0, Qt.AlignmentFlag.AlignTop)
+        label_shell, label_input = create_settings_row_auto_height_text_edit(
+            row_host,
+            minimum=_QUICK_FOLDER_ROW_TEXT_MIN_HEIGHT,
+            maximum=_QUICK_FOLDER_ROW_TEXT_MAX_HEIGHT,
+            show_newlines=show_newlines,
+        )
+        label_input.setPlaceholderText(
+            tr("settings.chat_export_quick_folders.label", config=config)
+        )
+        label_input.setPlainText(label)
+        row.addWidget(label_shell, 1, Qt.AlignmentFlag.AlignTop)
+        path_shell, path_input = create_settings_row_auto_height_text_edit(
+            row_host,
+            minimum=_QUICK_FOLDER_ROW_TEXT_MIN_HEIGHT,
+            maximum=_QUICK_FOLDER_ROW_TEXT_MAX_HEIGHT,
+            show_newlines=show_newlines,
+        )
+        path_input.setPlaceholderText(
+            tr("settings.chat_export_quick_folders.path", config=config)
+        )
+        path_input.setPlainText(path)
+        row.addWidget(path_shell, 2, Qt.AlignmentFlag.AlignTop)
+        browse_btn = QPushButton(
+            tr("settings.chat_export_quick_folders.browse", config=config),
+            row_host,
+        )
+        browse_btn.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        browse_btn.clicked.connect(
+            lambda _checked=False, editor=path_input: self._browse_chat_export_quick_folder(
+                editor
+            )
+        )
+        row.addWidget(browse_btn, 0, Qt.AlignmentFlag.AlignTop)
+        folder_row = _ChatExportQuickFolderRow(
+            host=row_host,
+            checkbox=checkbox,
+            label_input=label_input,
+            path_input=path_input,
+        )
+        self._chat_export_quick_folders_layout.addWidget(row_host)
+        self._chat_export_quick_folder_rows.append(folder_row)
+        self._sync_chat_export_quick_folder_buttons()
+        QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
+
+    def _remove_chat_export_quick_folder_row(self) -> None:
+        selected_rows = [
+            row
+            for row in self._chat_export_quick_folder_rows
+            if row.checkbox.isChecked()
+        ]
+        if not selected_rows:
+            return
+        for row in selected_rows:
+            self._chat_export_quick_folder_rows.remove(row)
+            self._chat_export_quick_folders_layout.removeWidget(row.host)
+            row.host.deleteLater()
+        self._sync_chat_export_quick_folder_buttons()
+        QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
+
+    def _sync_chat_export_quick_folder_buttons(self) -> None:
+        count = len(self._chat_export_quick_folder_rows)
+        has_selection = any(
+            row.checkbox.isChecked() for row in self._chat_export_quick_folder_rows
+        )
+        self.chat_export_quick_folder_add_btn.setEnabled(
+            count < MAX_CHAT_EXPORT_QUICK_FOLDERS
+        )
+        self.chat_export_quick_folder_remove_btn.setEnabled(has_selection)
+
+    def _browse_chat_export_quick_folder(self, path_input: ScrollAwareTextEdit) -> None:
+        config = self._ui_config()
+        start_dir = path_input.toPlainText().strip() or str(
+            default_chat_download_directory()
+        )
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            tr("settings.chat_export_quick_folders.browse.title", config=config),
+            start_dir,
+        )
+        if selected:
+            path_input.setPlainText(selected)
+            refresh_settings_text_edit_layouts(self)
 
     def _open_optimize_prompt_inspection(self) -> None:
         pending = self._collect_pending_config()
@@ -2160,7 +2511,7 @@ def open_settings_dialog(editor) -> None:
         _settings_dialog.activateWindow()
         return
     config = load_config()
-    _settings_dialog = SettingsDialog(editor.parentWindow, config)
+    _settings_dialog = SettingsDialog(None, config)
     _settings_dialog.finished.connect(_clear_settings_dialog_ref)
     _settings_dialog.show()
 

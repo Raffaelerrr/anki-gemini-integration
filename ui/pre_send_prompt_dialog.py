@@ -51,7 +51,7 @@ from .theme import (
     refresh_native_text_edits_in,
     strong_label_html,
 )
-from .themed_windows import register_themed_window
+from .themed_windows import configure_snappable_window, register_themed_window
 from .widgets import PlainNoWheelComboBox
 
 _CHAT_EDITABLE_KEYS = frozenset(
@@ -210,12 +210,7 @@ class PreSendPromptDialog(QDialog):
         self._history_edit: QTextEdit | None = None
         config = load_config()
         if read_only:
-            self.setWindowFlags(
-                Qt.WindowType.Window
-                | Qt.WindowType.WindowMinimizeButtonHint
-                | Qt.WindowType.WindowMaximizeButtonHint
-                | Qt.WindowType.WindowCloseButtonHint
-            )
+            configure_snappable_window(self)
             self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
             self.setModal(False)
             self.setWindowTitle(tr("prompt.inspect.preview.title", config=config))

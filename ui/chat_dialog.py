@@ -10,6 +10,7 @@ from aqt.qt import (
     QApplication,
     QCheckBox,
     QCloseEvent,
+    QDialog,
     QShowEvent,
     QFileDialog,
     QHBoxLayout,
@@ -41,6 +42,11 @@ from ..i18n import (
     tr,
 )
 from ..note_context_fields import fields_for_note_preview, format_note_context
+from ..note_apply import (
+    NoteApplyBatch,
+    extract_apply_note,
+    format_apply_batch_for_display,
+)
 from ..config import api_key_configured, is_warning_dismissed, load_config, save_config
 from ..prompt_cache import (
     PromptCacheSessionContext,
@@ -48,7 +54,9 @@ from ..prompt_cache import (
     build_prompt_cache_bundle,
     clear_prompt_cache,
     flatten_bundle_for_live_send,
+    prompt_cache_enabled,
 )
+from .chat_prompt_cache_dialog import ChatPromptCacheDialog
 from .chat_templates_edit_window import ChatTemplatesEditWindow
 from .chat_wrapper_edit_window import ChatWrapperEditWindow
 from ..prompt_inspection import (
@@ -85,9 +93,13 @@ from .card_templates import (
     format_card_templates_block,
 )
 from .chat_export import (
+    chat_export_last_used_directory,
     default_chat_download_directory,
     default_chat_export_filename,
     format_chat_export_text,
+    format_export_folder_menu_text,
+    normalize_chat_export_quick_folders,
+    save_chat_export_text_to_directory,
 )
 from .chat_formatter import format_gemini_reply_html, format_streaming_reply_html
 from .chat_body_splitter import ChatBodySplitter
@@ -111,6 +123,7 @@ from .svg_icons import (
     LoadingStatusIcon,
     barred_brain_icon,
     brain_icon,
+    cache_icon,
     download_icon,
     eye_icon,
     lens_icon,
@@ -130,20 +143,16 @@ from .theme import (
     settings_stale_banner_stylesheet,
     tooltip_stylesheet,
 )
+from .themed_windows import SNAPPABLE_WINDOW_FLAGS, configure_snappable_window
 
 
 class ChatWindow(QWidget):
     def __init__(self):
-        super().__init__(
-            None,
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowMaximizeButtonHint
-            | Qt.WindowType.WindowCloseButtonHint,
-        )
+        super().__init__(None, SNAPPABLE_WINDOW_FLAGS)
+        configure_snappable_window(self)
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self.setWindowModality(Qt.WindowModality.NonModal)
-        self.silentlyClose = True
+        self.silentlyClose = False
         self.setMinimumSize(640, 680)
         self.resize(640, 720)
 
@@ -153,6 +162,8 @@ class ChatWindow(QWidget):
         self._imported_card_templates: list[CardTemplateData] = []
         self._imported_notetype_css: str = ""
         self._imported_notetype_id: int | None = None
+        self._imported_note_id: int | None = None
+        self._pending_apply_batch: NoteApplyBatch | None = None
         self._session_wrapper_override: dict[str, Any] | None = None
         self._messages: list[ChatMessage] = []
         self._loading_phase = 0
@@ -173,6 +184,7 @@ class ChatWindow(QWidget):
         self._wrapper_edit_window: ChatWrapperEditWindow | None = None
         self._templates_edit_window: ChatTemplatesEditWindow | None = None
         self._prompt_preview_dialog = None
+        self._prompt_cache_dialog = None
         self._session_config_fingerprint = ""
         self._settings_stale_banner_dismissed = False
 
@@ -251,6 +263,20 @@ class ChatWindow(QWidget):
         self.btn_inspect_prompt.clicked.connect(self._open_prompt_preview)
         toolbar.addWidget(self.btn_inspect_prompt)
 
+        self.btn_prompt_cache = QPushButton(self)
+        self.btn_prompt_cache.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
+        self.btn_prompt_cache.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.btn_prompt_cache.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_prompt_cache.setAttribute(
+            Qt.WidgetAttribute.WA_AlwaysShowToolTips,
+            True,
+        )
+        self.btn_prompt_cache.clicked.connect(self._open_prompt_cache_session_dialog)
+        toolbar.addWidget(self.btn_prompt_cache)
+
         initial_stop_before_send = bool(
             load_config().get("chat_modify_prompt_before_send", False)
         )
@@ -270,7 +296,10 @@ class ChatWindow(QWidget):
         )
         toolbar.addWidget(self.stop_before_send_btn)
 
-        self.btn_download = QPushButton(self)
+        self.btn_download = QToolButton(self)
+        self.btn_download.setObjectName("chatDownloadMenu")
+        self.btn_download.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.btn_download.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.btn_download.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
         self.btn_download.setSizePolicy(
             QSizePolicy.Policy.Fixed,
@@ -281,7 +310,9 @@ class ChatWindow(QWidget):
             Qt.WidgetAttribute.WA_AlwaysShowToolTips,
             True,
         )
-        self.btn_download.clicked.connect(self._download_chat)
+        self._download_menu = QMenu(self)
+        self._download_menu.aboutToShow.connect(self._refresh_download_menu)
+        self.btn_download.setMenu(self._download_menu)
         toolbar.addWidget(self.btn_download)
 
         self.btn_clear = QPushButton(self)
@@ -466,6 +497,7 @@ class ChatWindow(QWidget):
         self._apply_include_context_icon()
         self._set_toolbar_icon(self.btn_edit_menu, pencil_icon(icon_size))
         self._set_toolbar_icon(self.btn_inspect_prompt, lens_icon(icon_size))
+        self._set_toolbar_icon(self.btn_prompt_cache, cache_icon(icon_size))
         self._set_toolbar_icon(self.btn_note_preview, eye_icon(icon_size))
         self._set_toolbar_icon(self.btn_download, download_icon(icon_size))
         self._set_toolbar_icon(self.btn_clear, plus_icon(icon_size))
@@ -477,6 +509,7 @@ class ChatWindow(QWidget):
         self.btn_include_context.setStyleSheet(checkable_style)
         self.btn_edit_menu.setStyleSheet(icon_style)
         self.btn_inspect_prompt.setStyleSheet(icon_style)
+        self.btn_prompt_cache.setStyleSheet(icon_style)
         self.btn_note_preview.setStyleSheet(icon_style)
         self.btn_download.setStyleSheet(icon_style)
         self.btn_clear.setStyleSheet(icon_style)
@@ -500,8 +533,61 @@ class ChatWindow(QWidget):
         config["chat_modify_prompt_before_send"] = bool(checked)
         save_config(config)
 
-    def build_pre_send_context(self) -> PreSendPromptContext:
+    def _chat_effective_config(self, config: dict[str, Any] | None = None) -> dict[str, Any]:
+        return dict(config or load_config())
+
+    def _refresh_prompt_cache_toolbar_tooltip(self, config: dict[str, Any] | None = None) -> None:
+        config = config or load_config()
+        if not prompt_cache_enabled(config, "chat"):
+            state_key = "chat.prompt_cache.session.tooltip.disabled"
+        else:
+            state_key = "chat.prompt_cache.session.tooltip.active"
+        set_instruction_tooltip(
+            self.btn_prompt_cache,
+            tr(state_key, config=config),
+        )
+
+    def _open_prompt_cache_session_dialog(self) -> None:
         config = load_config()
+        if (
+            self._prompt_cache_dialog is not None
+            and self._prompt_cache_dialog.isVisible()
+        ):
+            self._prompt_cache_dialog.raise_()
+            self._prompt_cache_dialog.activateWindow()
+            return
+        dialog = ChatPromptCacheDialog(
+            self,
+            config=config,
+            on_finished=self._on_prompt_cache_dialog_finished,
+        )
+        self._prompt_cache_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _on_prompt_cache_dialog_finished(self, accepted: bool) -> None:
+        self._prompt_cache_dialog = None
+        if not accepted:
+            return
+        config = load_config()
+        self._refresh_prompt_cache_toolbar_tooltip(config)
+        if (
+            self._prompt_preview_dialog is not None
+            and self._prompt_preview_dialog.isVisible()
+        ):
+            self._prompt_preview_dialog.apply_context(self.build_pre_send_context())
+
+    def _close_prompt_cache_dialog(self) -> None:
+        dialog = self._prompt_cache_dialog
+        if dialog is None:
+            return
+        self._prompt_cache_dialog = None
+        dialog.blockSignals(True)
+        dialog.close()
+
+    def build_pre_send_context(self) -> PreSendPromptContext:
+        config = self._chat_effective_config()
         user_text = self.input_field.toPlainText().strip()
         included_context = bool(self.btn_include_context.isChecked() and self.note_context)
         cache_session = self._prompt_cache_session(config, included_context=included_context)
@@ -607,6 +693,7 @@ class ChatWindow(QWidget):
             self.btn_inspect_prompt,
             tr("chat.inspect_prompt.tooltip", config=config),
         )
+        self._refresh_prompt_cache_toolbar_tooltip(config)
         set_instruction_tooltip(
             self.btn_download,
             tr("chat.download.tooltip", config=config),
@@ -705,10 +792,12 @@ class ChatWindow(QWidget):
         self._cancel_in_flight_request()
         self._stop_loading()
         self._close_note_preview_window()
+        self._close_prompt_cache_dialog()
         self._close_session_edit_windows()
         if self._uses_web_chat_log:
             cleanup_chat_log_webview(self.chat_log)
         _chat_window = None
+        event.accept()
         super().closeEvent(event)
 
     def prepare_shutdown(self) -> None:
@@ -716,6 +805,7 @@ class ChatWindow(QWidget):
         self._cancel_in_flight_request()
         self._stop_loading()
         self._close_note_preview_window()
+        self._close_prompt_cache_dialog()
         self._close_session_edit_windows()
         if self._uses_web_chat_log:
             cleanup_chat_log_webview(self.chat_log)
@@ -839,6 +929,112 @@ class ChatWindow(QWidget):
             for message in self._messages
         )
 
+    def _refresh_download_menu(self) -> None:
+        config = load_config()
+        self._download_menu.clear()
+
+        last_directory = chat_export_last_used_directory(config)
+        if last_directory is not None:
+            last_text = format_export_folder_menu_text(
+                last_directory,
+                config=config,
+                prefix_key="chat.download.menu.last_used",
+            )
+        else:
+            last_text = tr("chat.download.menu.last_used.unavailable", config=config)
+        last_action = self._download_menu.addAction(last_text)
+        last_action.setEnabled(last_directory is not None)
+        if last_directory is not None:
+            last_action.triggered.connect(
+                lambda *_args, directory=last_directory: self._download_chat_to_directory(
+                    directory
+                )
+            )
+
+        quick_folders = normalize_chat_export_quick_folders(
+            config.get("chat_export_quick_folders")
+        )
+        if quick_folders:
+            self._download_menu.addSeparator()
+            for folder in quick_folders:
+                folder_path = Path(str(folder.get("path") or ""))
+                label = str(folder.get("label") or folder_path.name)
+                action = self._download_menu.addAction(label)
+                action.setToolTip(str(folder_path))
+                action.triggered.connect(
+                    lambda *_args, directory=folder_path: self._download_chat_to_directory(
+                        directory
+                    )
+                )
+
+        self._download_menu.addSeparator()
+        browse_action = self._download_menu.addAction(
+            tr("chat.download.menu.browse", config=config)
+        )
+        browse_action.triggered.connect(self._download_chat_browse)
+
+    def _build_chat_export_text(self) -> str:
+        config = load_config()
+        return format_chat_export_text(
+            self._messages,
+            config,
+            api_history=self.api_history,
+        )
+
+    def _persist_chat_export_directory(self, directory: Path) -> None:
+        config = load_config()
+        updated = dict(config)
+        updated["chat_download_directory"] = str(directory)
+        save_config(updated)
+
+    def _download_chat_to_directory(self, directory: Path) -> None:
+        config = load_config()
+        text = self._build_chat_export_text()
+        if not text.strip():
+            return
+        try:
+            export_path = save_chat_export_text_to_directory(
+                text,
+                directory,
+                config=config,
+            )
+        except OSError as exc:
+            showWarning(tr("chat.download.error", config=config, error=exc))
+            return
+        self._persist_chat_export_directory(export_path.parent)
+        tooltip(tr("chat.download.saved", config=config))
+
+    def _download_chat_browse(self) -> None:
+        config = load_config()
+        text = self._build_chat_export_text()
+        if not text.strip():
+            return
+
+        start_dir = str(config.get("chat_download_directory") or "").strip()
+        if not start_dir:
+            start_dir = str(default_chat_download_directory())
+        default_name = default_chat_export_filename()
+        initial_path = str(Path(start_dir) / default_name)
+
+        path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            tr("chat.download.title", config=config),
+            initial_path,
+            tr("chat.download.filter", config=config),
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+        except OSError as exc:
+            showWarning(tr("chat.download.error", config=config, error=exc))
+            return
+
+        self._persist_chat_export_directory(Path(path).parent)
+        tooltip(tr("chat.download.saved", config=config))
+
     def _confirm_new_conversation(self, config: dict[str, Any]) -> bool:
         if is_warning_dismissed(config, "suppress_chat_new_conversation_confirm_warning"):
             return True
@@ -868,43 +1064,6 @@ class ChatWindow(QWidget):
 
         return True
 
-    def _download_chat(self) -> None:
-        config = load_config()
-        text = format_chat_export_text(
-            self._messages,
-            config,
-            api_history=self.api_history,
-        )
-        if not text.strip():
-            return
-
-        start_dir = str(config.get("chat_download_directory") or "").strip()
-        if not start_dir:
-            start_dir = str(default_chat_download_directory())
-        default_name = default_chat_export_filename()
-        initial_path = str(Path(start_dir) / default_name)
-
-        path, _selected_filter = QFileDialog.getSaveFileName(
-            self,
-            tr("chat.download.title", config=config),
-            initial_path,
-            tr("chat.download.filter", config=config),
-        )
-        if not path:
-            return
-
-        try:
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(text)
-        except OSError as exc:
-            showWarning(tr("chat.download.error", config=config, error=str(exc)))
-            return
-
-        updated = dict(config)
-        updated["chat_download_directory"] = str(Path(path).parent)
-        save_config(updated)
-        tooltip(tr("chat.download.saved", config=config))
-
     def clear_conversation(self) -> None:
         config = load_config()
         cache_choice = confirm_new_conversation_cache_if_needed(self, config)
@@ -922,6 +1081,8 @@ class ChatWindow(QWidget):
         self._imported_card_templates = []
         self._imported_notetype_css = ""
         self._imported_notetype_id = None
+        self._imported_note_id = None
+        self._pending_apply_batch = None
         self._session_wrapper_override = None
         self._messages.clear()
         self._copy_blocks.clear()
@@ -961,6 +1122,8 @@ class ChatWindow(QWidget):
 
         self._imported_fields = imported_fields
         self._imported_notetype_id = note.mid
+        self._imported_note_id = note.id
+        self._pending_apply_batch = None
         raw_templates, raw_css = extract_notetype_context(note)
         self._imported_card_templates = raw_templates
         self._imported_notetype_css = raw_css
@@ -1291,7 +1454,7 @@ class ChatWindow(QWidget):
         if not user_text:
             return
 
-        config = load_config()
+        config = self._chat_effective_config()
         pre_send_context = self.build_pre_send_context()
         included_context = bool(self.btn_include_context.isChecked() and self.note_context)
         payload_text = pre_send_context.outgoing_payload
@@ -1318,7 +1481,10 @@ class ChatWindow(QWidget):
         )
         if cache_choice == "abort":
             return
-        allow_cache_create = cache_choice != "skip_cache"
+        allow_cache_create = (
+            cache_choice != "skip_cache"
+            and prompt_cache_enabled(config, "chat")
+        )
         allow_cache_use = cache_choice != "skip_cache"
         if bundle is not None and not allow_cache_use:
             system_instruction, payload_text = flatten_bundle_for_live_send(
@@ -1479,12 +1645,22 @@ class ChatWindow(QWidget):
             return
         config = load_config()
         display_text, dynamic_rules = extract_dynamic_rules(raw_text)
+        display_text, apply_batch = extract_apply_note(display_text)
         rules_updated = False
 
         if dynamic_rules is not None:
             config["dynamic_instructions"] = dynamic_rules
             save_config(config)
             rules_updated = True
+
+        if apply_batch is not None:
+            self._pending_apply_batch = apply_batch
+            preview_text = format_apply_batch_for_display(apply_batch)
+            if preview_text.strip():
+                if display_text.strip():
+                    display_text = f"{display_text.rstrip()}\n\n{preview_text}"
+                else:
+                    display_text = preview_text
 
         self.api_history.append({"role": "model", "parts": [{"text": display_text}]})
 
@@ -1520,6 +1696,23 @@ class ChatWindow(QWidget):
                     label_class="chat-label-system",
                     label=tr("chat.label.system", config=config),
                     body_html=html.escape(tr("chat.rules_updated", config=config)),
+                    trailing_spacer=True,
+                )
+            )
+
+        if apply_batch is not None:
+            self._messages.append(
+                ChatMessage(
+                    label_class="chat-label-system",
+                    label=tr("chat.label.system", config=config),
+                    body_html=html.escape(
+                        tr(
+                            "chat.apply_note.detected",
+                            config=config,
+                            count=apply_batch.note_count,
+                            fields=apply_batch.field_names_summary(),
+                        )
+                    ),
                     trailing_spacer=True,
                 )
             )

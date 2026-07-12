@@ -128,14 +128,15 @@ Use the **settings** dialog for normal setup; manual file copy is rarely needed.
 | `system_instruction_chat` | *(built-in)* | Chat-only instructions (when split) |
 | `dynamic_instructions` | `""` | Lower-priority rules from chat |
 | `brain_import_message` | *(built-in)* | Prompt for brain icon note import |
-| `prompt_cache_enabled` | `false` | Use Gemini explicit prompt caching |
-| `prompt_cache_ttl_seconds` | `3600` | Cache lifetime (seconds) |
-| `prompt_cache_min_chars` | `8192` | Minimum cached characters before creating a cache (~2048 tokens × 4 chars/token) |
-| `prompt_cache_custom_text` | `""` | Optional extra reference text to cache |
-| `prompt_cache_segments` | *(see example)* | Which prompt parts to include in the cache |
+| `prompt_cache_enabled_chat` | `false` | Use Gemini explicit prompt caching for chat (configure in chat → cache button) |
+| `prompt_cache_enabled_optimize` | `false` | Use Gemini explicit prompt caching for optimize |
+| `prompt_cache_ttl_seconds_chat` / `_optimize` | `3600` | Cache lifetime per purpose (seconds) |
+| `prompt_cache_min_chars_chat` / `_optimize` | `8192` | Minimum cached characters before creating a cache |
+| `prompt_cache_custom_text_chat` / `_optimize` | `""` | Optional extra reference text to cache |
+| `prompt_cache_segments_chat` / `_optimize` | *(see example)* | Which prompt parts to include in the cache |
 | `chat_payload_warning_chars` | `12000` | Warn before chat send when total input characters exceed this |
 
-Enable prompt caching under **Settings → Advanced prompts** when you send large, mostly static prompts (long system instructions, imported notes, card templates). Cached content is billed at Gemini’s cached-input rate for the TTL; changing cached text or model invalidates the tracked cache and prompts you to confirm before recreating (with character count and a link to AI Studio Billing).
+Enable prompt caching separately for **chat** and **optimize**. **Chat** caching is configured from the cache button in the chat window; **optimize** caching and preset libraries live under **Settings → Advanced prompts**. Cached content is billed at Gemini’s cached-input rate for the TTL; changing cached text or model invalidates the tracked cache and prompts you to confirm before recreating (with character count and a link to AI Studio Billing).
 
 Use **Manage caches…** in Advanced settings to list remote `anki-ai-*` caches, see which are tracked locally, delete individual caches, or remove orphaned ones. Tracked cache names persist in `prompt_cache_state.json` across Anki restarts; orphans are cleaned up automatically on the next cached request.
 

@@ -20,6 +20,7 @@ _LENS_SVG = "lens.svg"
 _PENCIL_SVG = "pencil.svg"
 _ROBOT_SVG = "robot.svg"
 _STOP_CIRCLE_SVG = "stop_circle.svg"
+_CACHE_SVG = "cache.svg"
 _DOWNLOAD_SVG = "download.svg"
 LOADING_STATUS_ICON_SIZE = 18
 
@@ -81,6 +82,10 @@ def stop_circle_svg_path() -> Path:
 
 def download_svg_path() -> Path:
     return _ICONS_DIR / _DOWNLOAD_SVG
+
+
+def cache_svg_path() -> Path:
+    return _ICONS_DIR / _CACHE_SVG
 
 
 def loading_status_icon_color() -> str:
@@ -237,6 +242,10 @@ def pencil_icon(size: int | None = None) -> QIcon:
 
 def download_icon(size: int | None = None) -> QIcon:
     return themed_toolbar_icon_from_svg(download_svg_path(), size)
+
+
+def cache_icon(size: int | None = None) -> QIcon:
+    return themed_toolbar_icon_from_svg(cache_svg_path(), size)
 
 
 def barred_brain_icon(size: int | None = None) -> QIcon:

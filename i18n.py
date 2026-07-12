@@ -262,9 +262,59 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Restore defaults from Settings → Restore defaults."
         ),
     },
-    "settings.prompt_cache_enabled": {
-        "it": "Abilita cache prompt (Gemini)",
-        "en": "Enable prompt caching (Gemini)",
+    "settings.prompt_cache.section": {
+        "it": "Cache prompt (Gemini)",
+        "en": "Prompt caching (Gemini)",
+    },
+    "settings.prompt_cache.section.optimize": {
+        "it": "Cache prompt per l'ottimizzazione (Gemini)",
+        "en": "Optimize prompt caching (Gemini)",
+    },
+    "settings.prompt_cache.hint.optimize": {
+        "it": (
+            "Impostazioni di cache per l'ottimizzazione dei campi. "
+            "Le impostazioni della chat si gestiscono separatamente."
+        ),
+        "en": (
+            "Caching settings for field optimization. "
+            "Chat caching is configured separately."
+        ),
+    },
+    "settings.prompt_cache.open_chat_settings": {
+        "it": "Apri impostazioni cache chat…",
+        "en": "Open chat caching settings…",
+    },
+    "settings.prompt_cache.chat_summary.disabled": {
+        "it": "Cache chat: disattivata.",
+        "en": "Chat caching: off.",
+    },
+    "settings.prompt_cache.chat_summary.enabled": {
+        "it": "Cache chat: attiva · TTL {ttl}s · {segments} segmenti abilitati.",
+        "en": "Chat caching: on · TTL {ttl}s · {segments} segments enabled.",
+    },
+    "settings.prompt_cache.clear_optimize": {
+        "it": "Cancella cache ottimizzazione",
+        "en": "Clear optimize cache",
+    },
+    "settings.restore.chat_cache.hint": {
+        "it": (
+            "Le impostazioni di cache della chat non sono in questo elenco. "
+            "Apri le <a href='chat-cache-settings'>impostazioni cache chat</a> "
+            "per ripristinarle ai predefiniti."
+        ),
+        "en": (
+            "Chat cache settings are not listed here. "
+            "Open <a href='chat-cache-settings'>chat caching settings</a> "
+            "to restore their defaults."
+        ),
+    },
+    "settings.prompt_cache_enabled_chat": {
+        "it": "Abilita cache prompt per la chat",
+        "en": "Enable prompt caching for chat",
+    },
+    "settings.prompt_cache_enabled_optimize": {
+        "it": "Abilita cache prompt per l'ottimizzazione",
+        "en": "Enable prompt caching for optimize",
     },
     "settings.prompt_cache.hint": {
         "it": (
@@ -435,11 +485,14 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.prompt_cache_custom_text.hint": {
         "it": (
             "Materiale di riferimento lungo (libro, glossario, regole del deck). Inviato come blocco "
-            "cached, non come istruzione di sistema. Puoi caricarlo da un file di testo (.txt)."
+            "cached, non come istruzione di sistema. Puoi caricarlo da un file di testo (.txt). "
+            "Salva blocchi riutilizzabili come preset; ogni preset può essere usato in chat, "
+            "ottimizzazione o entrambi."
         ),
         "en": (
             "Long reference material (book chapter, glossary, deck rules). Sent as a cached content "
-            "block, not as system instruction. You can load it from a plain text file (.txt)."
+            "block, not as system instruction. You can load it from a plain text file (.txt). "
+            "Save reusable blocks as presets; each preset can be used for chat, optimize, or both."
         ),
     },
     "settings.prompt_cache_custom_text.load_file": {
@@ -542,13 +595,33 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Impossibile aggiornare il TTL della cache.",
         "en": "Could not update cache TTL.",
     },
+    "settings.prompt_cache.change_ttl.choose.title": {
+        "it": "Cambiare TTL cache",
+        "en": "Change cache TTL",
+    },
+    "settings.prompt_cache.change_ttl.choose.message": {
+        "it": "Imposta il TTL a {seconds} secondi per quale cache tracciata?",
+        "en": "Set TTL to {seconds} seconds for which tracked cache?",
+    },
+    "settings.prompt_cache.change_ttl.choose.both": {
+        "it": "Entrambe",
+        "en": "Both caches",
+    },
+    "settings.prompt_cache.change_ttl.choose.chat": {
+        "it": "Solo chat",
+        "en": "Chat only",
+    },
+    "settings.prompt_cache.change_ttl.choose.optimize": {
+        "it": "Solo ottimizzazione",
+        "en": "Optimize only",
+    },
     "settings.prompt_cache.extend": {
         "it": "Cambia TTL",
         "en": "Change TTL",
     },
     "settings.prompt_cache.clear": {
-        "it": "Elimina cache tracciate",
-        "en": "Clear tracked caches",
+        "it": "Elimina tutte le cache tracciate",
+        "en": "Clear all tracked caches",
     },
     "settings.prompt_cache.manage": {
         "it": "Gestisci cache…",
@@ -1062,8 +1135,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Active preset",
     },
     "settings.prompt_cache_presets.manual": {
-        "it": "Testo manuale (sotto)",
-        "en": "Manual text (below)",
+        "it": "Testo cache personalizzato",
+        "en": "Custom cache text",
     },
     "settings.prompt_cache_presets.add": {
         "it": "Aggiungi preset",
@@ -1141,6 +1214,8 @@ _STRINGS: dict[str, dict[str, str]] = {
             "<b>Edit menu</b> — {icon:pencil} menu: modifica nota, wrapper contesto o template (solo sessione).<br>"
             "<b>Preview</b> — {icon:eye}: apre l'anteprima della nota importata in una finestra separata.<br>"
             "<b>Inspect</b> — {icon:lens}: anteprima del prompt completo adesso, senza inviare.<br>"
+            "<b>Cache prompt</b> — {icon:cache}: impostazioni cache solo sessione (creazione, TTL, segmenti, testo custom). "
+            "I default seguono Impostazioni → Cache prompt.<br>"
             "<b>Stop / precedenza</b> — Pulsante commutabile: {icon:stop} = revisione pre-invio "
             "prima di Gemini; {icon:priority} = invio diretto.<br>"
             "<b>Download</b> — {icon:download}: salva la conversazione corrente come file di testo (.txt). "
@@ -1155,10 +1230,13 @@ _STRINGS: dict[str, dict[str, str]] = {
             "<b>Edit menu</b> — {icon:pencil} menu: edit note, context wrapper, or templates (session only).<br>"
             "<b>Preview</b> — {icon:eye}: open the imported note preview in a separate window.<br>"
             "<b>Inspect</b> — {icon:lens}: read-only preview of the full prompt now, without sending.<br>"
+            "<b>Prompt cache</b> — {icon:cache}: session-only cache settings (creation toggle, TTL, segments, custom text). "
+            "Defaults follow Settings → Prompt cache.<br>"
             "<b>Stop / priority</b> — Toggle: {icon:stop} = pre-send review before Gemini; "
             "{icon:priority} = send directly.<br>"
-            "<b>Download</b> — {icon:download}: save the current conversation as a plain-text (.txt) file. "
-            "The chosen folder is remembered.<br>"
+            "<b>Download</b> — {icon:download} menu: save the conversation as plain text to "
+            "<b>Last used folder</b>, a quick folder from Settings, or <b>Browse…</b>. "
+            "The last used folder updates after every export.<br>"
             "<b>{icon:plus} New conversation</b> — Clear the chat and apply settings that require a new session."
         ),
     },
@@ -1888,18 +1966,26 @@ _STRINGS: dict[str, dict[str, str]] = {
             "<b>Advanced</b>. You can edit or clear them manually."
         ),
     },
-    "settings.help.prompt_cache_enabled": {
+    "settings.help.prompt_cache_enabled_chat": {
         "it": (
             "Quando attivo, l'add-on crea cache esplicite su Gemini per le parti statiche "
-            "dei prompt (istruzioni di sistema, addon chat, ecc.) e le riusa finché il contenuto "
-            "e il modello restano invariati. Riduce i costi per input cached per la durata del TTL. "
-            "Richiede che il testo cached superi la soglia minima di caratteri."
+            "dei prompt chat (istruzioni di sistema, addon chat, nota importata, ecc.) "
+            "e le riusa finché contenuto e modello restano invariati."
         ),
         "en": (
-            "When enabled, the add-on creates explicit Gemini caches for static prompt parts "
-            "(system instructions, chat addon text, etc.) and reuses them while content and model "
-            "stay unchanged. Lowers cached-input cost for the TTL period. "
-            "Requires cached text to exceed the minimum character threshold."
+            "When enabled, the add-on creates explicit Gemini caches for static chat prompt "
+            "parts (system instructions, chat addon, imported note, etc.) and reuses them "
+            "while content and model stay unchanged."
+        ),
+    },
+    "settings.help.prompt_cache_enabled_optimize": {
+        "it": (
+            "Quando attivo, l'add-on crea cache esplicite su Gemini per le parti statiche "
+            "dei prompt di ottimizzazione e le riusa finché contenuto e modello restano invariati."
+        ),
+        "en": (
+            "When enabled, the add-on creates explicit Gemini caches for static optimize "
+            "prompt parts and reuses them while content and model stay unchanged."
         ),
     },
     "settings.help.prompt_cache_ttl_seconds": {
@@ -1909,6 +1995,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
         "en": (
             "Lifetime in seconds of caches created on Gemini. After expiry, the cache is recreated "
+            "when needed (with confirmation if content changed). Typical value: 3600 (1 hour)."
+        ),
+    },
+    "settings.help.prompt_cache_ttl_seconds_optimize": {
+        "it": (
+            "Durata in secondi delle cache di ottimizzazione create su Gemini. Al termine, la cache scade e verrà "
+            "ricreata al bisogno (con conferma se il contenuto è cambiato). Valori tipici: 3600 (1 ora)."
+        ),
+        "en": (
+            "Lifetime in seconds of optimize caches created on Gemini. After expiry, the cache is recreated "
             "when needed (with confirmation if content changed). Typical value: 3600 (1 hour)."
         ),
     },
@@ -1924,14 +2020,38 @@ _STRINGS: dict[str, dict[str, str]] = {
             "If selected material is shorter, no cache is created."
         ),
     },
+    "settings.help.prompt_cache_min_chars_optimize": {
+        "it": (
+            "Soglia interna in <b>caratteri</b> (non token) prima di creare una cache di ottimizzazione. "
+            "Allineata al minimo Gemini (~2048 token, ~4 caratteri per token)."
+        ),
+        "en": (
+            "Internal <b>character</b> threshold (not tokens) before creating an optimize cache. "
+            "Aligned with Gemini's minimum (~2048 tokens, ~4 characters per token)."
+        ),
+    },
     "settings.help.prompt_cache_custom_text": {
         "it": (
             "Testo opzionale aggiuntivo da includere nella cache (es. riferimenti lunghi che "
-            "non rientrano nelle altre sezioni). Conta verso la soglia minima di caratteri."
+            "non rientrano nelle altre sezioni). Conta verso la soglia minima di caratteri. "
+            "Usa i preset per tenere più blocchi e scegliere quale è attivo per chat e/o ottimizzazione."
         ),
         "en": (
             "Optional extra text to include in the cache (e.g. long reference material that "
-            "does not fit other segments). Counts toward the minimum character threshold."
+            "does not fit other segments). Counts toward the minimum character threshold. "
+            "Use presets to keep several blocks and choose which is active for chat and/or optimize."
+        ),
+    },
+    "settings.help.prompt_cache_custom_text_optimize": {
+        "it": (
+            "Testo opzionale aggiuntivo da includere nella cache di ottimizzazione. "
+            "Conta verso la soglia minima di caratteri. "
+            "I preset si gestiscono in Impostazioni → Avanzate."
+        ),
+        "en": (
+            "Optional extra text to include in the optimize cache. "
+            "Counts toward the minimum character threshold. "
+            "Presets are managed under Settings → Advanced."
         ),
     },
     "settings.help.prompt_cache_segments": {
@@ -1945,6 +2065,18 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Choose which prompt parts go into the cache: system instructions, dynamic rules, "
             "chat addon, custom text, imported note, templates/CSS, context wrapper. "
             "The context wrapper is included automatically when caching note, templates, or CSS. "
+            "Use <b>Manage caches…</b> to view or delete remote <code>anki-ai-*</code> caches."
+        ),
+    },
+    "settings.help.prompt_cache_segments_optimize": {
+        "it": (
+            "Scegli quali parti del prompt di ottimizzazione entrano nella cache: istruzioni di sistema, "
+            "regole dinamiche e testo custom. "
+            "Usa <b>Gestisci cache…</b> per vedere o eliminare le cache remote <code>anki-ai-*</code>."
+        ),
+        "en": (
+            "Choose which optimize prompt parts go into the cache: system instructions, "
+            "dynamic rules, and custom text. "
             "Use <b>Manage caches…</b> to view or delete remote <code>anki-ai-*</code> caches."
         ),
     },
@@ -2681,6 +2813,84 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Cronologia inclusa: {turns} turni (max {max_turns})",
         "en": "History included: {turns} turns (max {max_turns})",
     },
+    "chat.apply_note.detected": {
+        "it": (
+            "Aggiornamento nota strutturato rilevato ({count} nota/e, campi: {fields}). "
+            "Il dialogo Applica ad Anki arriverà nel prossimo passo."
+        ),
+        "en": (
+            "Structured note update detected ({count} note(s), fields: {fields}). "
+            "Apply-to-Anki dialog coming in the next step."
+        ),
+    },
+    "chat.prompt_cache.session.section": {
+        "it": "Cache prompt",
+        "en": "Prompt cache",
+    },
+    "chat.prompt_cache.session.clear_cache": {
+        "it": "Elimina cache chat",
+        "en": "Clear chat cache",
+    },
+    "chat.prompt_cache.session.title": {
+        "it": "Cache prompt chat",
+        "en": "Chat prompt caching",
+    },
+    "chat.prompt_cache.session.intro": {
+        "it": (
+            "Impostazioni persistenti della cache prompt per la chat. "
+            "Applica salva in configurazione; Ripristina predefiniti consente di ripristinare singole impostazioni."
+        ),
+        "en": (
+            "Persistent chat prompt caching settings. "
+            "Apply saves to your configuration; Restore defaults lets you reset individual settings."
+        ),
+    },
+    "chat.prompt_cache.session.allow_create": {
+        "it": "Consenti creazione di nuove cache (il riuso resta attivo)",
+        "en": "Allow creating new caches (reuse stays enabled)",
+    },
+    "chat.prompt_cache.session.apply": {
+        "it": "Applica",
+        "en": "Apply",
+    },
+    "chat.prompt_cache.session.restore.title": {
+        "it": "Ripristina impostazioni predefinite cache chat",
+        "en": "Restore chat cache defaults",
+    },
+    "chat.prompt_cache.session.restore.hint": {
+        "it": (
+            "Seleziona le impostazioni da ripristinare ai valori predefiniti dell'add-on, "
+            "poi clicca Ripristina selezionati."
+        ),
+        "en": (
+            "Select the settings to restore to the add-on defaults, "
+            "then click Restore selected."
+        ),
+    },
+    "chat.prompt_cache.session.restore.back": {
+        "it": "Torna alla cache chat",
+        "en": "Back to chat cache settings",
+    },
+    "chat.prompt_cache.session.default": {
+        "it": "valori predefiniti globali",
+        "en": "global defaults",
+    },
+    "chat.prompt_cache.session.modified": {
+        "it": "override di sessione attivo",
+        "en": "session override active",
+    },
+    "chat.prompt_cache.session.tooltip.active": {
+        "it": "{icon:cache} Cache prompt: attiva, creazione consentita ({modified})",
+        "en": "{icon:cache} Prompt cache: on, creation allowed ({modified})",
+    },
+    "chat.prompt_cache.session.tooltip.reuse_only": {
+        "it": "{icon:cache} Cache prompt: attiva, solo riuso — nessuna nuova cache ({modified})",
+        "en": "{icon:cache} Prompt cache: on, reuse only — no new cache ({modified})",
+    },
+    "chat.prompt_cache.session.tooltip.disabled": {
+        "it": "{icon:cache} Cache prompt chat: disattivata nelle impostazioni globali ({modified})",
+        "en": "{icon:cache} Chat prompt cache: off in global Settings ({modified})",
+    },
     "chat.rules_updated": {
         "it": "Memoria dinamica dell'add-on aggiornata e salvata!",
         "en": "Add-on dynamic memory updated and saved!",
@@ -2708,6 +2918,68 @@ _STRINGS: dict[str, dict[str, str]] = {
     "chat.download.tooltip": {
         "it": "{icon:download} Scarica la conversazione come file di testo",
         "en": "{icon:download} Download the conversation as a text file",
+    },
+    "chat.download.menu.last_used": {
+        "it": "Ultima cartella: {folder}",
+        "en": "Last used folder: {folder}",
+    },
+    "chat.download.menu.last_used.unavailable": {
+        "it": "Ultima cartella (non ancora usata)",
+        "en": "Last used folder (not saved yet)",
+    },
+    "chat.download.menu.browse": {
+        "it": "Sfoglia…",
+        "en": "Browse…",
+    },
+    "settings.chat_export_quick_folders": {
+        "it": "Cartelle rapide per l'esportazione chat",
+        "en": "Chat export quick folders",
+    },
+    "settings.chat_export_quick_folders.hint": {
+        "it": (
+            "Scorciatoie nel menu Download della chat. "
+            "L'ultima cartella usata si aggiorna dopo ogni esportazione."
+        ),
+        "en": (
+            "Shortcuts in the chat Download menu. "
+            "Last used folder updates after every export."
+        ),
+    },
+    "settings.chat_export_quick_folders.label": {
+        "it": "Etichetta",
+        "en": "Label",
+    },
+    "settings.chat_export_quick_folders.path": {
+        "it": "Cartella",
+        "en": "Folder",
+    },
+    "settings.chat_export_quick_folders.browse": {
+        "it": "Sfoglia…",
+        "en": "Browse…",
+    },
+    "settings.chat_export_quick_folders.add": {
+        "it": "Aggiungi cartella",
+        "en": "Add folder",
+    },
+    "settings.chat_export_quick_folders.remove": {
+        "it": "Rimuovi selezionate",
+        "en": "Remove selected",
+    },
+    "settings.chat_export_quick_folders.browse.title": {
+        "it": "Scegli cartella di esportazione",
+        "en": "Choose export folder",
+    },
+    "settings.help.chat_export_quick_folders": {
+        "it": (
+            "Cartelle mostrate nel menu di download della chat, oltre a "
+            "<b>Ultima cartella</b> e <b>Sfoglia…</b>. "
+            "Usa un'etichetta breve e il percorso completo della cartella."
+        ),
+        "en": (
+            "Folders listed in the chat download menu, in addition to "
+            "<b>Last used folder</b> and <b>Browse…</b>. "
+            "Use a short label and the full folder path."
+        ),
     },
     "chat.download.title": {
         "it": "Scarica conversazione",
@@ -2897,6 +3169,10 @@ _STRINGS: dict[str, dict[str, str]] = {
             "- NON racchiudere l'intera risposta in un unico blocco ```markdown: scrivi il Markdown nel testo normale.\n"
             "- Nel testo esplicativo (fuori dai blocchi code), usa \\(...\\) per matematica inline e \\[...\\] "
             "per display, così la matematica viene renderizzata nella chat; non usare $...$ o $$...$$.\n"
+            "- Se nel testo esplicativo citi i delimitatori stessi (non come formula da renderizzare), "
+            "racchiudili SEMPRE in backtick inline così non diventano MathJax. "
+            "Esempio: ho usato `\\(...\\)` per inline e `\\[...\\]` per display. "
+            "Non scrivere mai `\\(\\)` o `\\[\\]` nudi nel testo esplicativo.\n"
             "- Quando proponi contenuto da incollare in un campo Anki, scrivi il NOME DEL CAMPO sulla riga immediatamente sopra il blocco code, seguito da due punti. Poi apri un blocco code con tre backtick.\n"
             "- Esempio (ripeti per ogni campo):\n\n"
             "Front:\n"
@@ -2911,7 +3187,24 @@ _STRINGS: dict[str, dict[str, str]] = {
             "- Dentro ogni blocco code metti SOLO ciò che va incollato nel campo: niente spiegazioni, niente Markdown (usa tag HTML <b>, <i> per grassetto/corsivo nei campi).\n"
             "- Nei campi Anki, usa \\(...\\) per matematica inline e \\[...\\] per display; non usare $...$ o $$...$$.\n"
             "- Ogni blocco code avrà un pulsante Copia: l'utente decide cosa incollare in Anki.\n"
-            "- I blocchi code possono anche servire per esempi non legati a un campo; in quel caso non mettere un nome campo sulla riga sopra.\n\n"
+            "- I blocchi code possono anche servire per esempi non legati a un campo; in quel caso non mettere un nome campo sulla riga sopra.\n"
+            "- Usa i blocchi code sopra per suggerimenti parziali o copia manuale di singoli campi.\n\n"
+            "[META-REGOLA DI SISTEMA — AGGIORNAMENTO NOTA ANKI]: Se l'utente chiede di riscrivere, ottimizzare, "
+            "scomporre per atomicità o restituire valori aggiornati per l'intera nota importata (o più note), "
+            "includi TASSATIVAMENTE in fondo alla risposta un blocco JSON dentro <APPLY_NOTE> e </APPLY_NOTE> "
+            "(non usare APPLY_NOTE per suggerimenti parziali di un solo campo: usa i blocchi code).\n"
+            "L'add-on nasconde il JSON in chat ma mostra anteprime copiabili dei campi.\n"
+            "Formato singola nota — includi TUTTI i campi da scrivere in `fields`, ciascuno con HTML/MathJax grezzo:\n"
+            '{"notetype": "Nome tipo nota", "deck": "Nome mazzo opzionale", '
+            '"tags": ["tag1", "tag2", "tag3"], '
+            '"fields": {"Front": "HTML/MathJax del Front", "Back": "HTML/MathJax del Back", "Extra": "..."}}\n'
+            "Per più note (atomicità), ogni oggetto ha la stessa struttura:\n"
+            '{"notes": [{"notetype": "Basic", "deck": "Default", "tags": ["atomica"], '
+            '"fields": {"Front": "...", "Back": "..."}}, '
+            '{"notetype": "Basic", "tags": ["atomica", "parte2"], "fields": {"Front": "...", "Back": "..."}}]}\n'
+            "`tags` è un array JSON di stringhe (zero, uno o più tag). `deck` è opzionale. "
+            "I nomi in `fields` devono corrispondere esattamente ai campi del tipo nota. "
+            "Il JSON va SOLO dentro i tag; spiega le modifiche nel testo visibile sopra.\n\n"
             "[META-REGOLA DI SISTEMA]: Se l'utente ti chiede esplicitamente di memorizzare, ricordare, "
             "salvare o aggiungere una nuova regola globalmente o per il futuro, accetta la richiesta e includi "
             "TASSATIVAMENTE in fondo alla tua risposta l'elenco completo e aggiornato di TUTTE le regole dinamiche "
@@ -2923,6 +3216,10 @@ _STRINGS: dict[str, dict[str, str]] = {
             "- Do NOT wrap the entire reply in one ```markdown block; write Markdown as normal text.\n"
             "- In explanatory text (outside code blocks), use \\(...\\) for inline math and \\[...\\] for display math "
             "so equations render in the chat window; never $...$ or $$...$$.\n"
+            "- When mentioning the delimiter characters themselves in explanatory prose (not as live math), "
+            "ALWAYS wrap them in inline backticks so they are not rendered as MathJax. "
+            "Example: I used `\\(...\\)` for inline math and `\\[...\\]` for display math. "
+            "Never write raw empty `\\(\\)` or `\\[\\]` in explanatory prose.\n"
             "- When suggesting content for an Anki field, write the FIELD NAME on the line immediately above the code block, followed by a colon. Then open a three-backtick code block.\n"
             "- Example (repeat for each field):\n\n"
             "Front:\n"
@@ -2937,7 +3234,24 @@ _STRINGS: dict[str, dict[str, str]] = {
             "- Inside each code block put ONLY field content: no explanations, no Markdown (use HTML <b>, <i> for bold/italic in fields).\n"
             "- In Anki fields use \\(...\\) for inline math and \\[...\\] for display; never $...$ or $$...$$.\n"
             "- Each code block gets a Copy button; the user chooses what to paste into Anki.\n"
-            "- Code blocks may also show examples not tied to a field; then omit the field name line above.\n\n"
+            "- Code blocks may also show examples not tied to a field; then omit the field name line above.\n"
+            "- Use the code blocks above for partial suggestions or manual copy of individual fields.\n\n"
+            "[META-SYSTEM RULE — ANKI NOTE UPDATE]: If the user asks to rewrite, optimize, split for atomicity, "
+            "or return updated values for the entire imported note (or multiple notes), you MUST include at the "
+            "end of your reply a JSON block inside <APPLY_NOTE> and </APPLY_NOTE> "
+            "(do not use APPLY_NOTE for partial single-field suggestions — use code blocks instead).\n"
+            "The add-on hides the JSON from chat but shows copyable field previews from it.\n"
+            "Single note format — include ALL fields to write in `fields`, each with raw HTML/MathJax:\n"
+            '{"notetype": "Note type name", "deck": "optional deck name", '
+            '"tags": ["tag1", "tag2", "tag3"], '
+            '"fields": {"Front": "Front HTML/MathJax", "Back": "Back HTML/MathJax", "Extra": "..."}}\n'
+            "For multiple notes (atomicity), each object uses the same shape:\n"
+            '{"notes": [{"notetype": "Basic", "deck": "Default", "tags": ["atomic"], '
+            '"fields": {"Front": "...", "Back": "..."}}, '
+            '{"notetype": "Basic", "tags": ["atomic", "part2"], "fields": {"Front": "...", "Back": "..."}}]}\n'
+            "`tags` is a JSON array of strings (zero, one, or many tags). `deck` is optional. "
+            "Keys in `fields` must exactly match the note type's field names. "
+            "Put JSON ONLY inside the tags; explain changes in the visible text above.\n\n"
             "[META-SYSTEM RULE]: If the user explicitly asks you to memorize, remember, save, or add a new "
             "rule globally or for the future, accept the request and MUST include at the end of your reply the "
             "complete updated list of ALL dynamic rules inside <UPDATE_DYNAMIC_RULES> and </UPDATE_DYNAMIC_RULES> "

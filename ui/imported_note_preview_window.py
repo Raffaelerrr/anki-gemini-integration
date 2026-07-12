@@ -27,6 +27,7 @@ from .theme import (
     field_name_label_html,
 )
 from .widgets import bind_text_edit_auto_height
+from .themed_windows import configure_snappable_window
 
 _LABEL_EDITOR_SPACING = 2
 _FIELD_BLOCK_SPACING = 8
@@ -51,13 +52,8 @@ class ImportedNotePreviewWindow(QWidget):
         field_provider: Callable[[], list[tuple[str, str]]],
         notetype_id_provider: Callable[[], int | None] | None = None,
     ) -> None:
-        super().__init__(
-            parent,
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowMaximizeButtonHint
-            | Qt.WindowType.WindowCloseButtonHint,
-        )
+        super().__init__(None)
+        configure_snappable_window(self)
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self._field_provider = field_provider
         self._notetype_id_provider = notetype_id_provider or (lambda: None)

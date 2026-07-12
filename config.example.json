@@ -1,5 +1,5 @@
 {
-    "config_version": 2,
+    "config_version": 3,
     "language": "en",
     "api_key": "",
     "system_instruction": "",
@@ -26,6 +26,7 @@
     "chat_send_empty_fields": false,
     "chat_modify_prompt_before_send": false,
     "chat_download_directory": "",
+    "chat_export_quick_folders": [],
     "prompt_optimize_user": "",
     "prompt_chat_addon": "",
     "prompt_dynamic_rules_prefix": "",
@@ -53,16 +54,21 @@
     "suppress_prompt_cache_custom_text_load_confirm": false,
     "suppress_prompt_cache_delete_orphans_confirm": false,
     "optimize_modify_prompt_before_send": false,
-    "prompt_cache_enabled": false,
-    "prompt_cache_ttl_seconds": 3600,
+    "prompt_cache_enabled_chat": false,
+    "prompt_cache_enabled_optimize": false,
+    "prompt_cache_ttl_seconds_chat": 3600,
+    "prompt_cache_ttl_seconds_optimize": 3600,
     "prompt_cache_change_ttl_seconds": 3600,
-    "prompt_cache_min_chars": 8192,
-    "prompt_cache_custom_text": "",
+    "prompt_cache_min_chars_chat": 8192,
+    "prompt_cache_min_chars_optimize": 8192,
+    "prompt_cache_custom_text_chat": "",
+    "prompt_cache_custom_text_optimize": "",
     "prompt_cache_custom_text_presets": [],
-    "prompt_cache_active_preset_id": "",
+    "prompt_cache_active_preset_id_chat": "",
+    "prompt_cache_active_preset_id_optimize": "",
     "prompt_cache_recreate_default": "recreate",
     "prompt_cache_new_conversation_cache_default": "clear",
-    "prompt_cache_segments": {
+    "prompt_cache_segments_chat": {
         "system_instruction": true,
         "dynamic_rules": false,
         "chat_system_addon": true,
@@ -72,5 +78,10 @@
         "card_templates": false,
         "notetype_css": false,
         "context_wrapper": false
+    },
+    "prompt_cache_segments_optimize": {
+        "system_instruction": true,
+        "dynamic_rules": false,
+        "custom_cache_text": false
     }
 }

@@ -26,6 +26,7 @@ from ..prompt_cache import (
     list_addon_remote_caches,
 )
 from .prompt_cache_confirm import confirm_delete_orphan_caches
+from .themed_windows import configure_snappable_window, register_themed_window
 
 
 class PromptCacheManagerDialog(QDialog):
@@ -33,6 +34,7 @@ class PromptCacheManagerDialog(QDialog):
         super().__init__(parent)
         self.config = config
         self._entries: list[RemotePromptCacheEntry] = []
+        configure_snappable_window(self, application_modal=True)
         self.setWindowTitle(tr("settings.prompt_cache.manager.title", config=config))
         self.resize(720, 360)
 

@@ -205,6 +205,25 @@ def _sync_settings_text_edit_shell(editor: QTextEdit, *, width: int, height: int
         shell.setFixedHeight(height)
 
 
+def _sync_settings_text_edit_shell_height(editor: QTextEdit, *, height: int) -> None:
+    shell = getattr(editor, "_settings_shell", None)
+    if shell is None:
+        return
+    if shell.height() != height:
+        shell.setFixedHeight(height)
+
+
+def _settings_row_field_measure_width(editor: QTextEdit, *, frame: int) -> int:
+    viewport_width = editor.viewport().width()
+    if viewport_width <= 0:
+        viewport_width = max(editor.width() - frame, 0)
+    if viewport_width <= 0:
+        parent = editor.parentWidget()
+        if parent is not None and parent.width() > 0:
+            viewport_width = max(parent.width() - 8, 1)
+    return max(viewport_width, 80)
+
+
 def bind_text_edit_auto_height(
     editor: QTextEdit,
     *,
@@ -252,12 +271,13 @@ def bind_text_edit_auto_height(
             frame = editor.frameWidth() * 2
             wrap_mode = editor.lineWrapMode()
             settings_width = None
+            is_row_field = getattr(editor, "_settings_row_field", False)
             document = editor.document()
             document.blockSignals(True)
             try:
                 if wrap_mode == QTextEdit.LineWrapMode.NoWrap:
                     document.setTextWidth(-1)
-                elif getattr(editor, "_settings_text_edit", False):
+                elif getattr(editor, "_settings_text_edit", False) and not is_row_field:
                     settings_width = _settings_target_width(editor, frame=frame)
                     document.setTextWidth(max(settings_width - frame - 8, 1))
                 else:
@@ -279,7 +299,12 @@ def bind_text_edit_auto_height(
                 and document.isEmpty()
                 and editor.placeholderText().strip()
             ):
-                measure_width = settings_width or max(editor.width(), _SETTINGS_TEXT_EDIT_MIN_WIDTH)
+                if is_row_field:
+                    measure_width = _settings_row_field_measure_width(editor, frame=frame)
+                else:
+                    measure_width = settings_width or max(
+                        editor.width(), _SETTINGS_TEXT_EDIT_MIN_WIDTH
+                    )
                 natural = max(
                     natural,
                     _settings_placeholder_height(
@@ -314,13 +339,13 @@ def bind_text_edit_auto_height(
                 editor.setMaximumHeight(height)
 
             shell = getattr(editor, "_settings_shell", None)
-            if (
-                editor.height() == height
-                and (
-                    settings_width is None
-                    or (shell is not None and shell.width() == settings_width and shell.height() == height)
-                )
-            ):
+            shell_height_ok = shell is None or shell.height() == height
+            shell_width_ok = (
+                settings_width is None
+                or shell is None
+                or shell.width() == settings_width
+            )
+            if editor.height() == height and shell_height_ok and shell_width_ok:
                 return
 
             editor.setFixedHeight(height)
@@ -331,6 +356,8 @@ def bind_text_edit_auto_height(
                     width=settings_width,
                     height=height,
                 )
+            elif is_row_field:
+                _sync_settings_text_edit_shell_height(editor, height=height)
             _propagate_widget_geometry(editor)
         except RuntimeError:
             return

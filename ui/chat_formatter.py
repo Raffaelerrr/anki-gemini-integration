@@ -24,6 +24,37 @@ def _math_placeholder(index: int) -> str:
     return f"\uE000{index}\uE001"
 
 
+def _inline_backtick_shield(index: int) -> str:
+    return f"\uE002{index}\uE003"
+
+
+_INLINE_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
+_INLINE_BACKTICK_SHIELD_RE = re.compile(r"\uE002(\d+)\uE003")
+
+
+def _shield_inline_backticks(text: str) -> tuple[str, list[str]]:
+    stored: list[str] = []
+
+    def repl(match: re.Match[str]) -> str:
+        stored.append(match.group(0))
+        return _inline_backtick_shield(len(stored) - 1)
+
+    return _INLINE_BACKTICK_RE.sub(repl, text), stored
+
+
+def _restore_inline_backticks(text: str, stored: list[str]) -> str:
+    if not stored:
+        return text
+
+    def repl(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        if 0 <= index < len(stored):
+            return stored[index]
+        return match.group(0)
+
+    return _INLINE_BACKTICK_SHIELD_RE.sub(repl, text)
+
+
 def _protect_math_for_markdown(text: str) -> tuple[str, list[str]]:
     protected: list[str] = []
 
@@ -184,10 +215,12 @@ def _render_markdown_prose(text: str) -> str:
     if converter is None:
         return _render_prose_fallback(prose)
 
-    markdown_input, protected = _protect_math_for_markdown(prose)
+    markdown_input, inline_shields = _shield_inline_backticks(prose)
+    markdown_input, protected = _protect_math_for_markdown(markdown_input)
     rendered = converter.convert(markdown_input)
     converter.reset()
     rendered = _restore_math_for_markdown(rendered, protected)
+    rendered = _restore_inline_backticks(rendered, inline_shields)
     rendered = _qt_compatible_html(rendered)
     return f'<div class="chat-prose">{rendered}</div>'
 

@@ -16,6 +16,7 @@ CHAT_TOOLBAR_HELP_ICON_KEYS = (
     "eye",
     "lens",
     "download",
+    "cache",
     "plus",
     "stop",
     "priority",
@@ -113,6 +114,7 @@ def _help_icon_html_by_key() -> dict[str, str]:
     from .svg_icons import (
         barred_brain_svg_path,
         brain_svg_path,
+        cache_svg_path,
         download_svg_path,
         eye_svg_path,
         lens_svg_path,
@@ -131,6 +133,7 @@ def _help_icon_html_by_key() -> dict[str, str]:
         "eye": inline_svg_img_html(eye_svg_path(), tint=themed),
         "lens": inline_svg_img_html(lens_svg_path(), tint=themed),
         "download": inline_svg_img_html(download_svg_path(), tint=themed),
+        "cache": inline_svg_img_html(cache_svg_path(), tint=themed),
         "plus": inline_svg_img_html(plus_svg_path(), tint=themed),
         "stop": inline_svg_img_html(stop_sign_svg_path()),
         "priority": inline_svg_img_html(priority_sign_svg_path()),
@@ -145,6 +148,45 @@ def expand_help_icons(html: str) -> str:
 
 def instruction_html(html: str) -> str:
     return expand_help_icons(html)
+
+
+def refresh_info_button_explanation(
+    button,
+    *,
+    config: dict,
+    message_key: str,
+) -> None:
+    from ..i18n import tr
+
+    button._explanation_config = config
+    button._explanation_message_key = message_key
+    set_instruction_tooltip(button, tr(message_key, config=config))
+
+
+def wire_info_button_explanation(
+    button,
+    *,
+    config: dict,
+    message_key: str,
+) -> None:
+    from aqt.utils import showInfo
+
+    from ..i18n import tr
+
+    refresh_info_button_explanation(button, config=config, message_key=message_key)
+    if getattr(button, "_explanation_click_wired", False):
+        return
+    button._explanation_click_wired = True
+
+    def _show_explanation(_checked: bool = False) -> None:
+        showInfo(
+            tr(
+                button._explanation_message_key,
+                config=button._explanation_config,
+            )
+        )
+
+    button.clicked.connect(_show_explanation)
 
 
 def set_instruction_tooltip(widget, html: str) -> None:

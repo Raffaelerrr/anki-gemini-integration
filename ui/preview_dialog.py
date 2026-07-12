@@ -29,7 +29,7 @@ from ..i18n import tr
 
 from .settings_compact_controls import create_ui_text_edit
 from .theme import refresh_native_text_edits_in
-from .themed_windows import register_themed_window
+from .themed_windows import configure_snappable_window, register_themed_window
 
 
 
@@ -43,6 +43,7 @@ class PreviewDialog(QDialog):
 
         self._config = config
 
+        configure_snappable_window(self, application_modal=True)
         self.setWindowTitle(tr("preview.title", config=config))
 
         self.resize(900, 550)

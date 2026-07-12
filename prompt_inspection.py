@@ -35,11 +35,16 @@ CHAT_SESSION_CONFIG_KEYS: tuple[str, ...] = (
     "prompt_chat_context_order",
     "prompt_chat_context_sections",
     "prompt_card_templates_format",
-    "prompt_cache_enabled",
-    "prompt_cache_ttl_seconds",
-    "prompt_cache_min_chars",
-    "prompt_cache_custom_text",
-    "prompt_cache_segments",
+    "prompt_cache_enabled_chat",
+    "prompt_cache_enabled_optimize",
+    "prompt_cache_ttl_seconds_chat",
+    "prompt_cache_ttl_seconds_optimize",
+    "prompt_cache_min_chars_chat",
+    "prompt_cache_min_chars_optimize",
+    "prompt_cache_custom_text_chat",
+    "prompt_cache_custom_text_optimize",
+    "prompt_cache_segments_chat",
+    "prompt_cache_segments_optimize",
 )
 
 CHAT_LIVE_CONFIG_KEYS: tuple[str, ...] = (

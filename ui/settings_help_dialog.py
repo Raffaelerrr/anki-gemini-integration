@@ -34,6 +34,7 @@ from .theme import (
     info_button_stylesheet,
     muted_hint_html,
 )
+from .themed_windows import configure_snappable_window
 
 
 def _make_info_button(parent: QWidget, config: dict[str, Any]) -> QPushButton:
@@ -57,11 +58,7 @@ class SettingsHelpDialog(QDialog):
         self._info_buttons: list[QPushButton] = []
         self.silentlyClose = True
         self.setWindowTitle(tr("settings.help.title", config=config))
-        self.setWindowFlags(
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowCloseButtonHint
-        )
+        configure_snappable_window(self)
         self.setMinimumSize(460, 420)
         self.resize(560, 560)
 

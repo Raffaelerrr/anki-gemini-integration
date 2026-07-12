@@ -31,6 +31,7 @@ from .theme import (
     strong_label_html,
 )
 from .wrapper_sections_editor import WrapperSectionsEditor
+from .themed_windows import configure_snappable_window
 
 _OnSave = Callable[[list[str], dict[str, str], str], None]
 
@@ -44,13 +45,8 @@ class ChatWrapperEditWindow(QWidget):
         *,
         on_save: _OnSave,
     ) -> None:
-        super().__init__(
-            parent,
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowMaximizeButtonHint
-            | Qt.WindowType.WindowCloseButtonHint,
-        )
+        super().__init__(None)
+        configure_snappable_window(self)
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self._on_save = on_save
         self.resize(760, 680)

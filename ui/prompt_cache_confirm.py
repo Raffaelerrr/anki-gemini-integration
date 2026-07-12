@@ -92,7 +92,7 @@ def confirm_prompt_cache_recreate_if_needed(
     if is_warning_dismissed(config, "suppress_prompt_cache_recreate_confirm"):
         return _recreate_default_choice(config)
 
-    ttl_seconds = prompt_cache_ttl_seconds(config)
+    ttl_seconds = prompt_cache_ttl_seconds(config, purpose)
     ttl_minutes = max(1, ttl_seconds // 60)
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Warning)
@@ -323,3 +323,68 @@ def confirm_delete_orphan_caches(parent: QWidget, config: dict[str, Any], *, cou
     if dismiss.isChecked():
         _save_dismiss_flag(config, "suppress_prompt_cache_delete_orphans_confirm")
     return True
+
+
+def choose_prompt_cache_ttl_targets(
+    parent: QWidget,
+    config: dict[str, Any],
+    *,
+    ttl_seconds: int,
+) -> tuple[Purpose, ...] | None:
+    chat_active = has_tracked_active_cache("chat")
+    optimize_active = has_tracked_active_cache("optimize")
+    if not chat_active and not optimize_active:
+        return None
+
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setWindowTitle(tr("settings.prompt_cache.change_ttl.choose.title", config=config))
+    box.setText(
+        tr(
+            "settings.prompt_cache.change_ttl.choose.message",
+            config=config,
+            seconds=ttl_seconds,
+        )
+    )
+
+    both_btn = box.addButton(
+        tr("settings.prompt_cache.change_ttl.choose.both", config=config),
+        QMessageBox.ButtonRole.AcceptRole,
+    )
+    chat_btn = box.addButton(
+        tr("settings.prompt_cache.change_ttl.choose.chat", config=config),
+        QMessageBox.ButtonRole.AcceptRole,
+    )
+    optimize_btn = box.addButton(
+        tr("settings.prompt_cache.change_ttl.choose.optimize", config=config),
+        QMessageBox.ButtonRole.AcceptRole,
+    )
+    cancel_btn = box.addButton(QMessageBox.StandardButton.Cancel)
+
+    both_btn.setEnabled(chat_active and optimize_active)
+    chat_btn.setEnabled(chat_active)
+    optimize_btn.setEnabled(optimize_active)
+
+    if chat_active and optimize_active:
+        box.setDefaultButton(both_btn)
+    elif chat_active:
+        box.setDefaultButton(chat_btn)
+    else:
+        box.setDefaultButton(optimize_btn)
+
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is None or clicked is cancel_btn:
+        return None
+    if clicked is both_btn:
+        purposes: list[Purpose] = []
+        if chat_active:
+            purposes.append("chat")
+        if optimize_active:
+            purposes.append("optimize")
+        return tuple(purposes)
+    if clicked is chat_btn and chat_active:
+        return ("chat",)
+    if clicked is optimize_btn and optimize_active:
+        return ("optimize",)
+    return None

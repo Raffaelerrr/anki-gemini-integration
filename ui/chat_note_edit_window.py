@@ -15,6 +15,7 @@ from aqt.qt import (
 from ..config import load_config, save_config
 from ..i18n import tr
 from .note_fields_editor import NoteFieldsEditor
+from .themed_windows import configure_snappable_window
 
 _OnSave = Callable[[list[tuple[str, str]], bool], None]
 
@@ -28,13 +29,8 @@ class ChatNoteEditWindow(QWidget):
         *,
         on_save: _OnSave,
     ) -> None:
-        super().__init__(
-            parent,
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowMaximizeButtonHint
-            | Qt.WindowType.WindowCloseButtonHint,
-        )
+        super().__init__(None)
+        configure_snappable_window(self)
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self._on_save = on_save
         self.resize(640, 560)

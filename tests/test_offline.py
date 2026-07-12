@@ -209,9 +209,10 @@ class TestGeminiClient(unittest.TestCase):
         config = {
             "language": "en",
             "api_key": "test-key",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {"system_instruction": True},
             "system_instruction": "X" * 9000,
             "thinking_budget_chat": -1,
         }
@@ -236,9 +237,10 @@ class TestGeminiClient(unittest.TestCase):
         config = {
             "language": "en",
             "api_key": "test-key",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {"system_instruction": True},
             "system_instruction": "X" * 9000,
             "thinking_budget_chat": -1,
         }
@@ -280,9 +282,10 @@ class TestGeminiClient(unittest.TestCase):
         config = {
             "language": "en",
             "api_key": "test-key",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {
                 "system_instruction": True,
                 "imported_note": True,
             },
@@ -1184,6 +1187,16 @@ class TestChatFormatter(unittest.TestCase):
     def test_reject_sentence_as_field_name(self):
         self.assertIsNone(self.fmt._parse_field_label_line("This is a sentence."))
 
+    def test_shield_inline_backticks_before_math_protection(self):
+        text = "I used `\\(\\)` for inline delimiters and \\(x\\) for math."
+        shielded, stored = self.fmt._shield_inline_backticks(text)
+        self.assertEqual(stored, ["`\\(\\)`"])
+        protected, math_parts = self.fmt._protect_math_for_markdown(shielded)
+        self.assertEqual(len(math_parts), 1)
+        self.assertIn("\\(x\\)", math_parts[0])
+        restored = self.fmt._restore_inline_backticks(protected, stored)
+        self.assertIn("`\\(\\)`", restored)
+
     def test_format_reply_with_code_block(self):
         text = "Front:\n```\n<b>Hi</b>\n```"
         store: dict[str, str] = {}
@@ -1410,6 +1423,10 @@ class TestHelpIcons(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.help_icons = _load_addon_module("ui.help_icons")
+        cls.aqt_utils = sys.modules["aqt.utils"]
+
+    def setUp(self):
+        self.aqt_utils.showInfo.reset_mock()
 
     def test_expand_help_icons_replaces_brain_token(self):
         original = self.help_icons._help_icon_html_by_key
@@ -1453,6 +1470,54 @@ class TestHelpIcons(unittest.TestCase):
             pixels,
             round(physical * self.help_icons.MIN_HELP_ICON_SUPERSAMPLE),
         )
+
+    def test_wire_info_button_explanation_shows_message_on_click(self):
+        button = MagicMock()
+        button._explanation_click_wired = False
+        captured: list = []
+
+        def capture_connect(handler):
+            captured.append(handler)
+
+        button.clicked.connect.side_effect = capture_connect
+        config = {"language": "en"}
+
+        with patch.object(self.help_icons, "set_instruction_tooltip") as set_tooltip:
+            self.help_icons.wire_info_button_explanation(
+                button,
+                config=config,
+                message_key="settings.prompt_cache.system_instruction_cache_info",
+            )
+            set_tooltip.assert_called_once()
+
+        self.assertEqual(len(captured), 1)
+        captured[0]()
+        self.aqt_utils.showInfo.assert_called_once()
+
+    def test_restore_brain_message_label_expands_icon_token(self):
+        label = self.help_icons.instruction_html(
+            self.help_icons.expand_help_icons(
+                "Default message after note import ({icon:brain}):"
+            )
+        )
+        self.assertNotIn("{icon:brain}", label)
+        self.assertIn("<img", label)
+
+    def test_refresh_info_button_explanation_sets_wrapped_tooltip_text(self):
+        button = MagicMock()
+        config = {"language": "en"}
+
+        with patch.object(self.help_icons, "set_instruction_tooltip") as set_tooltip:
+            self.help_icons.refresh_info_button_explanation(
+                button,
+                config=config,
+                message_key="settings.prompt_cache.system_instruction_cache_info",
+            )
+
+        set_tooltip.assert_called_once()
+        args = set_tooltip.call_args.args
+        self.assertIs(args[0], button)
+        self.assertIn("chat-only field", args[1])
 
 
 class TestModelSelector(unittest.TestCase):
@@ -1698,6 +1763,160 @@ class TestChatLogRenderer(unittest.TestCase):
         self.assertNotIn("chat-html-endcap", html)
 
 
+class TestNoteApply(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.note_apply = _load_addon_module("note_apply")
+
+    def test_parse_single_note_payload(self):
+        batch = self.note_apply.parse_apply_note_payload(
+            '{"notetype": "Basic", "deck": "Default", "tags": ["x"], '
+            '"fields": {"Front": "A", "Back": "B"}}'
+        )
+        self.assertIsNotNone(batch)
+        assert batch is not None
+        self.assertEqual(batch.note_count, 1)
+        note = batch.notes[0]
+        self.assertEqual(note.notetype, "Basic")
+        self.assertEqual(note.deck, "Default")
+        self.assertEqual(note.tags, ["x"])
+        self.assertEqual(note.fields, {"Front": "A", "Back": "B"})
+
+    def test_parse_multi_note_payload(self):
+        batch = self.note_apply.parse_apply_note_payload(
+            '{"notes": [{"fields": {"Front": "1"}}, {"fields": {"Front": "2", "Back": "b"}}]}'
+        )
+        self.assertIsNotNone(batch)
+        assert batch is not None
+        self.assertEqual(batch.note_count, 2)
+        self.assertEqual(batch.field_names_summary(), "Front, Back")
+
+    def test_parse_invalid_payload(self):
+        self.assertIsNone(self.note_apply.parse_apply_note_payload("not json"))
+        self.assertIsNone(self.note_apply.parse_apply_note_payload('{"tags": []}'))
+
+    def test_extract_apply_note_strips_block(self):
+        raw = (
+            "Here is the rewrite.\n"
+            "<APPLY_NOTE>{\"fields\": {\"Front\": \"Hi\"}}</APPLY_NOTE>"
+        )
+        cleaned, batch = self.note_apply.extract_apply_note(raw)
+        self.assertEqual(cleaned, "Here is the rewrite.")
+        self.assertIsNotNone(batch)
+        assert batch is not None
+        self.assertEqual(batch.notes[0].fields["Front"], "Hi")
+
+    def test_extract_apply_note_with_dynamic_rules(self):
+        gc = _load_addon_module("gemini_client")
+        raw = (
+            "Visible<UPDATE_DYNAMIC_RULES>\nRule 1\n</UPDATE_DYNAMIC_RULES>"
+            "<APPLY_NOTE>{\"fields\": {\"Front\": \"X\"}}</APPLY_NOTE>"
+        )
+        display_text, dynamic_rules = gc.extract_dynamic_rules(raw)
+        display_text, batch = self.note_apply.extract_apply_note(display_text)
+        self.assertEqual(display_text, "Visible")
+        self.assertEqual(dynamic_rules, "Rule 1")
+        self.assertIsNotNone(batch)
+
+    def test_extract_apply_note_keeps_block_when_json_invalid(self):
+        raw = "Intro<APPLY_NOTE>{not valid json}</APPLY_NOTE>"
+        cleaned, batch = self.note_apply.extract_apply_note(raw)
+        self.assertIsNone(batch)
+        self.assertIn("<APPLY_NOTE>", cleaned)
+
+    def test_format_apply_batch_for_display(self):
+        batch = self.note_apply.NoteApplyBatch(
+            notes=[
+                self.note_apply.NoteApplyNote(
+                    fields={"Front": "Q", "Back": "A"},
+                    notetype="Basic",
+                )
+            ]
+        )
+        text = self.note_apply.format_apply_batch_for_display(batch)
+        self.assertIn("Front:\n```\nQ\n```", text)
+        self.assertIn("Back:\n```\nA\n```", text)
+
+
+class TestChatPromptCacheSettings(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.policy = _load_addon_module("prompt_cache_policy")
+
+    def test_from_config_reads_chat_keys(self):
+        config = {
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_ttl_seconds_chat": 7200,
+            "prompt_cache_min_chars_chat": 9000,
+            "prompt_cache_segments_chat": {
+                "system_instruction": True,
+                "dynamic_rules": False,
+            },
+            "prompt_cache_custom_text_chat": "hello",
+            "prompt_cache_active_preset_id_chat": "preset1",
+        }
+        settings = self.policy.ChatPromptCacheSettings.from_config(config)
+        self.assertTrue(settings.enabled)
+        self.assertEqual(settings.prompt_cache_ttl_seconds, 7200)
+        self.assertEqual(settings.prompt_cache_min_chars, 9000)
+        self.assertEqual(settings.prompt_cache_custom_text, "hello")
+
+    def test_apply_to_config_writes_chat_keys_only(self):
+        base = {
+            "prompt_cache_enabled_chat": False,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_ttl_seconds_optimize": 3600,
+            "prompt_cache_min_chars_optimize": 8192,
+            "prompt_cache_segments_optimize": {"system_instruction": False},
+            "prompt_cache_custom_text_optimize": "optimize text",
+            "language": "en",
+        }
+        settings = self.policy.ChatPromptCacheSettings(
+            enabled=True,
+            prompt_cache_ttl_seconds=1800,
+            prompt_cache_min_chars=5000,
+            prompt_cache_segments={"system_instruction": True},
+            prompt_cache_custom_text="chat text",
+            prompt_cache_active_preset_id="abc",
+        )
+        merged = settings.apply_to_config(base)
+        self.assertTrue(merged["prompt_cache_enabled_chat"])
+        self.assertTrue(merged["prompt_cache_enabled_optimize"])
+        self.assertEqual(merged["prompt_cache_ttl_seconds_chat"], 1800)
+        self.assertEqual(merged["prompt_cache_custom_text_chat"], "chat text")
+        self.assertEqual(merged["prompt_cache_custom_text_optimize"], "optimize text")
+        self.assertEqual(merged["language"], "en")
+
+    def test_defaults_differ_from_saved_global_chat_settings(self):
+        saved = self.policy.ChatPromptCacheSettings.from_config(
+            {
+                "prompt_cache_enabled_chat": True,
+                "prompt_cache_ttl_seconds_chat": 7200,
+                "prompt_cache_min_chars_chat": 9000,
+                "prompt_cache_segments_chat": {"system_instruction": True},
+                "prompt_cache_custom_text_chat": "saved text",
+                "prompt_cache_active_preset_id_chat": "preset1",
+            }
+        )
+        factory = self.policy.ChatPromptCacheSettings.defaults()
+        self.assertNotEqual(saved, factory)
+
+    def test_restorable_keys_cover_chat_settings_fields(self):
+        self.assertEqual(
+            set(self.policy.CHAT_PROMPT_CACHE_RESTORABLE_KEYS),
+            {
+                "enabled",
+                "prompt_cache_ttl_seconds",
+                "prompt_cache_min_chars",
+                "prompt_cache_segments",
+                "prompt_cache_custom_text",
+                "prompt_cache_active_preset_id",
+            },
+        )
+        for key in self.policy.CHAT_PROMPT_CACHE_RESTORABLE_KEYS:
+            self.assertIn(key, self.policy.CHAT_PROMPT_CACHE_RESTORABLE_LABELS)
+
+
 class TestChatExport(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -1768,6 +1987,42 @@ class TestChatExport(unittest.TestCase):
     def test_default_chat_download_directory_uses_documents(self):
         path = self.chat_export.default_chat_download_directory()
         self.assertEqual(path.name, "Documents")
+
+    def test_normalize_chat_export_quick_folders(self):
+        normalized = self.chat_export.normalize_chat_export_quick_folders(
+            [
+                {"label": "Exports", "path": "C:/tmp/exports"},
+                {"label": "", "path": ""},
+                {"path": "D:/notes"},
+            ]
+        )
+        self.assertEqual(
+            normalized,
+            [
+                {"label": "Exports", "path": "C:/tmp/exports"},
+                {"label": "notes", "path": "D:/notes"},
+            ],
+        )
+
+    def test_chat_export_last_used_directory_empty(self):
+        self.assertIsNone(
+            self.chat_export.chat_export_last_used_directory(
+                {"chat_download_directory": ""}
+            )
+        )
+
+    def test_save_chat_export_text_to_directory(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            export_path = self.chat_export.save_chat_export_text_to_directory(
+                "hello",
+                directory,
+            )
+            self.assertTrue(export_path.is_file())
+            self.assertEqual(export_path.read_text(encoding="utf-8"), "hello")
+            self.assertEqual(export_path.parent, directory)
 
 
 class TestHtmlUtils(unittest.TestCase):
@@ -1849,17 +2104,51 @@ class TestConfig(unittest.TestCase):
         for stored_value in (8189, "8189"):
             with self.subTest(stored_value=stored_value):
                 stored = {
-                    "config_version": self.config.CONFIG_VERSION,
-                    "prompt_cache_min_chars": stored_value,
+                    "config_version": 2,
+                    "prompt_cache_min_chars_chat": stored_value, "prompt_cache_min_chars_optimize": stored_value,
                 }
                 merged = self.config._normalize_config(
                     {**self.config.DEFAULT_CONFIG, **stored},
                     stored,
                 )
-                self.assertEqual(
-                    merged["prompt_cache_min_chars"],
-                    _load_addon_module("constants").DEFAULT_PROMPT_CACHE_MIN_CHARS,
-                )
+                expected = _load_addon_module("constants").DEFAULT_PROMPT_CACHE_MIN_CHARS
+                self.assertEqual(merged["prompt_cache_min_chars_chat"], expected)
+                self.assertEqual(merged["prompt_cache_min_chars_optimize"], expected)
+                self.assertNotIn("prompt_cache_min_chars", merged)
+
+    def test_apply_config_normalization_migrates_shared_prompt_cache_keys(self):
+        stored = {
+            "config_version": 2,
+            "prompt_cache_ttl_seconds_chat": 7200,
+            "prompt_cache_min_chars_chat": 9000, "prompt_cache_min_chars_optimize": 9000,
+            "prompt_cache_custom_text_chat": "shared",
+            "prompt_cache_active_preset_id_chat": "preset1",
+            "prompt_cache_segments_chat": {"system_instruction": True, "imported_note": True},
+        }
+        merged = self.config._normalize_config(
+            {**self.config.DEFAULT_CONFIG, **stored},
+            stored,
+        )
+        self.assertEqual(merged["prompt_cache_ttl_seconds_chat"], 7200)
+        self.assertEqual(merged["prompt_cache_ttl_seconds_optimize"], 7200)
+        self.assertEqual(merged["prompt_cache_custom_text_chat"], "shared")
+        self.assertEqual(merged["prompt_cache_custom_text_optimize"], "shared")
+        self.assertTrue(merged["prompt_cache_segments_chat"]["imported_note"])
+        self.assertNotIn("imported_note", merged["prompt_cache_segments_optimize"])
+        self.assertEqual(merged["config_version"], 3)
+
+    def test_apply_config_normalization_migrates_legacy_prompt_cache_enabled(self):
+        stored = {
+            "config_version": self.config.CONFIG_VERSION,
+            "prompt_cache_enabled": True,
+        }
+        merged = self.config._normalize_config(
+            {**self.config.DEFAULT_CONFIG, **stored},
+            stored,
+        )
+        self.assertTrue(merged["prompt_cache_enabled_chat"])
+        self.assertTrue(merged["prompt_cache_enabled_optimize"])
+        self.assertNotIn("prompt_cache_enabled", merged)
 
     def test_restorable_settings_cover_defaults(self):
         self.assertLessEqual(
@@ -1891,7 +2180,14 @@ class TestConfig(unittest.TestCase):
                 "prompt_cache_recreate_default",
                 "prompt_cache_new_conversation_cache_default",
                 "prompt_cache_custom_text_presets",
-                "prompt_cache_active_preset_id",
+                "prompt_cache_enabled_chat",
+                "prompt_cache_ttl_seconds_chat",
+                "prompt_cache_min_chars_chat",
+                "prompt_cache_custom_text_chat",
+                "prompt_cache_segments_chat",
+                "prompt_cache_active_preset_id_chat",
+                "prompt_cache_active_preset_id_optimize",
+                "chat_download_directory",
                 "settings_show_text_newlines",
                 "dev_mock_mode",
             },
@@ -2293,9 +2589,10 @@ class TestPromptCache(unittest.TestCase):
     def test_bundle_respects_minimum_chars(self) -> None:
         config = {
             "language": "en",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 199_997,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 199_997, "prompt_cache_min_chars_optimize": 199_997,
+            "prompt_cache_segments_chat": {"system_instruction": True},
             "system_instruction": "Short rules",
         }
         bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
@@ -2304,9 +2601,10 @@ class TestPromptCache(unittest.TestCase):
     def test_bundle_includes_enabled_system_instruction(self) -> None:
         config = {
             "language": "en",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {"system_instruction": True},
             "system_instruction": "X" * 9000,
         }
         bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
@@ -2316,7 +2614,7 @@ class TestPromptCache(unittest.TestCase):
 
     def test_prompt_cache_segments_auto_enables_context_wrapper(self) -> None:
         config = {
-            "prompt_cache_segments": {
+            "prompt_cache_segments_chat": {
                 "imported_note": True,
                 "card_templates": False,
                 "notetype_css": False,
@@ -2326,16 +2624,17 @@ class TestPromptCache(unittest.TestCase):
         segments = self.pc.prompt_cache_segments(config)
         self.assertTrue(segments["context_wrapper"])
         segments_off = self.pc.prompt_cache_segments(
-            {"prompt_cache_segments": {"imported_note": False}}
+            {"prompt_cache_segments_chat": {"imported_note": False}}
         )
         self.assertFalse(segments_off["context_wrapper"])
 
     def test_bundle_omits_context_wrapper_when_note_is_cached_segment(self) -> None:
         config = {
             "language": "en",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {
                 "system_instruction": True,
                 "imported_note": True,
             },
@@ -2357,9 +2656,10 @@ class TestPromptCache(unittest.TestCase):
         config = {
             "language": "en",
             "brain_import_templates": True,
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {
                 "system_instruction": True,
                 "imported_note": False,
                 "card_templates": True,
@@ -2395,7 +2695,7 @@ class TestPromptCache(unittest.TestCase):
         self.assertIn("My question?", payload)
 
     def test_live_chat_payload_uses_plain_question_when_note_cached(self) -> None:
-        config = {"language": "en", "prompt_cache_enabled": True, "prompt_cache_min_chars": 37}
+        config = {"language": "en", "prompt_cache_enabled_chat": True, "prompt_cache_enabled_optimize": True, "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37}
         session = self.pc.PromptCacheSessionContext(
             note_context="Field A\nvalue",
             include_note_context=True,
@@ -2423,9 +2723,10 @@ class TestPromptCache(unittest.TestCase):
         config = {
             "language": "en",
             "brain_import_templates": True,
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {
                 "system_instruction": True,
                 "card_templates_format_guide": True,
             },
@@ -2444,8 +2745,9 @@ class TestPromptCache(unittest.TestCase):
         config = {
             "language": "en",
             "brain_import_templates": True,
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
         }
         session = self.pc.PromptCacheSessionContext(
             note_context="Field [Front]\nHello",
@@ -2478,9 +2780,10 @@ class TestPromptCache(unittest.TestCase):
     def test_optimize_bundle_uses_split_system_instruction(self) -> None:
         config = {
             "language": "en",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {"system_instruction": True},
             "system_instruction_shared": False,
             "system_instruction_optimize": "Optimize-only " + ("X" * 9000),
             "system_instruction_chat": "Chat-only " + ("Y" * 9000),
@@ -2498,9 +2801,10 @@ class TestPromptCache(unittest.TestCase):
         config = {
             "language": "en",
             "api_key": "test-key",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {"system_instruction": True},
             "system_instruction": "X" * 9000,
         }
         bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
@@ -2537,9 +2841,10 @@ class TestPromptCache(unittest.TestCase):
     def test_fingerprint_changes_when_segment_text_changes(self) -> None:
         base = {
             "language": "en",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {"system_instruction": True},
         }
         first = self.pc.build_prompt_cache_bundle(
             {**base, "system_instruction": "A" * 9000},
@@ -2556,14 +2861,15 @@ class TestPromptCache(unittest.TestCase):
     def test_rebuild_preserves_custom_cache_content_shape(self) -> None:
         config = {
             "language": "en",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {
                 "system_instruction": True,
                 "custom_cache_text": True,
             },
             "system_instruction": "A" * 9000,
-            "prompt_cache_custom_text": "Custom rules here.",
+            "prompt_cache_custom_text_chat": "Custom rules here.",
         }
         original = self.pc.build_prompt_cache_bundle(config, purpose="chat")
         assert original is not None
@@ -2594,14 +2900,15 @@ class TestPromptCache(unittest.TestCase):
     def test_flattened_cache_upload_text_includes_formatted_sections(self) -> None:
         config = {
             "language": "en",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {
                 "system_instruction": True,
                 "custom_cache_text": True,
             },
             "system_instruction": "A" * 9000,
-            "prompt_cache_custom_text": "Custom rules here.",
+            "prompt_cache_custom_text_chat": "Custom rules here.",
         }
         bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
         assert bundle is not None
@@ -2615,14 +2922,15 @@ class TestPromptCache(unittest.TestCase):
     def test_flatten_bundle_for_live_send_merges_cached_segments(self) -> None:
         config = {
             "language": "en",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {
                 "system_instruction": True,
                 "custom_cache_text": True,
             },
             "system_instruction": "A" * 9000,
-            "prompt_cache_custom_text": "Original custom rules.",
+            "prompt_cache_custom_text_chat": "Original custom rules.",
         }
         bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
         assert bundle is not None
@@ -2652,9 +2960,10 @@ class TestPromptCache(unittest.TestCase):
     def test_flatten_bundle_for_live_send_optimize(self) -> None:
         config = {
             "language": "en",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {"system_instruction": True},
             "system_instruction": "A" * 9000,
         }
         bundle = self.pc.build_prompt_cache_bundle(config, purpose="optimize")
@@ -2686,9 +2995,10 @@ class TestPromptCache(unittest.TestCase):
     def test_cached_fingerprint_ignores_live_system_text(self) -> None:
         config = {
             "language": "en",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {"system_instruction": True},
             "system_instruction": "A" * 9000,
         }
         first = self.pc.rebuild_prompt_cache_bundle(
@@ -2716,9 +3026,10 @@ class TestPromptCache(unittest.TestCase):
         config = {
             "language": "en",
             "model_chat": "gemini-2.5-flash",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {"system_instruction": True},
             "system_instruction": "A" * 9000,
         }
         bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
@@ -2743,10 +3054,11 @@ class TestPromptCache(unittest.TestCase):
         config = {
             "language": "en",
             "model_chat": "gemini-2.5-flash",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_ttl_seconds": 3600,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_ttl_seconds_chat": 3600,
+            "prompt_cache_segments_chat": {"system_instruction": True},
             "system_instruction": "A" * 9000,
         }
         bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
@@ -2773,9 +3085,10 @@ class TestPromptCache(unittest.TestCase):
         config = {
             "language": "en",
             "model_chat": "gemini-2.5-flash",
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {"system_instruction": True},
             "system_instruction": "A" * 9000,
         }
         bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
@@ -2885,9 +3198,10 @@ class TestDevMock(unittest.TestCase):
         config = {
             "language": "en",
             "dev_mock_mode": True,
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 37,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 37, "prompt_cache_min_chars_optimize": 37,
+            "prompt_cache_segments_chat": {"system_instruction": True},
             "system_instruction": "X" * 9000,
         }
         bundle = self.pc.build_prompt_cache_bundle(config, purpose="chat")
@@ -2934,7 +3248,8 @@ class TestPromptCachePolicy(unittest.TestCase):
 
     def test_temperature_change_does_not_invalidate_cache(self) -> None:
         old = {
-            "prompt_cache_enabled": True,
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
             "temperature_chat": 0.2,
             "model_chat": "gemini-2.5-flash",
         }
@@ -2944,7 +3259,8 @@ class TestPromptCachePolicy(unittest.TestCase):
 
     def test_model_change_invalidates_chat_cache(self) -> None:
         old = {
-            "prompt_cache_enabled": True,
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
             "model_chat": "gemini-2.5-flash",
         }
         new = dict(old)
@@ -2956,15 +3272,17 @@ class TestPromptCachePolicy(unittest.TestCase):
 
     def test_global_only_when_session_segments_disabled(self) -> None:
         config = {
-            "prompt_cache_enabled": True,
-            "prompt_cache_segments": {"system_instruction": True},
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_segments_chat": {"system_instruction": True},
         }
         self.assertTrue(self.policy.cache_enabled_segments_are_global_only(config))
 
     def test_not_global_only_when_note_cached(self) -> None:
         config = {
-            "prompt_cache_enabled": True,
-            "prompt_cache_segments": {
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_segments_chat": {
                 "system_instruction": True,
                 "imported_note": True,
             },
@@ -2973,8 +3291,8 @@ class TestPromptCachePolicy(unittest.TestCase):
 
     def test_effective_custom_cache_text_uses_active_preset(self) -> None:
         config = {
-            "prompt_cache_custom_text": "Legacy text",
-            "prompt_cache_active_preset_id": "preset-a",
+            "prompt_cache_custom_text_chat": "Legacy text",
+            "prompt_cache_active_preset_id_chat": "preset-a",
             "prompt_cache_custom_text_presets": [
                 {
                     "id": "preset-a",
@@ -3062,6 +3380,24 @@ class TestSettingsCompactControls(unittest.TestCase):
         with patch.object(self.controls, "bind_text_edit_auto_height"):
             self.controls.configure_settings_text_edit(editor)
         self.assertTrue(getattr(editor, "_settings_text_edit", False))
+
+    def test_create_settings_restore_checkbox_row_exists(self) -> None:
+        self.assertTrue(callable(self.controls.create_settings_restore_checkbox_row))
+        self.assertTrue(callable(self.controls.create_settings_restore_list_label))
+
+    def test_settings_rich_label_minimum_height_accounts_for_inline_icon(self) -> None:
+        help_icons = _load_addon_module("ui.help_icons")
+        label = MagicMock()
+        label.text.return_value = '<img src="x" /> Default message'
+        label.heightForWidth.return_value = 28
+        label.sizeHint.return_value = MagicMock(height=lambda: 28)
+        label.fontMetrics.return_value = MagicMock(height=lambda: 14)
+        height = self.controls._settings_rich_label_minimum_height(label, content_width=320)
+        self.assertGreaterEqual(
+            height,
+            help_icons.INLINE_HELP_ICON_DISPLAY_SIZE + 2,
+        )
+        label.setWordWrap.assert_called_with(True)
 
 
 class TestSettingsWarningsLogic(unittest.TestCase):

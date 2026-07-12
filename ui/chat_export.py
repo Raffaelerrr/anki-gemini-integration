@@ -113,6 +113,84 @@ def format_chat_export_text(
     return "\n".join(parts) + "\n"
 
 
+MAX_CHAT_EXPORT_QUICK_FOLDERS = 5
+
+
+def normalize_chat_export_quick_folders(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    folders: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        if not path:
+            continue
+        label = str(item.get("label") or "").strip() or Path(path).name
+        folders.append({"label": label, "path": path})
+    return folders[:MAX_CHAT_EXPORT_QUICK_FOLDERS]
+
+
+def chat_export_last_used_directory(config: dict[str, Any]) -> Path | None:
+    stored = str(config.get("chat_download_directory") or "").strip()
+    if not stored:
+        return None
+    return Path(stored)
+
+
+def format_export_folder_menu_text(
+    path: str | Path,
+    *,
+    config: dict[str, Any],
+    prefix_key: str,
+    prefix_kwargs: dict[str, Any] | None = None,
+) -> str:
+    from ..i18n import tr
+
+    display = _compact_path_label(path)
+    kwargs = dict(prefix_kwargs or {})
+    kwargs["folder"] = display
+    return tr(prefix_key, config=config, **kwargs)
+
+
+def _compact_path_label(path: str | Path, *, max_len: int = 56) -> str:
+    text = str(path)
+    if len(text) <= max_len:
+        return text
+    name = Path(path).name or text
+    if len(name) >= max_len - 1:
+        return f"…{name[-(max_len - 1):]}"
+    return f"…{name}"
+
+
+def resolve_chat_export_file_path(directory: Path, filename: str) -> Path:
+    candidate = directory / filename
+    if not candidate.exists():
+        return candidate
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    for index in range(1, 100):
+        alternate = directory / f"{stem}-{index}{suffix}"
+        if not alternate.exists():
+            return alternate
+    return directory / f"{stem}-{int(datetime.now().timestamp())}{suffix}"
+
+
+def save_chat_export_text_to_directory(
+    text: str,
+    directory: Path,
+    *,
+    config: dict[str, Any] | None = None,
+) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    export_path = resolve_chat_export_file_path(
+        directory,
+        default_chat_export_filename(),
+    )
+    export_path.write_text(text, encoding="utf-8")
+    return export_path
+
+
 def default_chat_export_filename(*, now: datetime | None = None) -> str:
     stamp = (now or datetime.now()).strftime("%Y-%m-%d-%H%M%S")
     return f"anki-ai-chat-{stamp}.txt"

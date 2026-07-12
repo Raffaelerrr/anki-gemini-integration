@@ -67,11 +67,12 @@ class TestLiveGeminiApi(unittest.TestCase):
     def _cache_live_config(self) -> dict:
         return {
             **self._live_config(),
-            "prompt_cache_enabled": True,
-            "prompt_cache_min_chars": 8192,
-            "prompt_cache_ttl_seconds": 300,
-            "prompt_cache_custom_text": "X" * 8192,
-            "prompt_cache_segments": {
+            "prompt_cache_enabled_chat": True,
+            "prompt_cache_enabled_optimize": True,
+            "prompt_cache_min_chars_chat": 8192, "prompt_cache_min_chars_optimize": 8192,
+            "prompt_cache_ttl_seconds_chat": 300,
+            "prompt_cache_custom_text_chat": "X" * 8192,
+            "prompt_cache_segments_chat": {
                 "system_instruction": False,
                 "dynamic_rules": False,
                 "chat_system_addon": False,

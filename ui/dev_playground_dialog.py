@@ -23,12 +23,14 @@ from ..dev_mock import (
 from ..i18n import tr
 from .chat_dialog import open_chat
 from .theme import apply_native_text_edit_surface_theme, get_theme_colors
+from .themed_windows import configure_snappable_window
 
 
 class DevPlaygroundDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = load_config()
+        configure_snappable_window(self)
         self.setWindowTitle(tr("dev.playground.title", config=self._config))
         self.setMinimumSize(560, 420)
         self.resize(620, 480)

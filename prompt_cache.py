@@ -53,11 +53,6 @@ CHAT_ONLY_SEGMENTS: frozenset[str] = frozenset(
     }
 )
 
-# Shown in settings; context_wrapper is auto-derived when note-related segments are cached.
-PROMPT_CACHE_USER_SEGMENT_ORDER: tuple[str, ...] = tuple(
-    segment_id for segment_id in PROMPT_CACHE_SEGMENT_ORDER if segment_id != "context_wrapper"
-)
-
 DEFAULT_PROMPT_CACHE_SEGMENTS: dict[str, bool] = {
     "system_instruction": True,
     "dynamic_rules": False,
@@ -69,6 +64,55 @@ DEFAULT_PROMPT_CACHE_SEGMENTS: dict[str, bool] = {
     "notetype_css": False,
     "context_wrapper": False,
 }
+
+DEFAULT_PROMPT_CACHE_SEGMENTS_OPTIMIZE: dict[str, bool] = {
+    "system_instruction": True,
+    "dynamic_rules": False,
+    "custom_cache_text": False,
+}
+
+# Shown in settings; context_wrapper is auto-derived when note-related segments are cached.
+PROMPT_CACHE_USER_SEGMENT_ORDER: tuple[str, ...] = tuple(
+    segment_id for segment_id in PROMPT_CACHE_SEGMENT_ORDER if segment_id != "context_wrapper"
+)
+
+PROMPT_CACHE_OPTIMIZE_USER_SEGMENT_ORDER: tuple[str, ...] = tuple(
+    segment_id
+    for segment_id in PROMPT_CACHE_USER_SEGMENT_ORDER
+    if segment_id not in CHAT_ONLY_SEGMENTS
+)
+
+
+def normalize_prompt_cache_segments_for_purpose(
+    raw: Any,
+    *,
+    purpose: Purpose,
+    default: dict[str, bool] | None = None,
+) -> dict[str, bool]:
+    if default is None:
+        default = (
+            DEFAULT_PROMPT_CACHE_SEGMENTS
+            if purpose == "chat"
+            else DEFAULT_PROMPT_CACHE_SEGMENTS_OPTIMIZE
+        )
+    merged = dict(default)
+    if isinstance(raw, dict):
+        allowed = set(PROMPT_CACHE_SEGMENT_ORDER)
+        if purpose == "optimize":
+            allowed -= CHAT_ONLY_SEGMENTS
+        for key in allowed:
+            if key in raw:
+                merged[key] = bool(raw[key])
+    if purpose == "chat":
+        merged["context_wrapper"] = bool(
+            merged.get("imported_note")
+            or merged.get("card_templates")
+            or merged.get("notetype_css")
+        )
+    else:
+        merged.pop("context_wrapper", None)
+    return merged
+
 
 GEMINI_CACHED_CONTENTS_PATH = "/v1beta/cachedContents"
 ADDON_CACHE_DISPLAY_PREFIX = "anki-ai-"
@@ -253,28 +297,28 @@ def clear_prompt_cache_store(purpose: Purpose | None = None) -> None:
     _persist_stores()
 
 
-def prompt_cache_enabled(config: dict[str, Any]) -> bool:
-    return bool(config.get("prompt_cache_enabled", False))
-
-
-def prompt_cache_segments(config: dict[str, Any]) -> dict[str, bool]:
-    stored = config.get("prompt_cache_segments")
-    merged = dict(DEFAULT_PROMPT_CACHE_SEGMENTS)
-    if isinstance(stored, dict):
-        for key in PROMPT_CACHE_SEGMENT_ORDER:
-            if key in stored:
-                merged[key] = bool(stored[key])
-    merged["context_wrapper"] = bool(
-        merged.get("imported_note")
-        or merged.get("card_templates")
-        or merged.get("notetype_css")
+def prompt_cache_enabled(config: dict[str, Any], purpose: Purpose | None = None) -> bool:
+    if purpose == "chat":
+        return bool(config.get("prompt_cache_enabled_chat", False))
+    if purpose == "optimize":
+        return bool(config.get("prompt_cache_enabled_optimize", False))
+    return bool(config.get("prompt_cache_enabled_chat", False)) or bool(
+        config.get("prompt_cache_enabled_optimize", False)
     )
-    return merged
 
 
-def prompt_cache_ttl_seconds(config: dict[str, Any]) -> int:
+def prompt_cache_segments(config: dict[str, Any], purpose: Purpose = "chat") -> dict[str, bool]:
+    key = f"prompt_cache_segments_{purpose}"
+    return normalize_prompt_cache_segments_for_purpose(
+        config.get(key),
+        purpose=purpose,
+    )
+
+
+def prompt_cache_ttl_seconds(config: dict[str, Any], purpose: Purpose = "chat") -> int:
+    key = f"prompt_cache_ttl_seconds_{purpose}"
     try:
-        return max(60, int(config.get("prompt_cache_ttl_seconds", 3600)))
+        return max(60, int(config.get(key, 3600)))
     except (TypeError, ValueError):
         return 3600
 
@@ -293,9 +337,10 @@ def any_tracked_active_cache() -> bool:
     return False
 
 
-def prompt_cache_min_chars(config: dict[str, Any]) -> int:
+def prompt_cache_min_chars(config: dict[str, Any], purpose: Purpose = "chat") -> int:
+    key = f"prompt_cache_min_chars_{purpose}"
     try:
-        return max(1, int(config.get("prompt_cache_min_chars", DEFAULT_PROMPT_CACHE_MIN_CHARS)))
+        return max(1, int(config.get(key, DEFAULT_PROMPT_CACHE_MIN_CHARS)))
     except (TypeError, ValueError):
         return DEFAULT_PROMPT_CACHE_MIN_CHARS
 
@@ -312,7 +357,7 @@ def _segment_texts(
     enabled_segments: dict[str, bool] | None = None,
 ) -> dict[str, str]:
     session = session or PromptCacheSessionContext()
-    enabled_segments = enabled_segments or prompt_cache_segments(config)
+    enabled_segments = enabled_segments or prompt_cache_segments(config, purpose)
     texts: dict[str, str] = {}
 
     instruction = effective_system_instruction(config, purpose=purpose)
@@ -456,7 +501,7 @@ def rebuild_prompt_cache_bundle(
         return None
 
     cached_chars = payload_char_count(total_cached_text)
-    if cached_chars < prompt_cache_min_chars(config):
+    if cached_chars < prompt_cache_min_chars(config, purpose):
         return None
 
     fingerprint = _cached_fingerprint(
@@ -573,7 +618,7 @@ def needs_prompt_cache_recreate_confirm(
     *,
     purpose: Purpose,
 ) -> bool:
-    if bundle is None or not prompt_cache_enabled(config):
+    if bundle is None or not prompt_cache_enabled(config, purpose):
         return False
     store = get_prompt_cache_store(purpose)
     return prompt_cache_will_recreate(store, bundle, config, purpose=purpose)
@@ -585,10 +630,10 @@ def build_prompt_cache_bundle(
     purpose: Purpose,
     session: PromptCacheSessionContext | None = None,
 ) -> PromptCacheBundle | None:
-    if not prompt_cache_enabled(config):
+    if not prompt_cache_enabled(config, purpose):
         return None
 
-    enabled = prompt_cache_segments(config)
+    enabled = prompt_cache_segments(config, purpose)
     texts = _segment_texts(config, purpose=purpose, session=session, enabled_segments=enabled)
     enabled_ids = [
         segment_id
@@ -1209,7 +1254,7 @@ def ensure_prompt_cache(
         return PromptCacheEnsureResult()
 
     timeout = int(config.get("timeout_seconds") or 30)
-    ttl_seconds = prompt_cache_ttl_seconds(config)
+    ttl_seconds = prompt_cache_ttl_seconds(config, purpose)
 
     if active is not None:
         _delete_remote_cache_best_effort(

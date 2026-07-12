@@ -20,7 +20,7 @@ ADDON_MODULE = os.path.basename(ADDON_DIR)
 LEGACY_CONFIG_PATH = os.path.join(ADDON_DIR, "config_gemini.json")
 META_CONFIG_PATH = os.path.join(ADDON_DIR, "meta.json")
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 
 _OBSOLETE_CONFIG_KEYS: tuple[str, ...] = (
     "thinking_budget",
@@ -30,6 +30,12 @@ _OBSOLETE_CONFIG_KEYS: tuple[str, ...] = (
     "prompt_cache_recreate_confirm_usd",
     "prompt_cache_min_tokens",
     "prompt_cache_import_note_default",
+    "prompt_cache_enabled",
+    "prompt_cache_ttl_seconds",
+    "prompt_cache_min_chars",
+    "prompt_cache_custom_text",
+    "prompt_cache_active_preset_id",
+    "prompt_cache_segments",
 )
 
 _WRAPPER_RESET_KEYS: tuple[str, ...] = (
@@ -78,16 +84,21 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "prompt_chat_context_sections": {},
     "prompt_card_templates_format": "",
     "mathjax_preview_preamble": "",
-    "prompt_cache_enabled": False,
-    "prompt_cache_ttl_seconds": 3600,
-    "prompt_cache_min_chars": DEFAULT_PROMPT_CACHE_MIN_CHARS,
-    "prompt_cache_custom_text": "",
+    "prompt_cache_enabled_chat": False,
+    "prompt_cache_enabled_optimize": False,
+    "prompt_cache_ttl_seconds_chat": 3600,
+    "prompt_cache_ttl_seconds_optimize": 3600,
+    "prompt_cache_min_chars_chat": DEFAULT_PROMPT_CACHE_MIN_CHARS,
+    "prompt_cache_min_chars_optimize": DEFAULT_PROMPT_CACHE_MIN_CHARS,
+    "prompt_cache_custom_text_chat": "",
+    "prompt_cache_custom_text_optimize": "",
     "prompt_cache_custom_text_presets": [],
-    "prompt_cache_active_preset_id": "",
+    "prompt_cache_active_preset_id_chat": "",
+    "prompt_cache_active_preset_id_optimize": "",
     "prompt_cache_change_ttl_seconds": 3600,
     "prompt_cache_recreate_default": "recreate",
     "prompt_cache_new_conversation_cache_default": "clear",
-    "prompt_cache_segments": dict(
+    "prompt_cache_segments_chat": dict(
         {
             "system_instruction": True,
             "dynamic_rules": False,
@@ -100,9 +111,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "context_wrapper": False,
         }
     ),
+    "prompt_cache_segments_optimize": dict(
+        {
+            "system_instruction": True,
+            "dynamic_rules": False,
+            "custom_cache_text": False,
+        }
+    ),
     "chat_send_empty_fields": False,
     "chat_modify_prompt_before_send": False,
     "chat_download_directory": "",
+    "chat_export_quick_folders": [],
     "optimize_modify_prompt_before_send": False,
     "suppress_default_system_instruction_warning": False,
     "suppress_api_key_restore_warning": False,
@@ -151,11 +170,12 @@ RESTORABLE_SETTING_KEYS: tuple[str, ...] = (
     "prompt_chat_context_sections",
     "prompt_card_templates_format",
     "mathjax_preview_preamble",
-    "prompt_cache_enabled",
-    "prompt_cache_ttl_seconds",
-    "prompt_cache_min_chars",
-    "prompt_cache_custom_text",
-    "prompt_cache_segments",
+    "chat_export_quick_folders",
+    "prompt_cache_enabled_optimize",
+    "prompt_cache_ttl_seconds_optimize",
+    "prompt_cache_min_chars_optimize",
+    "prompt_cache_custom_text_optimize",
+    "prompt_cache_segments_optimize",
 )
 
 # Maps config keys to existing settings label i18n keys for the restore list.
@@ -185,11 +205,12 @@ RESTORABLE_SETTING_LABELS: dict[str, str] = {
     "prompt_chat_context_sections": "settings.prompt_chat_context_sections",
     "prompt_card_templates_format": "settings.prompt_card_templates_format",
     "mathjax_preview_preamble": "settings.mathjax_preview_preamble",
-    "prompt_cache_enabled": "settings.prompt_cache_enabled",
-    "prompt_cache_ttl_seconds": "settings.prompt_cache_ttl",
-    "prompt_cache_min_chars": "settings.prompt_cache_min_chars",
-    "prompt_cache_custom_text": "settings.prompt_cache_custom_text",
-    "prompt_cache_segments": "settings.prompt_cache_segments",
+    "chat_export_quick_folders": "settings.chat_export_quick_folders",
+    "prompt_cache_enabled_optimize": "settings.prompt_cache_enabled_optimize",
+    "prompt_cache_ttl_seconds_optimize": "settings.prompt_cache_ttl",
+    "prompt_cache_min_chars_optimize": "settings.prompt_cache_min_chars",
+    "prompt_cache_custom_text_optimize": "settings.prompt_cache_custom_text",
+    "prompt_cache_segments_optimize": "settings.prompt_cache_segments",
     "system_instruction": "settings.restore_label.system_instruction",
     "system_instruction_shared": "settings.system_instruction_shared",
     "system_instruction_optimize": "settings.restore_label.system_instruction_optimize",
@@ -265,15 +286,115 @@ def _stored_config_version(stored: dict[str, Any] | None) -> int:
         return 0
 
 
+def _coerce_prompt_cache_min_chars(value: Any, *, fallback: int) -> int:
+    try:
+        min_chars = int(value)
+    except (TypeError, ValueError):
+        min_chars = 0
+    if min_chars == 8189:
+        return DEFAULT_PROMPT_CACHE_MIN_CHARS
+    return max(1, min_chars) if min_chars > 0 else fallback
+
+
+def _normalize_prompt_cache_segments(raw: Any, *, purpose: str) -> dict[str, bool]:
+    from .prompt_cache import (
+        DEFAULT_PROMPT_CACHE_SEGMENTS,
+        DEFAULT_PROMPT_CACHE_SEGMENTS_OPTIMIZE,
+        normalize_prompt_cache_segments_for_purpose,
+    )
+
+    default = (
+        DEFAULT_PROMPT_CACHE_SEGMENTS
+        if purpose == "chat"
+        else DEFAULT_PROMPT_CACHE_SEGMENTS_OPTIMIZE
+    )
+    return normalize_prompt_cache_segments_for_purpose(raw, purpose=purpose, default=default)
+
+
+def _migrate_prompt_cache_purpose_split(config: dict[str, Any], stored: dict[str, Any]) -> None:
+    legacy_ttl = config.pop("prompt_cache_ttl_seconds", None)
+    legacy_min_chars = config.pop("prompt_cache_min_chars", None)
+    legacy_custom_text = config.pop("prompt_cache_custom_text", None)
+    legacy_active_preset = config.pop("prompt_cache_active_preset_id", None)
+    legacy_segments = config.pop("prompt_cache_segments", None)
+
+    for purpose in ("chat", "optimize"):
+        ttl_key = f"prompt_cache_ttl_seconds_{purpose}"
+        if ttl_key not in stored:
+            if legacy_ttl is not None:
+                try:
+                    config[ttl_key] = max(60, int(legacy_ttl))
+                except (TypeError, ValueError):
+                    config[ttl_key] = default_config_value(ttl_key)
+            elif purpose == "optimize" and "prompt_cache_ttl_seconds_chat" in stored:
+                try:
+                    config[ttl_key] = max(60, int(stored["prompt_cache_ttl_seconds_chat"]))
+                except (TypeError, ValueError):
+                    config[ttl_key] = default_config_value(ttl_key)
+            else:
+                config[ttl_key] = default_config_value(ttl_key)
+
+        min_key = f"prompt_cache_min_chars_{purpose}"
+        if min_key not in stored:
+            if legacy_min_chars is not None:
+                config[min_key] = _coerce_prompt_cache_min_chars(
+                    legacy_min_chars,
+                    fallback=int(default_config_value(min_key)),
+                )
+            else:
+                config[min_key] = default_config_value(min_key)
+        else:
+            config[min_key] = _coerce_prompt_cache_min_chars(
+                config.get(min_key),
+                fallback=int(default_config_value(min_key)),
+            )
+
+        text_key = f"prompt_cache_custom_text_{purpose}"
+        if text_key not in stored:
+            if legacy_custom_text is not None:
+                config[text_key] = str(legacy_custom_text or "")
+            elif purpose == "optimize" and "prompt_cache_custom_text_chat" in stored:
+                config[text_key] = str(stored["prompt_cache_custom_text_chat"] or "")
+            else:
+                config[text_key] = ""
+        else:
+            config[text_key] = str(config.get(text_key) or "")
+
+        preset_key = f"prompt_cache_active_preset_id_{purpose}"
+        if preset_key not in stored:
+            if legacy_active_preset is not None:
+                config[preset_key] = str(legacy_active_preset or "")
+            elif purpose == "optimize" and "prompt_cache_active_preset_id_chat" in stored:
+                config[preset_key] = str(stored["prompt_cache_active_preset_id_chat"] or "")
+            else:
+                config[preset_key] = ""
+        else:
+            config[preset_key] = str(config.get(preset_key) or "")
+
+        segments_key = f"prompt_cache_segments_{purpose}"
+        if segments_key not in stored:
+            source = legacy_segments if isinstance(legacy_segments, dict) else None
+            config[segments_key] = _normalize_prompt_cache_segments(source, purpose=purpose)
+        else:
+            config[segments_key] = _normalize_prompt_cache_segments(
+                config.get(segments_key),
+                purpose=purpose,
+            )
+
+
 def _normalize_config(config: dict[str, Any], stored: dict[str, Any] | None = None) -> dict[str, Any]:
     stored = stored or {}
+    stored_version = _stored_config_version(stored)
+    if stored_version < CONFIG_VERSION:
+        if stored_version < 2:
+            for key in _WRAPPER_RESET_KEYS:
+                config[key] = default_config_value(key)
+        if stored_version < 3:
+            _migrate_prompt_cache_purpose_split(config, stored)
+        config["config_version"] = CONFIG_VERSION
+
     for key in _OBSOLETE_CONFIG_KEYS:
         config.pop(key, None)
-
-    if _stored_config_version(stored) < CONFIG_VERSION:
-        for key in _WRAPPER_RESET_KEYS:
-            config[key] = default_config_value(key)
-        config["config_version"] = CONFIG_VERSION
 
     config["prompt_chat_context"] = ""
 
@@ -284,20 +405,33 @@ def _normalize_config(config: dict[str, Any], stored: dict[str, Any] | None = No
             DEFAULT_CONFIG["prompt_chat_context_order"]
         )
 
-    try:
-        min_chars = int(config.get("prompt_cache_min_chars", 0))
-    except (TypeError, ValueError):
-        min_chars = 0
-    if min_chars == 8189:
-        config["prompt_cache_min_chars"] = DEFAULT_PROMPT_CACHE_MIN_CHARS
+    for purpose in ("chat", "optimize"):
+        min_key = f"prompt_cache_min_chars_{purpose}"
+        config[min_key] = _coerce_prompt_cache_min_chars(
+            config.get(min_key),
+            fallback=int(default_config_value(min_key)),
+        )
+        ttl_key = f"prompt_cache_ttl_seconds_{purpose}"
+        try:
+            config[ttl_key] = max(60, int(config.get(ttl_key, default_config_value(ttl_key))))
+        except (TypeError, ValueError):
+            config[ttl_key] = default_config_value(ttl_key)
+        preset_key = f"prompt_cache_active_preset_id_{purpose}"
+        if not isinstance(config.get(preset_key), str):
+            config[preset_key] = ""
+        segments_key = f"prompt_cache_segments_{purpose}"
+        config[segments_key] = _normalize_prompt_cache_segments(
+            config.get(segments_key),
+            purpose=purpose,
+        )
+        text_key = f"prompt_cache_custom_text_{purpose}"
+        config[text_key] = str(config.get(text_key) or "")
 
     from .prompt_cache_policy import normalize_custom_text_presets
 
     config["prompt_cache_custom_text_presets"] = normalize_custom_text_presets(
         config.get("prompt_cache_custom_text_presets")
     )
-    if not isinstance(config.get("prompt_cache_active_preset_id"), str):
-        config["prompt_cache_active_preset_id"] = ""
     recreate = str(config.get("prompt_cache_recreate_default") or "recreate")
     config["prompt_cache_recreate_default"] = (
         recreate if recreate in ("recreate", "skip_cache") else "recreate"
@@ -311,6 +445,25 @@ def _normalize_config(config: dict[str, Any], stored: dict[str, Any] | None = No
     except (TypeError, ValueError):
         change_ttl = 3600
     config["prompt_cache_change_ttl_seconds"] = max(60, change_ttl)
+
+    legacy_enabled = bool(stored.get("prompt_cache_enabled", False))
+    if "prompt_cache_enabled_chat" not in stored:
+        config["prompt_cache_enabled_chat"] = legacy_enabled
+    else:
+        config["prompt_cache_enabled_chat"] = bool(config.get("prompt_cache_enabled_chat", False))
+    if "prompt_cache_enabled_optimize" not in stored:
+        config["prompt_cache_enabled_optimize"] = legacy_enabled
+    else:
+        config["prompt_cache_enabled_optimize"] = bool(
+            config.get("prompt_cache_enabled_optimize", False)
+        )
+    config.pop("prompt_cache_enabled", None)
+
+    from .ui.chat_export import normalize_chat_export_quick_folders
+
+    config["chat_export_quick_folders"] = normalize_chat_export_quick_folders(
+        config.get("chat_export_quick_folders")
+    )
 
     return config
 

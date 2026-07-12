@@ -11,14 +11,17 @@ from aqt.qt import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QObject,
     QPushButton,
     QSizePolicy,
     QSpinBox,
     QTextEdit,
     QTextOption,
     Qt,
+    QTimer,
     QVBoxLayout,
     QWidget,
+    QEvent,
 )
 
 from .theme import (
@@ -93,6 +96,21 @@ def apply_settings_icon_row_height(
     row.setMinimumHeight(ICON_BUTTON_SIZE + top_inset)
 
 
+def create_settings_restore_list_label(parent: QWidget, text: str) -> QLabel:
+    label = QLabel(parent)
+    label.setTextFormat(Qt.TextFormat.RichText)
+    label.setText(text)
+    label.setWordWrap(False)
+    label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
+    label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    label.setContentsMargins(0, 0, 0, 0)
+    if "<img" in text:
+        from .help_icons import INLINE_HELP_ICON_DISPLAY_SIZE
+
+        label.setMinimumHeight(INLINE_HELP_ICON_DISPLAY_SIZE + 2)
+    return label
+
+
 def create_settings_help_list_label(parent: QWidget, text: str) -> QLabel:
     label = QLabel(parent)
     label.setTextFormat(Qt.TextFormat.RichText)
@@ -101,7 +119,112 @@ def create_settings_help_list_label(parent: QWidget, text: str) -> QLabel:
     label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
     label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
     label.setContentsMargins(0, 0, 0, 0)
+    bind_settings_rich_label_auto_height(label)
     return label
+
+
+def _settings_rich_label_content_width(label: QLabel) -> int:
+    width = label.width()
+    if width > 1:
+        return width
+
+    row = label.parentWidget()
+    if row is not None and row.width() > 0:
+        layout = row.layout()
+        horizontal_margins = 0
+        if layout is not None:
+            margins = layout.contentsMargins()
+            horizontal_margins = margins.left() + margins.right()
+        return max(row.width() - horizontal_margins - ICON_BUTTON_SIZE - 12, 120)
+
+    widget = row
+    while widget is not None:
+        if widget.width() > 0:
+            return max(widget.width() - 64, 120)
+        widget = widget.parentWidget()
+    return 480
+
+
+def _settings_rich_label_minimum_height(label: QLabel, *, content_width: int) -> int:
+    label.setWordWrap(True)
+    height = label.heightForWidth(max(content_width, 1))
+    if height <= 0:
+        height = label.sizeHint().height()
+    min_height = label.fontMetrics().height()
+    if "<img" in (label.text() or ""):
+        from .help_icons import INLINE_HELP_ICON_DISPLAY_SIZE
+
+        min_height = max(min_height, INLINE_HELP_ICON_DISPLAY_SIZE + 2)
+    return max(height, min_height)
+
+
+def sync_settings_rich_label_height(label: QLabel) -> None:
+    if label.textFormat() != Qt.TextFormat.RichText:
+        return
+    content_width = _settings_rich_label_content_width(label)
+    height = _settings_rich_label_minimum_height(label, content_width=content_width)
+    if height <= 0:
+        return
+    label.setMinimumHeight(height)
+    row = label.parentWidget()
+    if row is None:
+        return
+    layout = row.layout()
+    if layout is None:
+        return
+    margins = layout.contentsMargins()
+    row.setMinimumHeight(height + margins.top() + margins.bottom())
+
+
+def bind_settings_rich_label_auto_height(label: QLabel) -> None:
+    if getattr(label, "_settings_rich_height_filter", None) is not None:
+        sync_settings_rich_label_height(label)
+        return
+
+    class _RichLabelHeightFilter(QObject):
+        def eventFilter(self, obj, event) -> bool:
+            if event.type() in (QEvent.Type.Resize, QEvent.Type.Show, QEvent.Type.ShowToParent):
+                sync_settings_rich_label_height(obj)
+            return False
+
+    filt = _RichLabelHeightFilter(label)
+    label.installEventFilter(filt)
+    label._settings_rich_height_filter = filt
+    QTimer.singleShot(0, lambda: sync_settings_rich_label_height(label))
+
+
+def refresh_settings_rich_label_heights(root: QWidget) -> None:
+    for label in root.findChildren(QLabel):
+        if getattr(label, "_settings_rich_height_filter", None) is not None:
+            sync_settings_rich_label_height(label)
+
+
+def create_settings_restore_checkbox_row(
+    parent: QWidget,
+    checkbox: QCheckBox,
+    label_key: str,
+    *,
+    config: dict,
+) -> QWidget:
+    from ..i18n import tr
+
+    from .help_icons import instruction_html
+
+    row_widget = QWidget(parent)
+    apply_settings_icon_row_height(row_widget)
+    row_layout = QHBoxLayout(row_widget)
+    row_layout.setContentsMargins(0, 0, 0, 0)
+    row_layout.setSpacing(6)
+    row_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+    checkbox.setText("")
+    checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    label = create_settings_restore_list_label(
+        row_widget,
+        instruction_html(tr(label_key, config=config)),
+    )
+    row_layout.addWidget(checkbox, 0, Qt.AlignmentFlag.AlignVCenter)
+    row_layout.addWidget(label, 1)
+    return row_widget
 
 
 def create_settings_checkbox_info_row(
@@ -131,6 +254,41 @@ def add_settings_labeled_field(
 ) -> None:
     layout.addWidget(QLabel(label, parent))
     layout.addWidget(shell)
+
+
+def _effective_layout_spacing(layout: QVBoxLayout) -> int:
+    spacing = layout.spacing()
+    if spacing >= 0:
+        return spacing
+    return SETTINGS_SECTION_INNER_SPACING
+
+
+def add_settings_section_break(layout: QVBoxLayout) -> None:
+    """Extra space between settings sections (avoids stacking on layout spacing)."""
+    spacing = _effective_layout_spacing(layout)
+    extra = SETTINGS_SECTION_GAP - 2 * spacing
+    if extra > 0:
+        layout.addSpacing(extra)
+
+
+def add_settings_stacked_field(
+    layout: QVBoxLayout,
+    parent: QWidget,
+    label: str,
+    shell: QWidget,
+    *,
+    spacing: int = SETTINGS_SECTION_INNER_SPACING,
+) -> None:
+    group = QWidget(parent)
+    group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+    group_layout = QVBoxLayout(group)
+    group_layout.setContentsMargins(0, 0, 0, 0)
+    group_layout.setSpacing(spacing)
+    label_widget = QLabel(label, group)
+    label_widget.setContentsMargins(0, 0, 0, 0)
+    group_layout.addWidget(label_widget)
+    group_layout.addWidget(shell)
+    layout.addWidget(group)
 
 
 def apply_settings_text_edit_newlines(editor: QTextEdit, *, show: bool) -> None:
@@ -426,6 +584,37 @@ def create_settings_auto_height_text_edit(
 
     editor = editor_class(shell)
     editor._settings_shell = shell
+    apply_native_text_edit_surface_theme(editor)
+    configure_settings_text_edit(
+        editor,
+        minimum=minimum,
+        maximum=maximum,
+        show_newlines=show_newlines,
+    )
+    shell_layout.addWidget(editor)
+    return shell, editor
+
+
+def create_settings_row_auto_height_text_edit(
+    parent: QWidget,
+    *,
+    editor_class: type[_TEditor] = ScrollAwareTextEdit,
+    minimum: int = SETTINGS_TEXT_EDIT_MIN_HEIGHT,
+    maximum: int | None = SETTINGS_TEXT_EDIT_MAX_HEIGHT,
+    show_newlines: bool = False,
+) -> tuple[QWidget, _TEditor]:
+    """Auto-height settings field sized by its row column, not the full form width."""
+    shell = QWidget(parent)
+    shell.setObjectName("settingsTextEditShell")
+    shell.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+    shell_layout = QVBoxLayout(shell)
+    shell_layout.setContentsMargins(0, 0, 0, 0)
+    shell_layout.setSpacing(0)
+    shell_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+    editor = editor_class(shell)
+    editor._settings_shell = shell
+    editor._settings_row_field = True
     apply_native_text_edit_surface_theme(editor)
     configure_settings_text_edit(
         editor,

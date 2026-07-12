@@ -28,7 +28,7 @@ from .theme import (
     refresh_native_text_edits_in,
     strong_label_html,
 )
-from .themed_windows import register_themed_window
+from .themed_windows import SNAPPABLE_WINDOW_FLAGS, configure_snappable_window, register_themed_window
 
 
 class PromptInspectionWindow(QWidget):
@@ -41,13 +41,8 @@ class PromptInspectionWindow(QWidget):
         title: str,
         refresh_callback: Callable[[], PromptInspection] | None = None,
     ) -> None:
-        super().__init__(
-            parent,
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowMaximizeButtonHint
-            | Qt.WindowType.WindowCloseButtonHint,
-        )
+        super().__init__(None, SNAPPABLE_WINDOW_FLAGS)
+        configure_snappable_window(self)
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self._refresh_callback = refresh_callback
         self._last_inspection: PromptInspection | None = None

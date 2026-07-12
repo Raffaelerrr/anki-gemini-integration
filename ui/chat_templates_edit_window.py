@@ -17,6 +17,7 @@ from ..config import load_config, save_config
 from ..i18n import tr
 from .card_templates import CardTemplateData
 from .templates_edit_panel import TemplatesEditPanel
+from .themed_windows import configure_snappable_window
 
 _OnSave = Callable[[list[CardTemplateData], str], None]
 
@@ -31,13 +32,8 @@ class ChatTemplatesEditWindow(QWidget):
         on_save: _OnSave,
         on_include_changed: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(
-            parent,
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowMaximizeButtonHint
-            | Qt.WindowType.WindowCloseButtonHint,
-        )
+        super().__init__(None)
+        configure_snappable_window(self)
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self._on_save = on_save
         self._on_include_changed = on_include_changed
