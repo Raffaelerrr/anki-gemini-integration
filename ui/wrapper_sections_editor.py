@@ -60,9 +60,11 @@ class WrapperSectionsEditor(QWidget):
         parent: QWidget | None = None,
         *,
         show_newlines: bool = False,
+        wrap: bool | None = None,
     ) -> None:
         super().__init__(parent)
         self._show_newlines = show_newlines
+        self._wrap = wrap
         self._config: dict[str, Any] = {}
         self._order: list[str] = list(WRAPPER_SECTION_IDS)
         self._rows: dict[str, _WrapperSectionRow] = {}
@@ -77,6 +79,12 @@ class WrapperSectionsEditor(QWidget):
         root.setSpacing(0)
         root.addLayout(self._rows_layout)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+
+    def set_show_newlines(self, show_newlines: bool) -> None:
+        self._show_newlines = show_newlines
+
+    def set_wrap(self, wrap: bool | None) -> None:
+        self._wrap = wrap
 
     def load_from_config(self, config: dict[str, Any]) -> None:
         self._config = dict(config)
@@ -129,6 +137,7 @@ class WrapperSectionsEditor(QWidget):
                 section_id=section_id,
                 config=self._config,
                 show_newlines=self._show_newlines,
+                wrap=self._wrap,
                 on_move_up=lambda _checked=False, sid=section_id: self._move_section(sid, -1),
                 on_move_down=lambda _checked=False, sid=section_id: self._move_section(sid, 1),
                 can_move_up=index > 0,
@@ -181,6 +190,7 @@ class _WrapperSectionRow(QWidget):
         section_id: str,
         config: dict[str, Any],
         show_newlines: bool,
+        wrap: bool | None,
         on_move_up,
         on_move_down,
         can_move_up: bool,
@@ -232,11 +242,13 @@ class _WrapperSectionRow(QWidget):
                 self,
                 section_id=section_id,
                 show_newlines=show_newlines,
+                wrap=wrap,
             )
         else:
             shell, editor = create_settings_auto_height_text_edit(
                 self,
                 show_newlines=show_newlines,
+                wrap=wrap,
             )
         layout.addWidget(shell)
         self.editor = editor

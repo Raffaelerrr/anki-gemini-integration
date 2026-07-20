@@ -10,7 +10,7 @@ from .ui.window_lifecycle import (
     reset_shutdown_state,
     shutdown_addon_windows,
 )
-from .ui.chat_dialog import open_chat
+from .ui.chat_dialog import import_selected_browser_notes, open_chat
 from .ui.svg_icons import (
     brain_svg_path,
     chat_svg_path,
@@ -69,6 +69,19 @@ def add_editor_buttons(buttons, editor) -> None:
     )
 
 
+def add_browser_menu(browser) -> None:
+    config = load_config()
+    action = QAction(tr("browser.import_notes_to_chat", config=config), browser)
+    action.triggered.connect(lambda: import_selected_browser_notes(browser))
+    try:
+        browser.form.menu_Notes.addAction(action)
+    except Exception:
+        try:
+            browser.form.menuEdit.addAction(action)
+        except Exception:
+            pass
+
+
 def init_tools_menu() -> None:
     from aqt import mw
 
@@ -99,6 +112,7 @@ def _on_theme_changed() -> None:
 
 
 gui_hooks.editor_did_init_buttons.append(add_editor_buttons)
+gui_hooks.browser_menus_did_init.append(add_browser_menu)
 gui_hooks.main_window_did_init.append(init_tools_menu)
 gui_hooks.profile_did_open.append(_on_profile_did_open)
 gui_hooks.profile_will_close.append(lambda *_: cleanup())

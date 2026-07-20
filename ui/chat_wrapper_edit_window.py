@@ -70,9 +70,11 @@ class ChatWrapperEditWindow(QWidget):
         scroll_host = QWidget(scroll)
         scroll_layout = QVBoxLayout(scroll_host)
         scroll_layout.setContentsMargins(0, 0, 0, 0)
+        cfg = load_config()
         self._editor = WrapperSectionsEditor(
             scroll_host,
-            show_newlines=bool(load_config().get("settings_show_text_newlines", False)),
+            show_newlines=bool(cfg.get("settings_show_text_newlines", False)),
+            wrap=bool(cfg.get("settings_wrap_text_editors", True)),
         )
         scroll_layout.addWidget(self._editor)
         scroll.setWidget(scroll_host)

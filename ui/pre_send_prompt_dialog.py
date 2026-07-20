@@ -39,10 +39,11 @@ from ..prompt_inspection import (
     merge_inspection_system_text,
 )
 from .settings_compact_controls import (
-    configure_addon_text_edit,
+    SETTINGS_TEXT_EDIT_MAX_HEIGHT,
+    apply_settings_text_edit_newlines,
+    apply_text_edit_wrap,
     create_prompt_scroll_page,
     create_ui_text_edit,
-    refresh_settings_text_edit_layouts,
     scroll_area_to_widget,
 )
 from .theme import (
@@ -52,7 +53,10 @@ from .theme import (
     strong_label_html,
 )
 from .themed_windows import configure_snappable_window, register_themed_window
-from .widgets import PlainNoWheelComboBox
+from .widgets import PlainNoWheelComboBox, ScrollAwareTextEdit
+
+_PromptEditor = ScrollAwareTextEdit
+_PROMPT_EDITOR_HEIGHT = SETTINGS_TEXT_EDIT_MAX_HEIGHT
 
 _CHAT_EDITABLE_KEYS = frozenset(
     {
@@ -137,28 +141,31 @@ def _section_label(parent: QWidget, html: str) -> QLabel:
     return label
 
 
-def _add_auto_height_editor(
+def _add_prompt_editor(
     layout: QVBoxLayout,
     parent: QWidget,
     *,
     text: str,
     read_only: bool = False,
-    stretch: int = 0,
-) -> QTextEdit:
+) -> _PromptEditor:
+    """Fixed-height ScrollAware editor — keeps wheel focus behavior, no layout stretch."""
     editor = create_ui_text_edit(
         parent,
-        scroll_free=True,
-        auto_height=True,
-        minimum=44,
+        editor_class=ScrollAwareTextEdit,
+        auto_height=False,
+        minimum=_PROMPT_EDITOR_HEIGHT,
+        maximum=_PROMPT_EDITOR_HEIGHT,
     )[1]
-    editor.setPlainText(text)
     editor.setReadOnly(read_only)
-    editor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-    layout.addWidget(editor, stretch)
+    editor.setUndoRedoEnabled(False)
+    editor.setFixedHeight(_PROMPT_EDITOR_HEIGHT)
+    editor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    editor.setPlainText(text)
+    layout.addWidget(editor)
     return editor
 
 
-def _merge_system_from_editors(editors: dict[str, QTextEdit]) -> str:
+def _merge_system_from_editors(editors: dict[str, _PromptEditor]) -> str:
     segments: list[PromptSegment] = []
     for key in (
         "prompt.inspect.system_instruction",
@@ -202,12 +209,13 @@ class PreSendPromptDialog(QDialog):
         self._outgoing_payload = outgoing_payload
         self._result: PreSendPromptOverrides | None = None
         self._inspection = inspection
-        self._segment_editors: dict[str, QTextEdit] = {}
-        self._cached_segment_editors: dict[str, QTextEdit] = {}
+        self._segment_editors: dict[str, _PromptEditor] = {}
+        self._cached_segment_editors: dict[str, _PromptEditor] = {}
         self._live_jump_targets: list[tuple[QWidget, str]] = []
         self._cache_jump_targets: list[tuple[QWidget, str]] = []
         self._history_text = ""
-        self._history_edit: QTextEdit | None = None
+        self._history_edit: _PromptEditor | None = None
+        self._pending_cache_build: tuple[dict[str, Any], QVBoxLayout, QWidget, PromptCacheBundle] | None = None
         config = load_config()
         if read_only:
             configure_snappable_window(self)
@@ -265,10 +273,10 @@ class PreSendPromptDialog(QDialog):
         apply_native_page_scroll_theme(self._live_scroll, allow_horizontal_scroll=False)
         self._stack.addWidget(self._live_scroll)
 
-        self._live_system_edit: QTextEdit | None = None
-        self._live_payload_edit: QTextEdit | None = None
-        self._full_live_prompt_edit: QTextEdit | None = None
-        self._full_cached_prompt_edit: QTextEdit | None = None
+        self._live_system_edit: _PromptEditor | None = None
+        self._live_payload_edit: _PromptEditor | None = None
+        self._full_live_prompt_edit: _PromptEditor | None = None
+        self._full_cached_prompt_edit: _PromptEditor | None = None
 
         if bundle is not None:
             self._build_live_cached_page(
@@ -282,7 +290,8 @@ class PreSendPromptDialog(QDialog):
             self._cache_scroll, cache_layout, cache_host = create_prompt_scroll_page(self._stack)
             apply_native_page_scroll_theme(self._cache_scroll, allow_horizontal_scroll=False)
             self._stack.addWidget(self._cache_scroll)
-            self._build_caching_page(config, cache_layout, cache_host, bundle)
+            # Defer building the cache page until first view — halves open cost.
+            self._pending_cache_build = (config, cache_layout, cache_host, bundle)
         else:
             self._cache_scroll = None
             self._build_live_no_cache_page(
@@ -314,7 +323,7 @@ class PreSendPromptDialog(QDialog):
 
         self._on_stack_page_changed(self._stack.currentIndex())
         self._apply_newline_visibility(config)
-        self._schedule_layout_refresh()
+        self._apply_wrap_preference(config)
         register_themed_window(self)
 
     def apply_theme(self) -> None:
@@ -331,7 +340,7 @@ class PreSendPromptDialog(QDialog):
         self._update_view_switch_button()
         refresh_native_text_edits_in(self)
         self._apply_newline_visibility(config)
-        self._schedule_layout_refresh()
+        self._apply_wrap_preference(config)
 
     def _apply_read_only_mode(self) -> None:
         for editor in self.findChildren(QTextEdit):
@@ -383,7 +392,8 @@ class PreSendPromptDialog(QDialog):
         self._refresh_live_prompt_preview()
         self._refresh_cached_prompt_preview()
         self._update_formula_label()
-        self._schedule_layout_refresh()
+        self._apply_newline_visibility(config)
+        self._apply_wrap_preference(config)
 
     def _refresh_preview_context(self) -> None:
         if self._refresh_context is None:
@@ -439,7 +449,7 @@ class PreSendPromptDialog(QDialog):
             if segment.role == "history":
                 self._history_text = segment.text
 
-        self._full_live_prompt_edit = _add_auto_height_editor(
+        self._full_live_prompt_edit = _add_prompt_editor(
             layout,
             host,
             text=_compose_live_prompt_preview(
@@ -466,12 +476,11 @@ class PreSendPromptDialog(QDialog):
         self._live_jump_targets.append(
             (system_header, tr("prompt.inspect.pre_send.live_system", config=config))
         )
-        self._live_system_edit = _add_auto_height_editor(
+        self._live_system_edit = _add_prompt_editor(
             layout,
             host,
             text=live_system,
             read_only=self._read_only,
-            stretch=1,
         )
         if not self._read_only:
             self._live_system_edit.textChanged.connect(self._refresh_live_prompt_preview)
@@ -485,12 +494,11 @@ class PreSendPromptDialog(QDialog):
             self._live_jump_targets.append(
                 (history_header, tr("prompt.inspect.chat_history", config=config))
             )
-            self._history_edit = _add_auto_height_editor(
+            self._history_edit = _add_prompt_editor(
                 layout,
                 host,
                 text=self._history_text,
                 read_only=True,
-                stretch=1,
             )
 
         payload_header = _section_label(
@@ -501,12 +509,11 @@ class PreSendPromptDialog(QDialog):
         self._live_jump_targets.append(
             (payload_header, tr("prompt.inspect.next_user_message", config=config))
         )
-        self._live_payload_edit = _add_auto_height_editor(
+        self._live_payload_edit = _add_prompt_editor(
             layout,
             host,
             text=outgoing_payload,
             read_only=self._read_only,
-            stretch=2,
         )
         if not self._read_only:
             self._live_payload_edit.textChanged.connect(self._refresh_live_prompt_preview)
@@ -534,7 +541,7 @@ class PreSendPromptDialog(QDialog):
         self._live_jump_targets.append(
             (full_label, tr("prompt.inspect.pre_send.full_live_prompt", config=config))
         )
-        self._full_live_prompt_edit = _add_auto_height_editor(
+        self._full_live_prompt_edit = _add_prompt_editor(
             layout,
             host,
             text=inspection.plain_full_text(config),
@@ -561,12 +568,11 @@ class PreSendPromptDialog(QDialog):
                 else _CHAT_EDITABLE_KEYS
             )
             read_only = self._read_only or segment.label_key not in editable_keys
-            editor = _add_auto_height_editor(
+            editor = _add_prompt_editor(
                 layout,
                 host,
                 text=segment.text,
                 read_only=read_only,
-                stretch=1 if segment.label_key == "prompt.inspect.next_user_message" else 0,
             )
             self._segment_editors[segment.label_key] = editor
             if segment.role == "history":
@@ -604,7 +610,7 @@ class PreSendPromptDialog(QDialog):
         self._cache_jump_targets.append(
             (full_label, tr("prompt.inspect.pre_send.full_cached_prompt", config=config))
         )
-        self._full_cached_prompt_edit = _add_auto_height_editor(
+        self._full_cached_prompt_edit = _add_prompt_editor(
             layout,
             host,
             text=flattened_cache_upload_text(bundle),
@@ -634,12 +640,11 @@ class PreSendPromptDialog(QDialog):
             header = _section_label(host, strong_label_html(title))
             layout.addWidget(header)
             self._cache_jump_targets.append((header, title))
-            editor = _add_auto_height_editor(
+            editor = _add_prompt_editor(
                 layout,
                 host,
                 text=raw_text,
                 read_only=self._read_only,
-                stretch=1 if segment_id == "custom_cache_text" else 0,
             )
             self._cached_segment_editors[segment_id] = editor
             if not self._read_only:
@@ -730,7 +735,6 @@ class PreSendPromptDialog(QDialog):
                     parts.append(payload)
             preview = join_prompt_blocks(*parts)
         self._full_live_prompt_edit.setPlainText(preview)
-        self._schedule_layout_refresh()
 
     def _refresh_cached_prompt_preview(self) -> None:
         if self._full_cached_prompt_edit is None or self._bundle is None:
@@ -749,17 +753,28 @@ class PreSendPromptDialog(QDialog):
         )
         preview = flattened_cache_upload_text(rebuilt) if rebuilt is not None else ""
         self._full_cached_prompt_edit.setPlainText(preview)
-        self._schedule_layout_refresh()
 
     def _apply_newline_visibility(self, config: dict[str, Any]) -> None:
         show_newlines = bool(config.get("settings_show_text_newlines", False))
         for editor in self.findChildren(QTextEdit):
-            configure_addon_text_edit(editor, show_newlines=show_newlines, scroll_free=True)
+            apply_settings_text_edit_newlines(editor, show=show_newlines)
 
-    def _schedule_layout_refresh(self) -> None:
-        from aqt.qt import QTimer
+    def _apply_wrap_preference(self, config: dict[str, Any]) -> None:
+        wrap = bool(config.get("settings_wrap_text_editors", True))
+        for editor in self.findChildren(QTextEdit):
+            apply_text_edit_wrap(editor, wrap=wrap)
 
-        QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
+    def _ensure_cache_page_built(self) -> None:
+        pending = self._pending_cache_build
+        if pending is None:
+            return
+        config, layout, host, bundle = pending
+        self._pending_cache_build = None
+        self._build_caching_page(config, layout, host, bundle)
+        self._apply_newline_visibility(config)
+        self._apply_wrap_preference(config)
+        if self._read_only:
+            self._apply_read_only_mode()
 
     def _focus_current_page(self) -> None:
         page = self._stack.currentWidget()
@@ -788,9 +803,14 @@ class PreSendPromptDialog(QDialog):
     def _toggle_view(self) -> None:
         if self._bundle is None:
             return
-        self._stack.setCurrentIndex(1 - self._stack.currentIndex())
+        next_index = 1 - self._stack.currentIndex()
+        if next_index == 1:
+            self._ensure_cache_page_built()
+        self._stack.setCurrentIndex(next_index)
 
-    def _on_stack_page_changed(self, _index: int) -> None:
+    def _on_stack_page_changed(self, index: int) -> None:
+        if index == 1:
+            self._ensure_cache_page_built()
         self._update_view_switch_button()
         self._update_formula_label()
         self._refresh_jump_combo()
@@ -802,6 +822,7 @@ class PreSendPromptDialog(QDialog):
     def _accept(self) -> None:
         bundle = self._bundle
         if bundle is not None:
+            self._ensure_cache_page_built()
             assert self._live_payload_edit is not None
             assert self._live_system_edit is not None
             outgoing_payload = self._live_payload_edit.toPlainText()
@@ -888,4 +909,6 @@ def open_prompt_preview(
         refresh_context=refresh_context,
     )
     dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
     return dialog

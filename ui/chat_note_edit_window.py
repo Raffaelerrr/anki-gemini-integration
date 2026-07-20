@@ -17,7 +17,7 @@ from ..i18n import tr
 from .note_fields_editor import NoteFieldsEditor
 from .themed_windows import configure_snappable_window
 
-_OnSave = Callable[[list[tuple[str, str]], bool], None]
+_OnSave = Callable[[list[tuple[str, str]], bool, int | None], None]
 
 
 class ChatNoteEditWindow(QWidget):
@@ -33,6 +33,8 @@ class ChatNoteEditWindow(QWidget):
         configure_snappable_window(self)
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self._on_save = on_save
+        self._note_id: int | None = None
+        self._note_label: str | None = None
         self.resize(640, 560)
 
         root = QVBoxLayout(self)
@@ -60,19 +62,41 @@ class ChatNoteEditWindow(QWidget):
 
         self.apply_language()
 
-    def load_fields(self, fields: list[tuple[str, str]]) -> None:
+    def load_fields(
+        self,
+        fields: list[tuple[str, str]],
+        *,
+        note_id: int | None = None,
+        note_label: str | None = None,
+    ) -> None:
+        self._note_id = note_id
+        self._note_label = (note_label or "").strip() or None
         config = load_config()
         self._editor.set_fields(fields)
         self._send_empty_checkbox.blockSignals(True)
         self._send_empty_checkbox.setChecked(bool(config.get("chat_send_empty_fields", False)))
         self._send_empty_checkbox.blockSignals(False)
+        self.apply_language(config)
 
     def commit(self) -> None:
-        self._on_save(self._editor.get_fields(), self._send_empty_checkbox.isChecked())
+        self._on_save(
+            self._editor.get_fields(),
+            self._send_empty_checkbox.isChecked(),
+            self._note_id,
+        )
 
     def apply_language(self, config: dict[str, Any] | None = None) -> None:
         config = config or load_config()
-        self.setWindowTitle(tr("chat.edit_note", config=config))
+        if self._note_label:
+            self.setWindowTitle(
+                tr(
+                    "chat.edit_note.window_title_named",
+                    config=config,
+                    name=self._note_label,
+                )
+            )
+        else:
+            self.setWindowTitle(tr("chat.edit_note", config=config))
         self._send_empty_checkbox.setText(tr("chat.edit_note.send_empty_fields", config=config))
         self._cancel_btn.setText(tr("settings.cancel", config=config))
         self._save_btn.setText(tr("settings.save", config=config))

@@ -3,7 +3,14 @@ from __future__ import annotations
 from .prompt_compose import join_prompt_blocks
 
 WRAPPER_SECTION_IDS = ("context", "format_guide", "templates", "styling", "request")
-DEFAULT_WRAPPER_SECTION_ORDER = WRAPPER_SECTION_IDS
+# Request early so the model sees the task before long context/templates.
+DEFAULT_WRAPPER_SECTION_ORDER = (
+    "request",
+    "context",
+    "format_guide",
+    "templates",
+    "styling",
+)
 PLACEHOLDER_SECTIONS = ("context", "templates", "styling", "request")
 
 
@@ -45,7 +52,7 @@ def normalize_wrapper_section_order(order: list[str] | tuple[str, ...] | None) -
     for section_id in order or ():
         if section_id in WRAPPER_SECTION_IDS and section_id not in seen:
             seen.append(section_id)
-    for section_id in WRAPPER_SECTION_IDS:
+    for section_id in DEFAULT_WRAPPER_SECTION_ORDER:
         if section_id not in seen:
             seen.append(section_id)
     return seen

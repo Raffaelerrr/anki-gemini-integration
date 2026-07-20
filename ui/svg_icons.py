@@ -22,6 +22,7 @@ _ROBOT_SVG = "robot.svg"
 _STOP_CIRCLE_SVG = "stop_circle.svg"
 _CACHE_SVG = "cache.svg"
 _DOWNLOAD_SVG = "download.svg"
+_IMPORT_SVG = "import.svg"
 LOADING_STATUS_ICON_SIZE = 18
 
 def icons_dir() -> Path:
@@ -86,6 +87,10 @@ def download_svg_path() -> Path:
 
 def cache_svg_path() -> Path:
     return _ICONS_DIR / _CACHE_SVG
+
+
+def import_svg_path() -> Path:
+    return _ICONS_DIR / _IMPORT_SVG
 
 
 def loading_status_icon_color() -> str:
@@ -246,6 +251,10 @@ def download_icon(size: int | None = None) -> QIcon:
 
 def cache_icon(size: int | None = None) -> QIcon:
     return themed_toolbar_icon_from_svg(cache_svg_path(), size)
+
+
+def import_icon(size: int | None = None) -> QIcon:
+    return themed_toolbar_icon_from_svg(import_svg_path(), size)
 
 
 def barred_brain_icon(size: int | None = None) -> QIcon:

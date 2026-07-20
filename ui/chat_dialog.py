@@ -41,12 +41,19 @@ from ..i18n import (
     normalize_wrapper_sections_for_save,
     tr,
 )
-from ..note_context_fields import fields_for_note_preview, format_note_context
+from ..note_context_fields import (
+    ImportedNoteData,
+    fields_for_note_preview,
+    format_imported_notes_context,
+    imported_note_from_anki_note,
+    merge_imported_notes,
+)
 from ..note_apply import (
     NoteApplyBatch,
     extract_apply_note,
     format_apply_batch_for_display,
 )
+from ..chat_include_mask import IncludeNextMessageMask
 from ..config import api_key_configured, is_warning_dismissed, load_config, save_config
 from ..prompt_cache import (
     PromptCacheSessionContext,
@@ -56,6 +63,7 @@ from ..prompt_cache import (
     flatten_bundle_for_live_send,
     prompt_cache_enabled,
 )
+from .chat_include_panel import ChatIncludePanel
 from .chat_prompt_cache_dialog import ChatPromptCacheDialog
 from .chat_templates_edit_window import ChatTemplatesEditWindow
 from .chat_wrapper_edit_window import ChatWrapperEditWindow
@@ -89,9 +97,22 @@ from ..gemini_client import (
 )
 from .card_templates import (
     CardTemplateData,
-    extract_notetype_context,
+    ImportedNotetypeData,
+    editable_templates_notetypes,
+    format_imported_notetype_styling,
+    format_imported_notetype_templates,
     format_card_templates_block,
+    format_notetype_schemas_block,
+    imported_notetype_from_id,
+    imported_notetype_has_styling,
+    imported_notetype_has_templates,
+    merge_imported_notetypes,
+    primary_templates_notetype_id,
+    templates_and_styling_for_editor,
 )
+from .chat_notetype_import_dialog import confirm_notetype_import
+from .chat_templates_notetype_picker import pick_templates_notetype
+from .chat_imported_note_picker import pick_imported_note
 from .chat_export import (
     chat_export_last_used_directory,
     default_chat_download_directory,
@@ -118,7 +139,11 @@ from .chat_note_edit_window import ChatNoteEditWindow
 from .chat_messages import ChatMessage
 from .imported_note_preview_window import ImportedNotePreviewWindow
 from .help_icons import set_instruction_tooltip
-from .settings_compact_controls import create_ui_text_edit, refresh_settings_text_edit_newlines
+from .settings_compact_controls import (
+    create_ui_text_edit,
+    refresh_settings_text_edit_newlines,
+    refresh_text_edit_wrap,
+)
 from .svg_icons import (
     LoadingStatusIcon,
     barred_brain_icon,
@@ -126,6 +151,7 @@ from .svg_icons import (
     cache_icon,
     download_icon,
     eye_icon,
+    import_icon,
     lens_icon,
     pencil_icon,
     plus_icon,
@@ -158,11 +184,13 @@ class ChatWindow(QWidget):
 
         self.api_history: list[dict[str, Any]] = []
         self.note_context: str | None = None
-        self._imported_fields: list[tuple[str, str]] = []
+        self._imported_notes: dict[int, ImportedNoteData] = {}
+        self._imported_notetypes: dict[int, ImportedNotetypeData] = {}
         self._imported_card_templates: list[CardTemplateData] = []
         self._imported_notetype_css: str = ""
         self._imported_notetype_id: int | None = None
-        self._imported_note_id: int | None = None
+        self._preview_note_id: int | None = None
+        self._include_mask = IncludeNextMessageMask()
         self._pending_apply_batch: NoteApplyBatch | None = None
         self._session_wrapper_override: dict[str, Any] | None = None
         self._messages: list[ChatMessage] = []
@@ -183,6 +211,7 @@ class ChatWindow(QWidget):
         self._note_edit_window: ChatNoteEditWindow | None = None
         self._wrapper_edit_window: ChatWrapperEditWindow | None = None
         self._templates_edit_window: ChatTemplatesEditWindow | None = None
+        self._include_panel: ChatIncludePanel | None = None
         self._prompt_preview_dialog = None
         self._prompt_cache_dialog = None
         self._session_config_fingerprint = ""
@@ -193,8 +222,6 @@ class ChatWindow(QWidget):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
         self.btn_include_context = QPushButton(self)
-        self.btn_include_context.setCheckable(True)
-        self.btn_include_context.setChecked(False)
         self.btn_include_context.setEnabled(False)
         self.btn_include_context.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
         self.btn_include_context.setSizePolicy(
@@ -206,7 +233,7 @@ class ChatWindow(QWidget):
             Qt.WidgetAttribute.WA_AlwaysShowToolTips,
             True,
         )
-        self.btn_include_context.toggled.connect(self._on_include_context_toggled)
+        self.btn_include_context.clicked.connect(self._open_include_panel)
         toolbar.addWidget(self.btn_include_context)
 
         self.btn_edit_menu = QToolButton(self)
@@ -233,6 +260,20 @@ class ChatWindow(QWidget):
         self._edit_templates_action.triggered.connect(self._open_templates_edit_window)
         self.btn_edit_menu.setMenu(self._edit_menu)
         toolbar.addWidget(self.btn_edit_menu)
+
+        self.btn_import_notetype = QPushButton(self)
+        self.btn_import_notetype.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
+        self.btn_import_notetype.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.btn_import_notetype.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_import_notetype.setAttribute(
+            Qt.WidgetAttribute.WA_AlwaysShowToolTips,
+            True,
+        )
+        self.btn_import_notetype.clicked.connect(self._open_notetype_import_dialog)
+        toolbar.addWidget(self.btn_import_notetype)
 
         self.btn_note_preview = QPushButton(self)
         self.btn_note_preview.setEnabled(False)
@@ -445,9 +486,163 @@ class ChatWindow(QWidget):
         self._body_splitter.rebalance_on_visibility_change(opened_index)
         QTimer.singleShot(0, self._refresh_body_splitter_sizes)
 
-    def _on_include_context_toggled(self, _checked: bool) -> None:
+    def _has_imported_templates_or_styling(self) -> bool:
+        if self._imported_notetypes:
+            return imported_notetype_has_templates(
+                self._imported_notetypes
+            ) or imported_notetype_has_styling(self._imported_notetypes)
+        return bool(self._imported_card_templates) or bool(self._imported_notetype_css.strip())
+
+    def _has_import_session(self) -> bool:
+        return bool(self._imported_notes) or bool(self._imported_notetypes)
+
+    def _has_sendable_context(self) -> bool:
+        return self._has_import_session()
+
+    def _include_context_active(self) -> bool:
+        if not self._include_mask.any_selected():
+            return False
+        if any(
+            note_id in self._imported_notes
+            for note_id in self._include_mask.selected_note_ids()
+        ):
+            return True
+        selected_schemas = set(self._include_mask.selected_schema_ids())
+        if any(mid in self._imported_notetypes for mid in selected_schemas):
+            return True
+        for mid in self._include_mask.selected_template_ids():
+            data = self._imported_notetypes.get(mid)
+            if data is not None and data.templates:
+                return True
+            if not self._imported_notetypes and self._imported_card_templates:
+                return True
+        for mid in self._include_mask.selected_css_ids():
+            data = self._imported_notetypes.get(mid)
+            if data is not None and data.css.strip():
+                return True
+            if not self._imported_notetypes and self._imported_notetype_css.strip():
+                return True
+        return False
+
+    def _sync_legacy_notetype_cache(self) -> None:
+        templates, css = templates_and_styling_for_editor(
+            self._imported_notetypes,
+            preferred_id=self._imported_notetype_id,
+        )
+        self._imported_card_templates = templates
+        self._imported_notetype_css = css
+
+    def _sync_include_mask_keys(self) -> None:
+        note_ids = set(self._imported_notes.keys())
+        for note_id in note_ids:
+            self._include_mask.ensure_note(note_id)
+        self._include_mask.prune_to_note_ids(note_ids)
+        type_ids = set(self._imported_notetypes.keys())
+        for notetype_id in type_ids:
+            self._include_mask.ensure_notetype(notetype_id)
+        self._include_mask.prune_to_notetype_ids(type_ids)
+
+    def _reload_include_panel(self) -> None:
+        if self._include_panel is None:
+            return
+        self._include_panel.load(
+            self._include_mask,
+            notes=self._imported_notes,
+            notetypes=self._imported_notetypes,
+        )
+
+    def _refresh_include_context_button(self) -> None:
+        self.btn_include_context.setEnabled(self._has_import_session())
+        self._apply_include_context_icon()
+        if self._include_panel is not None and self._include_panel.isVisible():
+            self._reload_include_panel()
+
+    def _open_include_panel(self) -> None:
+        if not self._has_import_session():
+            return
+        if self._include_panel is None:
+            self._include_panel = ChatIncludePanel(
+                self,
+                on_changed=self._on_include_mask_changed,
+            )
+            self._include_panel.destroyed.connect(
+                lambda *_: setattr(self, "_include_panel", None)
+            )
+        self._reload_include_panel()
+        config = load_config()
+        self._include_panel.apply_language(config)
+        self._include_panel.apply_theme()
+        self._include_panel.show()
+        self._include_panel.raise_()
+        self._include_panel.activateWindow()
+
+    def _close_include_panel(self) -> None:
+        if self._include_panel is None:
+            return
+        self._include_panel.close()
+        self._include_panel = None
+
+    def _on_include_mask_changed(self) -> None:
+        self._rebuild_note_context()
         self._apply_include_context_icon()
         self._on_body_section_visibility_changed()
+        if (
+            self._prompt_preview_dialog is not None
+            and self._prompt_preview_dialog.isVisible()
+        ):
+            self._prompt_preview_dialog.apply_context(self.build_pre_send_context())
+
+    def _apply_default_mask_for_note_import(
+        self,
+        note_ids: list[int],
+    ) -> None:
+        self._sync_include_mask_keys()
+        for note_id in note_ids:
+            if note_id in self._imported_notes:
+                self._include_mask.note_fields[note_id] = True
+        for note_id in note_ids:
+            note = self._imported_notes.get(note_id)
+            if note is None:
+                continue
+            mid = note.notetype_id
+            self._include_mask.ensure_notetype(mid)
+            # Templates/CSS stay off until chosen in the include panel.
+            self._include_mask.templates[mid] = False
+            self._include_mask.css[mid] = False
+        self._refresh_include_context_button()
+
+    def _apply_default_mask_for_notetype_import(
+        self,
+        incoming: list[ImportedNotetypeData],
+    ) -> None:
+        self._sync_include_mask_keys()
+        for data in incoming:
+            mid = data.notetype_id
+            self._include_mask.schemas[mid] = True
+            self._include_mask.templates[mid] = False
+            self._include_mask.css[mid] = False
+        self._refresh_include_context_button()
+
+    def _register_imported_notetype(
+        self,
+        data: ImportedNotetypeData,
+        *,
+        include_templates: bool = True,
+        include_css: bool = True,
+    ) -> None:
+        incoming = ImportedNotetypeData(
+            notetype_id=data.notetype_id,
+            name=data.name,
+            field_names=list(data.field_names),
+            templates=list(data.templates) if include_templates else [],
+            css=data.css if include_css else "",
+        )
+        self._imported_notetypes = merge_imported_notetypes(
+            self._imported_notetypes,
+            [incoming],
+        )
+        self._sync_legacy_notetype_cache()
+        self._sync_include_mask_keys()
 
     def _capture_session_config(self) -> None:
         config = load_config()
@@ -486,7 +681,7 @@ class ChatWindow(QWidget):
 
     def _apply_include_context_icon(self) -> None:
         icon_size = self._toolbar_icon_size()
-        if self.btn_include_context.isChecked():
+        if self._include_mask.any_selected():
             icon = brain_icon(icon_size)
         else:
             icon = barred_brain_icon(icon_size)
@@ -496,6 +691,7 @@ class ChatWindow(QWidget):
         icon_size = self._toolbar_icon_size()
         self._apply_include_context_icon()
         self._set_toolbar_icon(self.btn_edit_menu, pencil_icon(icon_size))
+        self._set_toolbar_icon(self.btn_import_notetype, import_icon(icon_size))
         self._set_toolbar_icon(self.btn_inspect_prompt, lens_icon(icon_size))
         self._set_toolbar_icon(self.btn_prompt_cache, cache_icon(icon_size))
         self._set_toolbar_icon(self.btn_note_preview, eye_icon(icon_size))
@@ -506,8 +702,9 @@ class ChatWindow(QWidget):
     def _apply_chat_toolbar_styles(self) -> None:
         icon_style = chat_toolbar_button_stylesheet(icon_only=True)
         checkable_style = chat_toolbar_button_stylesheet(icon_only=True, checkable=True)
-        self.btn_include_context.setStyleSheet(checkable_style)
+        self.btn_include_context.setStyleSheet(icon_style)
         self.btn_edit_menu.setStyleSheet(icon_style)
+        self.btn_import_notetype.setStyleSheet(icon_style)
         self.btn_inspect_prompt.setStyleSheet(icon_style)
         self.btn_prompt_cache.setStyleSheet(icon_style)
         self.btn_note_preview.setStyleSheet(icon_style)
@@ -534,7 +731,10 @@ class ChatWindow(QWidget):
         save_config(config)
 
     def _chat_effective_config(self, config: dict[str, Any] | None = None) -> dict[str, Any]:
-        return dict(config or load_config())
+        merged = dict(config or load_config())
+        merged["brain_import_templates"] = bool(self._include_mask.selected_template_ids())
+        merged["brain_import_css"] = bool(self._include_mask.selected_css_ids())
+        return merged
 
     def _refresh_prompt_cache_toolbar_tooltip(self, config: dict[str, Any] | None = None) -> None:
         config = config or load_config()
@@ -589,7 +789,7 @@ class ChatWindow(QWidget):
     def build_pre_send_context(self) -> PreSendPromptContext:
         config = self._chat_effective_config()
         user_text = self.input_field.toPlainText().strip()
-        included_context = bool(self.btn_include_context.isChecked() and self.note_context)
+        included_context = self._include_context_active()
         cache_session = self._prompt_cache_session(config, included_context=included_context)
         bundle = build_prompt_cache_bundle(config, purpose="chat", session=cache_session)
         if bundle is not None:
@@ -638,9 +838,18 @@ class ChatWindow(QWidget):
         self.apply_language()
         self._update_settings_stale_banner(config)
         show_newlines = bool(config.get("settings_show_text_newlines", False))
+        wrap = bool(config.get("settings_wrap_text_editors", True))
         refresh_settings_text_edit_newlines(self, show_newlines)
+        refresh_text_edit_wrap(self, wrap)
         if self._note_edit_window is not None:
             self._note_edit_window.apply_newline_visibility(show_newlines)
+            refresh_text_edit_wrap(self._note_edit_window, wrap)
+        if self._wrapper_edit_window is not None:
+            refresh_text_edit_wrap(self._wrapper_edit_window, wrap)
+        if self._templates_edit_window is not None:
+            refresh_text_edit_wrap(self._templates_edit_window, wrap)
+        if self._note_preview_window is not None:
+            refresh_text_edit_wrap(self._note_preview_window, wrap)
         if (
             self._prompt_preview_dialog is not None
             and self._prompt_preview_dialog.isVisible()
@@ -662,6 +871,8 @@ class ChatWindow(QWidget):
             self._wrapper_edit_window.apply_theme()
         if self._templates_edit_window is not None:
             self._templates_edit_window.apply_theme()
+        if self._include_panel is not None:
+            self._include_panel.apply_theme()
         if self._note_preview_window is not None:
             self._note_preview_window.apply_theme()
         refresh_native_text_edits_in(self)
@@ -679,6 +890,10 @@ class ChatWindow(QWidget):
         set_instruction_tooltip(
             self.btn_edit_menu,
             tr("chat.edit.menu.tooltip", config=config),
+        )
+        set_instruction_tooltip(
+            self.btn_import_notetype,
+            tr("chat.import_notetype.tooltip", config=config),
         )
         self._refresh_edit_menu_actions(config)
         set_instruction_tooltip(
@@ -727,45 +942,81 @@ class ChatWindow(QWidget):
             self._wrapper_edit_window.apply_language(config)
         if self._templates_edit_window is not None:
             self._templates_edit_window.apply_language(config)
+        if self._include_panel is not None:
+            self._include_panel.apply_language(config)
 
     def _refresh_edit_menu_actions(self, config: dict[str, Any] | None = None) -> None:
         config = config or load_config()
-        has_note = bool(self._imported_fields)
-        can_edit_templates = bool(self._imported_card_templates) or bool(
-            self._imported_notetype_css.strip()
-        )
+        has_note = bool(self._imported_notes)
+        can_edit_templates = self._has_imported_templates_or_styling()
+        has_context = self._has_sendable_context()
         self._edit_note_action.setText(tr("chat.edit_note", config=config))
         self._edit_wrapper_action.setText(tr("chat.edit_wrapper", config=config))
         self._edit_templates_action.setText(tr("chat.edit_templates", config=config))
         self._edit_note_action.setEnabled(has_note)
-        self._edit_wrapper_action.setEnabled(has_note)
+        self._edit_wrapper_action.setEnabled(has_context)
         self._edit_templates_action.setEnabled(can_edit_templates)
-        self.btn_edit_menu.setEnabled(has_note)
+        self.btn_edit_menu.setEnabled(has_note or has_context)
 
     def _preview_fields_provider(self) -> list[tuple[str, str]]:
         config = load_config()
-        return fields_for_note_preview(self._imported_fields, config)
+        note_id = self._preview_note_id
+        if note_id is None:
+            return []
+        note = self._imported_notes.get(note_id)
+        if note is None:
+            return []
+        return fields_for_note_preview(note.fields, config)
+
+    def _preview_notetype_id_provider(self) -> int | None:
+        note_id = self._preview_note_id
+        if note_id is None:
+            return None
+        note = self._imported_notes.get(note_id)
+        return note.notetype_id if note is not None else None
 
     def _close_note_preview_window(self) -> None:
         if self._note_preview_window is None:
             return
         self._note_preview_window.close()
         self._note_preview_window = None
+        self._preview_note_id = None
 
     def _open_note_preview_window(self) -> None:
-        if not self._imported_fields:
+        if not self._imported_notes:
             return
+        config = load_config()
+        note_id = pick_imported_note(
+            self,
+            self._imported_notes,
+            config=config,
+            purpose="preview",
+        )
+        if note_id is None:
+            return
+        self._preview_note_id = note_id
+        note = self._imported_notes[note_id]
         if self._note_preview_window is None:
             self._note_preview_window = ImportedNotePreviewWindow(
                 self,
                 field_provider=self._preview_fields_provider,
-                notetype_id_provider=lambda: self._imported_notetype_id,
+                notetype_id_provider=self._preview_notetype_id_provider,
             )
             self._note_preview_window.destroyed.connect(
-                lambda *_: setattr(self, "_note_preview_window", None)
+                lambda *_: (
+                    setattr(self, "_note_preview_window", None),
+                    setattr(self, "_preview_note_id", None),
+                )
             )
-        config = load_config()
         self._note_preview_window.apply_language(config)
+        if note.display_label():
+            self._note_preview_window.setWindowTitle(
+                tr(
+                    "chat.preview.window_title_named",
+                    config=config,
+                    name=note.display_label(),
+                )
+            )
         self._note_preview_window.apply_theme()
         self._note_preview_window.refresh()
         self._note_preview_window.show()
@@ -922,7 +1173,7 @@ class ChatWindow(QWidget):
     def _conversation_has_clearable_content(self) -> bool:
         if self.api_history:
             return True
-        if self.note_context or self._imported_fields:
+        if self.note_context or self._imported_notes or self._imported_notetypes:
             return True
         return any(
             message.label_class in ("chat-label-you", "chat-label-gemini")
@@ -1077,19 +1328,21 @@ class ChatWindow(QWidget):
             self._cancel_in_flight_request()
         self.api_history.clear()
         self.note_context = None
-        self._imported_fields = []
+        self._imported_notes = {}
+        self._imported_notetypes = {}
         self._imported_card_templates = []
         self._imported_notetype_css = ""
         self._imported_notetype_id = None
-        self._imported_note_id = None
+        self._preview_note_id = None
+        self._include_mask = IncludeNextMessageMask()
         self._pending_apply_batch = None
         self._session_wrapper_override = None
         self._messages.clear()
         self._copy_blocks.clear()
         self._stream_visible = False
         self._streaming_message_index = None
-        self.btn_include_context.setChecked(False)
         self.btn_include_context.setEnabled(False)
+        self._apply_include_context_icon()
         self.btn_edit_menu.setEnabled(False)
         self._close_session_edit_windows()
         self._on_body_section_visibility_changed()
@@ -1105,63 +1358,208 @@ class ChatWindow(QWidget):
         self._capture_session_config()
 
     def import_note_from_editor(self, editor) -> None:
-        config = load_config()
-        import_cache_choice = confirm_import_note_cache_if_needed(self, config)
-        if import_cache_choice == "abort":
-            return
         note = editor.note
-        imported_fields: list[tuple[str, str]] = list(note.items())
-
-        if not any(value.strip() for _, value in imported_fields):
+        imported = imported_note_from_anki_note(note)
+        config = load_config()
+        if imported is None:
             self._add_system_message(
                 tr("chat.note_empty", config=config),
                 kind="error",
                 label=tr("chat.label.system", config=config),
             )
             return
+        self.import_notes([imported], set_brain_message=True)
 
-        self._imported_fields = imported_fields
-        self._imported_notetype_id = note.mid
-        self._imported_note_id = note.id
+    def import_notes_by_ids(self, note_ids: list[int]) -> None:
+        config = load_config()
+        if mw.col is None:
+            return
+        incoming: list[ImportedNoteData] = []
+        empty_count = 0
+        for note_id in note_ids:
+            try:
+                note = mw.col.get_note(note_id)
+            except Exception:
+                continue
+            imported = imported_note_from_anki_note(note)
+            if imported is None:
+                empty_count += 1
+                continue
+            incoming.append(imported)
+        if not incoming:
+            showWarning(
+                tr("chat.import_notes.empty_selection", config=config),
+                parent=self,
+            )
+            return
+        self.import_notes(incoming, set_brain_message=True)
+        if empty_count:
+            self._add_system_message(
+                tr(
+                    "chat.import_notes.skipped_empty",
+                    config=config,
+                    count=empty_count,
+                ),
+                kind="system",
+                label=tr("chat.label.system", config=config),
+            )
+
+    def import_notes(
+        self,
+        notes: list[ImportedNoteData],
+        *,
+        set_brain_message: bool = False,
+    ) -> None:
+        if not notes:
+            return
+        config = load_config()
+        import_cache_choice = confirm_import_note_cache_if_needed(self, config)
+        if import_cache_choice == "abort":
+            return
+
+        self._imported_notes = merge_imported_notes(self._imported_notes, notes)
+        self._imported_notetype_id = notes[-1].notetype_id
         self._pending_apply_batch = None
-        raw_templates, raw_css = extract_notetype_context(note)
-        self._imported_card_templates = raw_templates
-        self._imported_notetype_css = raw_css
-        self.note_context = format_note_context(imported_fields, config)
+
+        for note in notes:
+            notetype_data = imported_notetype_from_id(note.notetype_id)
+            if notetype_data is None:
+                notetype_data = ImportedNotetypeData(
+                    notetype_id=note.notetype_id,
+                    name=note.notetype_name,
+                    field_names=[name for name, _value in note.fields],
+                )
+            elif not note.notetype_name and notetype_data.name:
+                note.notetype_name = notetype_data.name
+            self._register_imported_notetype(
+                notetype_data,
+                include_templates=True,
+                include_css=True,
+            )
+
+        # Refresh labels after notetype names are known.
+        refreshed: list[ImportedNoteData] = []
+        for note in notes:
+            current = self._imported_notes.get(note.note_id, note)
+            type_data = self._imported_notetypes.get(current.notetype_id)
+            name = (
+                (type_data.name if type_data is not None else "")
+                or current.notetype_name
+            )
+            refreshed.append(
+                ImportedNoteData(
+                    note_id=current.note_id,
+                    notetype_id=current.notetype_id,
+                    notetype_name=name,
+                    fields=list(current.fields),
+                )
+            )
+        self._imported_notes = merge_imported_notes(self._imported_notes, refreshed)
+
         self._session_wrapper_override = None
         if import_cache_choice == "proceed":
             clear_prompt_cache(config=config, purpose="chat")
-        self.btn_include_context.setEnabled(True)
-        self.btn_include_context.setChecked(True)
+        self._apply_default_mask_for_note_import([note.note_id for note in notes])
+        self._rebuild_note_context(config)
         self._close_session_edit_windows()
         self._refresh_import_controls(config)
+        if len(notes) == 1:
+            message = tr("chat.note_imported", config=config)
+        else:
+            message = tr(
+                "chat.notes_imported",
+                config=config,
+                count=len(notes),
+            )
         self._add_system_message(
-            tr("chat.note_imported", config=config),
+            message,
             kind="system",
             label=tr("chat.label.system", config=config),
         )
 
         self.btn_note_preview.setEnabled(True)
         self._on_body_section_visibility_changed()
+        if set_brain_message:
+            self.input_field.setPlainText(effective_brain_import_message(config))
+        self.input_field.setFocus()
 
-        self.input_field.setPlainText(effective_brain_import_message(config))
+    def _open_notetype_import_dialog(self) -> None:
+        config = load_config()
+        import_cache_choice = confirm_import_note_cache_if_needed(self, config)
+        if import_cache_choice == "abort":
+            return
+        selection = confirm_notetype_import(self, config=config)
+        if selection is None:
+            return
+        incoming: list[ImportedNotetypeData] = []
+        for notetype_id in selection.notetype_ids:
+            data = imported_notetype_from_id(
+                notetype_id,
+                include_templates=selection.include_templates,
+                include_css=selection.include_css,
+            )
+            if data is not None:
+                incoming.append(data)
+        if not incoming:
+            return
+        self._imported_notetypes = merge_imported_notetypes(
+            self._imported_notetypes,
+            incoming,
+        )
+        self._sync_legacy_notetype_cache()
+        self._pending_apply_batch = None
+        if import_cache_choice == "proceed":
+            clear_prompt_cache(config=config, purpose="chat")
+        self._apply_default_mask_for_notetype_import(incoming)
+        self._rebuild_note_context(config)
+        self._close_session_edit_windows()
+        self._refresh_import_controls(load_config())
+        names = ", ".join(data.name for data in incoming)
+        self._add_system_message(
+            tr(
+                "chat.import_notetype.imported",
+                config=config,
+                count=len(incoming),
+                names=names,
+            ),
+            kind="system",
+            label=tr("chat.label.system", config=config),
+        )
+        self._configure_chat_default_buttons()
+        self._on_body_section_visibility_changed()
         self.input_field.setFocus()
 
     def _refresh_import_controls(self, config: dict[str, Any]) -> None:
-        can_edit_templates = bool(self._imported_card_templates) or bool(
-            self._imported_notetype_css.strip()
-        )
-        if not can_edit_templates:
+        if not self._has_imported_templates_or_styling():
             self._close_templates_edit_window()
         self._refresh_edit_menu_actions(config)
 
-    def _rebuild_note_context(self) -> None:
-        if not self._imported_fields:
-            self.note_context = None
-            return
-        config = load_config()
-        context = format_note_context(self._imported_fields, config)
-        self.note_context = context or None
+    def _rebuild_note_context(self, config: dict[str, Any] | None = None) -> None:
+        config = config or load_config()
+        self.note_context = self._context_for_message(config) or None
+
+    def _context_for_message(self, config: dict[str, Any]) -> str:
+        parts: list[str] = []
+        selected_note_ids = set(self._include_mask.selected_note_ids())
+        if selected_note_ids:
+            field_context = format_imported_notes_context(
+                self._imported_notes,
+                config,
+                include_note_ids=selected_note_ids,
+            )
+            if field_context:
+                parts.append(field_context)
+        selected_schema_ids = set(self._include_mask.selected_schema_ids())
+        if selected_schema_ids:
+            selected = [
+                data
+                for data in self._imported_notetypes.values()
+                if data.notetype_id in selected_schema_ids
+            ]
+            schema_block = format_notetype_schemas_block(selected, config=config)
+            if schema_block:
+                parts.append(schema_block)
+        return "\n\n".join(parts)
 
     def _commit_open_session_editors(self) -> None:
         if self._note_edit_window is not None and self._note_edit_window.isVisible():
@@ -1199,9 +1597,9 @@ class ChatWindow(QWidget):
     ) -> PromptCacheSessionContext:
         override = self._session_wrapper_override
         return PromptCacheSessionContext(
-            note_context=self.note_context or "",
-            templates_block=self._templates_for_message(config),
-            styling_block=self._styling_for_message(config),
+            note_context=self._context_for_message(config) if included_context else "",
+            templates_block=self._templates_for_message(config) if included_context else "",
+            styling_block=self._styling_for_message(config) if included_context else "",
             include_note_context=included_context,
             wrapper_section_order=list(override["order"]) if override else None,
             wrapper_section_prefixes=dict(override.get("sections") or {}) if override else None,
@@ -1209,13 +1607,14 @@ class ChatWindow(QWidget):
         )
 
     def _build_outgoing_payload(self, config: dict[str, Any], user_text: str) -> str:
-        included = bool(self.btn_include_context.isChecked() and self.note_context)
+        included = self._include_context_active()
         if included:
             self._commit_open_session_editors()
-            self._rebuild_note_context()
+            self._rebuild_note_context(config)
+        context = self._context_for_message(config) if included else ""
         return format_chat_context_message(
             config,
-            context=self.note_context or "",
+            context=context,
             request=user_text,
             templates=self._templates_for_message(config) if included else "",
             styling=self._styling_for_message(config) if included else "",
@@ -1246,37 +1645,83 @@ class ChatWindow(QWidget):
         return box.exec() == QMessageBox.StandardButton.Ok
 
     def _templates_for_message(self, config: dict[str, Any]) -> str:
-        if not config.get("brain_import_templates", False):
+        selected_ids = set(self._include_mask.selected_template_ids())
+        if not selected_ids:
             return ""
+        if self._imported_notetypes:
+            return format_imported_notetype_templates(
+                self._imported_notetypes,
+                config,
+                include_notetype_ids=selected_ids,
+            )
         if not self._imported_card_templates:
             return ""
         return format_card_templates_block(self._imported_card_templates, config)
 
     def _styling_for_message(self, config: dict[str, Any]) -> str:
-        if not config.get("brain_import_css", False):
+        selected_ids = set(self._include_mask.selected_css_ids())
+        if not selected_ids:
             return ""
+        if self._imported_notetypes:
+            return format_imported_notetype_styling(
+                self._imported_notetypes,
+                config,
+                include_notetype_ids=selected_ids,
+            )
         return self._imported_notetype_css.strip()
 
     def _open_templates_edit_window(self) -> None:
         config = load_config()
-        if self._templates_edit_window is None:
-            self._templates_edit_window = ChatTemplatesEditWindow(
-                self,
-                on_save=self._apply_templates_edit,
-                on_include_changed=lambda: self._refresh_import_controls(load_config()),
+        candidates = editable_templates_notetypes(self._imported_notetypes)
+        notetype_id: int | None = None
+        notetype_name: str | None = None
+        templates: list[CardTemplateData] = []
+        styling = ""
+
+        if candidates:
+            notetype_id = pick_templates_notetype(self, candidates, config=config)
+            if notetype_id is None:
+                return
+            data = self._imported_notetypes[notetype_id]
+            notetype_name = data.name
+            templates = list(data.templates)
+            styling = data.css
+        else:
+            templates = list(self._imported_card_templates)
+            styling = self._imported_notetype_css
+
+        if not templates and not styling.strip():
+            showWarning(tr("chat.edit_templates.empty", config=config), parent=self)
+            return
+        try:
+            if self._templates_edit_window is None:
+                self._templates_edit_window = ChatTemplatesEditWindow(
+                    self,
+                    on_save=self._apply_templates_edit,
+                )
+                self._templates_edit_window.destroyed.connect(
+                    lambda *_: setattr(self, "_templates_edit_window", None)
+                )
+            self._templates_edit_window.load(
+                templates,
+                styling,
+                notetype_id=notetype_id,
+                notetype_name=notetype_name,
             )
-            self._templates_edit_window.destroyed.connect(
-                lambda *_: setattr(self, "_templates_edit_window", None)
+            self._templates_edit_window.apply_language(config)
+            self._templates_edit_window.apply_theme()
+            self._templates_edit_window.show()
+            self._templates_edit_window.raise_()
+            self._templates_edit_window.activateWindow()
+        except Exception as exc:
+            showWarning(
+                tr(
+                    "chat.edit_templates.open_failed",
+                    config=config,
+                    error=str(exc),
+                ),
+                parent=self,
             )
-        self._templates_edit_window.load(
-            self._imported_card_templates,
-            self._imported_notetype_css,
-        )
-        self._templates_edit_window.apply_language(config)
-        self._templates_edit_window.apply_theme()
-        self._templates_edit_window.show()
-        self._templates_edit_window.raise_()
-        self._templates_edit_window.activateWindow()
 
     def _close_templates_edit_window(self) -> None:
         if self._templates_edit_window is None:
@@ -1288,12 +1733,37 @@ class ChatWindow(QWidget):
         self,
         templates: list[CardTemplateData],
         styling: str,
+        notetype_id: int | None = None,
     ) -> None:
-        self._imported_card_templates = list(templates)
-        self._imported_notetype_css = styling
+        target_id = notetype_id
+        if target_id is None or target_id not in self._imported_notetypes:
+            target_id = primary_templates_notetype_id(
+                self._imported_notetypes,
+                preferred_id=self._imported_notetype_id,
+            )
+        if target_id is not None and target_id in self._imported_notetypes:
+            current = self._imported_notetypes[target_id]
+            resolved_name = current.name
+            saved_templates = [
+                CardTemplateData(
+                    name=item.name,
+                    front=item.front,
+                    back=item.back,
+                    notetype_name=(item.notetype_name or "").strip() or resolved_name,
+                )
+                for item in templates
+            ]
+            self._imported_notetypes[target_id] = ImportedNotetypeData(
+                notetype_id=current.notetype_id,
+                name=current.name,
+                field_names=list(current.field_names),
+                templates=saved_templates,
+                css=styling,
+            )
+        self._sync_legacy_notetype_cache()
 
     def _open_wrapper_edit_window(self) -> None:
-        config = load_config()
+        config = self._chat_effective_config()
         if self._wrapper_edit_window is None:
             self._wrapper_edit_window = ChatWrapperEditWindow(
                 self,
@@ -1316,8 +1786,18 @@ class ChatWindow(QWidget):
         self._wrapper_edit_window = None
 
     def _open_note_edit_window(self) -> None:
-        if not self._imported_fields:
+        if not self._imported_notes:
             return
+        config = load_config()
+        note_id = pick_imported_note(
+            self,
+            self._imported_notes,
+            config=config,
+            purpose="edit",
+        )
+        if note_id is None:
+            return
+        note = self._imported_notes[note_id]
         if self._note_edit_window is None:
             self._note_edit_window = ChatNoteEditWindow(
                 self,
@@ -1326,8 +1806,11 @@ class ChatWindow(QWidget):
             self._note_edit_window.destroyed.connect(
                 lambda *_: setattr(self, "_note_edit_window", None)
             )
-        self._note_edit_window.load_fields(self._imported_fields)
-        config = load_config()
+        self._note_edit_window.load_fields(
+            note.fields,
+            note_id=note.note_id,
+            note_label=note.display_label(),
+        )
         self._note_edit_window.apply_language(config)
         self._note_edit_window.apply_theme()
         self._note_edit_window.show()
@@ -1344,18 +1827,31 @@ class ChatWindow(QWidget):
         self,
         fields: list[tuple[str, str]],
         send_empty_fields: bool,
+        note_id: int | None = None,
     ) -> None:
         config = load_config()
         config["chat_send_empty_fields"] = bool(send_empty_fields)
         save_config(config)
-        self._imported_fields = list(fields)
+        if note_id is None or note_id not in self._imported_notes:
+            return
+        current = self._imported_notes[note_id]
+        self._imported_notes[note_id] = ImportedNoteData(
+            note_id=current.note_id,
+            notetype_id=current.notetype_id,
+            notetype_name=current.notetype_name,
+            fields=list(fields),
+        )
         self._rebuild_note_context()
-        self._refresh_note_preview_if_open()
+        if self._preview_note_id == note_id:
+            self._refresh_note_preview_if_open()
+        if self._include_panel is not None and self._include_panel.isVisible():
+            self._reload_include_panel()
 
     def _close_session_edit_windows(self) -> None:
         self._close_note_edit_window()
         self._close_wrapper_edit_window()
         self._close_templates_edit_window()
+        self._close_include_panel()
 
     def _apply_wrapper_edit(
         self,
@@ -1455,60 +1951,68 @@ class ChatWindow(QWidget):
             return
 
         config = self._chat_effective_config()
-        pre_send_context = self.build_pre_send_context()
-        included_context = bool(self.btn_include_context.isChecked() and self.note_context)
-        payload_text = pre_send_context.outgoing_payload
-        system_instruction = pre_send_context.system_instruction
-        bundle = pre_send_context.bundle
-        cache_session = pre_send_context.cache_session
-        pre_send_overrides = None
-        if bool(config.get("chat_modify_prompt_before_send", False)):
-            pre_send_overrides = confirm_pre_send_prompt(
+        try:
+            pre_send_context = self.build_pre_send_context()
+            included_context = self._include_context_active()
+            payload_text = pre_send_context.outgoing_payload
+            system_instruction = pre_send_context.system_instruction
+            bundle = pre_send_context.bundle
+            cache_session = pre_send_context.cache_session
+            pre_send_overrides = None
+            if bool(config.get("chat_modify_prompt_before_send", False)):
+                pre_send_overrides = confirm_pre_send_prompt(
+                    self,
+                    context=pre_send_context,
+                )
+                if pre_send_overrides is None:
+                    return
+                payload_text = pre_send_overrides.outgoing_payload
+                system_instruction = pre_send_overrides.system_instruction
+                if pre_send_overrides.bundle is not None:
+                    bundle = pre_send_overrides.bundle
+            cache_choice = confirm_prompt_cache_recreate_if_needed(
                 self,
-                context=pre_send_context,
-            )
-            if pre_send_overrides is None:
-                return
-            payload_text = pre_send_overrides.outgoing_payload
-            system_instruction = pre_send_overrides.system_instruction
-            if pre_send_overrides.bundle is not None:
-                bundle = pre_send_overrides.bundle
-        cache_choice = confirm_prompt_cache_recreate_if_needed(
-            self,
-            config,
-            bundle,
-            purpose="chat",
-        )
-        if cache_choice == "abort":
-            return
-        allow_cache_create = (
-            cache_choice != "skip_cache"
-            and prompt_cache_enabled(config, "chat")
-        )
-        allow_cache_use = cache_choice != "skip_cache"
-        if bundle is not None and not allow_cache_use:
-            system_instruction, payload_text = flatten_bundle_for_live_send(
                 config,
                 bundle,
                 purpose="chat",
-                include_meta_rule=True,
-                system_instruction_override=(
-                    system_instruction if pre_send_overrides is not None else None
-                ),
-                outgoing_payload_override=(
-                    payload_text if pre_send_overrides is not None else None
-                ),
-                user_text=user_text,
-                session=cache_session,
             )
-        max_turns = int(config.get("max_history_turns", 10))
-        history_for_request = trim_history(self.api_history, max_turns)
-        char_count = estimate_chat_request_chars(
-            payload_text,
-            history_for_request,
-            system_instruction=system_instruction,
-        )
-        if not self._confirm_large_chat_payload(config, char_count):
+            if cache_choice == "abort":
+                return
+            allow_cache_create = (
+                cache_choice != "skip_cache"
+                and prompt_cache_enabled(config, "chat")
+            )
+            allow_cache_use = cache_choice != "skip_cache"
+            if bundle is not None and not allow_cache_use:
+                system_instruction, payload_text = flatten_bundle_for_live_send(
+                    config,
+                    bundle,
+                    purpose="chat",
+                    include_meta_rule=True,
+                    system_instruction_override=(
+                        system_instruction if pre_send_overrides is not None else None
+                    ),
+                    outgoing_payload_override=(
+                        payload_text if pre_send_overrides is not None else None
+                    ),
+                    user_text=user_text,
+                    session=cache_session,
+                )
+            max_turns = int(config.get("max_history_turns", 10))
+            history_for_request = trim_history(self.api_history, max_turns)
+            char_count = estimate_chat_request_chars(
+                payload_text,
+                history_for_request,
+                system_instruction=system_instruction,
+            )
+            if not self._confirm_large_chat_payload(config, char_count):
+                return
+        except Exception as exc:
+            showWarning(
+                tr("chat.send_failed", config=config, error=str(exc)),
+                parent=self,
+            )
+            self._configure_chat_default_buttons()
             return
 
         safe_html = html.escape(user_text).replace("\n", "<br>")
@@ -1523,70 +2027,79 @@ class ChatWindow(QWidget):
         self._restorable_user_text = user_text
         self.input_field.clear()
         self._begin_request()
-        self._close_session_edit_windows()
+        try:
+            self._close_session_edit_windows()
 
-        if not api_key_configured(config):
-            self._add_system_message(
-                tr("chat.api_key_missing", config=config),
-                kind="error",
-                label=tr("chat.label.system", config=config),
-            )
-            self._end_request()
-            return
+            if not api_key_configured(config):
+                self._add_system_message(
+                    tr("chat.api_key_missing", config=config),
+                    kind="error",
+                    label=tr("chat.label.system", config=config),
+                )
+                self._end_request()
+                return
 
-        if included_context:
-            self.btn_include_context.setChecked(False)
+            if included_context:
+                self._include_mask.clear_selections()
+                self._refresh_include_context_button()
+                self._rebuild_note_context(config)
 
-        self.api_history.append({"role": "user", "parts": [{"text": payload_text}]})
-        history_for_request = trim_history(self.api_history[:-1], max_turns)
-        temperature = float(config.get("temperature_chat", 0.2))
-        use_streaming = bool(config.get("chat_streaming", False))
-        cancel_check = self._cancel_event.is_set
-        register_response = self._register_active_response
-        self._request_token += 1
-        request_token = self._request_token
-        request_kwargs = {
-            "config": config,
-            "user_text": user_text,
-            "history": history_for_request,
-            "temperature": temperature,
-            "include_meta_rule": True,
-            "cache_session": cache_session,
-            "allow_prompt_cache_create": allow_cache_create,
-            "allow_prompt_cache_use": allow_cache_use,
-            "on_prompt_cache_created": self._schedule_prompt_cache_created_notice,
-            "should_cancel": cancel_check,
-            "register_response": register_response,
-        }
-        if pre_send_overrides is not None or (not allow_cache_use and bundle is not None):
-            request_kwargs["override_outgoing_payload"] = payload_text
-            request_kwargs["override_system_instruction"] = system_instruction
-            if allow_cache_use and bundle is not None:
-                request_kwargs["override_bundle"] = bundle
+            self.api_history.append({"role": "user", "parts": [{"text": payload_text}]})
+            history_for_request = trim_history(self.api_history[:-1], max_turns)
+            temperature = float(config.get("temperature_chat", 0.2))
+            use_streaming = bool(config.get("chat_streaming", False))
+            cancel_check = self._cancel_event.is_set
+            register_response = self._register_active_response
+            self._request_token += 1
+            request_token = self._request_token
+            request_kwargs = {
+                "config": config,
+                "user_text": user_text,
+                "history": history_for_request,
+                "temperature": temperature,
+                "include_meta_rule": True,
+                "cache_session": cache_session,
+                "allow_prompt_cache_create": allow_cache_create,
+                "allow_prompt_cache_use": allow_cache_use,
+                "on_prompt_cache_created": self._schedule_prompt_cache_created_notice,
+                "should_cancel": cancel_check,
+                "register_response": register_response,
+            }
+            if pre_send_overrides is not None or (not allow_cache_use and bundle is not None):
+                request_kwargs["override_outgoing_payload"] = payload_text
+                request_kwargs["override_system_instruction"] = system_instruction
+                if allow_cache_use and bundle is not None:
+                    request_kwargs["override_bundle"] = bundle
 
-        if use_streaming:
-            self._stream_visible = False
-            self._start_loading()
-            mw.taskman.run_in_background(
-                lambda: stream_gemini(
-                    **request_kwargs,
-                    on_chunk=lambda text: mw.taskman.run_on_main(
-                        lambda accumulated=text: self._handle_stream_chunk_safe(accumulated)
+            if use_streaming:
+                self._stream_visible = False
+                self._start_loading()
+                mw.taskman.run_in_background(
+                    lambda: stream_gemini(
+                        **request_kwargs,
+                        on_chunk=lambda text: mw.taskman.run_on_main(
+                            lambda accumulated=text: self._handle_stream_chunk_safe(accumulated)
+                        ),
                     ),
+                    lambda future, token=request_token: self._handle_response(future, token),
+                )
+                return
+
+            self._start_loading()
+
+            mw.taskman.run_in_background(
+                lambda: call_gemini(
+                    **request_kwargs,
+                    purpose="chat",
                 ),
                 lambda future, token=request_token: self._handle_response(future, token),
             )
-            return
-
-        self._start_loading()
-
-        mw.taskman.run_in_background(
-            lambda: call_gemini(
-                **request_kwargs,
-                purpose="chat",
-            ),
-            lambda future, token=request_token: self._handle_response(future, token),
-        )
+        except Exception as exc:
+            showWarning(
+                tr("chat.send_failed", config=config, error=str(exc)),
+                parent=self,
+            )
+            self._end_request()
 
     def _handle_stream_chunk_safe(self, accumulated: str) -> None:
         if self._closing or self._cancel_event.is_set():
@@ -1885,6 +2398,26 @@ def open_chat(editor=None, analyze: bool = False) -> None:
     window._focus_chat_input()
     if analyze and editor:
         window.import_note_from_editor(editor)
+
+
+def import_selected_browser_notes(browser) -> None:
+    config = load_config()
+    note_ids: list[int] = []
+    try:
+        if hasattr(browser, "selected_notes"):
+            note_ids = [int(nid) for nid in browser.selected_notes()]
+        else:
+            note_ids = [int(nid) for nid in browser.selectedNotes()]
+    except Exception:
+        note_ids = []
+    if not note_ids:
+        showWarning(tr("chat.import_notes.none_selected", config=config), parent=browser)
+        return
+    window = get_chat_window()
+    window.show()
+    window.raise_()
+    window.activateWindow()
+    window.import_notes_by_ids(note_ids)
 
 
 def close_chat_window(*, force: bool = False) -> None:

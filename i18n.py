@@ -58,8 +58,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Undo the last Gemini optimization on this note",
     },
     "editor.tip.analyze_note": {
-        "it": "Importa TUTTI i campi della nota in chat per analizzarla",
-        "en": "Import ALL note fields into chat for analysis",
+        "it": "Aggiungi TUTTI i campi della nota alla chat (si accumulano nella sessione)",
+        "en": "Add ALL note fields to chat (accumulates in this session)",
     },
     "editor.tip.chat": {
         "it": "Apri o porta in primo piano la Chat con Gemini (Ctrl+Alt+C)",
@@ -76,6 +76,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "menu.tools.dev_playground": {
         "it": "Anki AI: Dev playground",
         "en": "Anki AI: Dev playground",
+    },
+    "browser.import_notes_to_chat": {
+        "it": "Anki AI: Importa note selezionate in chat",
+        "en": "Anki AI: Import selected notes to chat",
     },
     # Settings dialog
     "settings.title": {
@@ -216,6 +220,20 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": (
             "Shows a ¶ marker at the end of each line so you can tell real line breaks "
             "from automatic word wrap."
+        ),
+    },
+    "settings.wrap_text_editors": {
+        "it": "Avvolgi il testo nelle caselle",
+        "en": "Wrap text in editors",
+    },
+    "settings.wrap_text_editors.hint": {
+        "it": (
+            "Se attivo, le righe lunghe vanno a capo nella casella. "
+            "Se disattivo, scorri in orizzontale per vedere tutto il testo."
+        ),
+        "en": (
+            "When on, long lines wrap inside the editor. "
+            "When off, scroll horizontally to see the full line."
         ),
     },
     "settings.brain_message": {
@@ -1209,13 +1227,13 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.help.chat_toolbar_icons": {
         "it": (
             "La barra in alto nella chat usa icone compatte; passa il mouse per i suggerimenti.<br><br>"
-            "<b>{icon:brain} Import toggle</b> — Pulsante: include o esclude la nota importata nel prossimo messaggio "
-            "({icon:brain} = inclusa, {icon:barred_brain} = esclusa).<br>"
+            "<b>{icon:brain} Import toggle</b> — Pulsante: apre le scelte di cosa includere nel prossimo messaggio "
+            "(note e tipi di nota importati).<br>"
             "<b>Edit menu</b> — {icon:pencil} menu: modifica nota, wrapper contesto o template (solo sessione).<br>"
-            "<b>Preview</b> — {icon:eye}: apre l'anteprima della nota importata in una finestra separata.<br>"
+            "<b>Preview</b> — {icon:eye}: apre l'anteprima di una nota importata in una finestra separata.<br>"
             "<b>Inspect</b> — {icon:lens}: anteprima del prompt completo adesso, senza inviare.<br>"
-            "<b>Cache prompt</b> — {icon:cache}: impostazioni cache solo sessione (creazione, TTL, segmenti, testo custom). "
-            "I default seguono Impostazioni → Cache prompt.<br>"
+            "<b>Cache prompt</b> — {icon:cache}: impostazioni cache salvate in configurazione "
+            "(abilitazione, TTL, segmenti, testo custom). Il contenuto della cache attiva segue la sessione chat.<br>"
             "<b>Stop / precedenza</b> — Pulsante commutabile: {icon:stop} = revisione pre-invio "
             "prima di Gemini; {icon:priority} = invio diretto.<br>"
             "<b>Download</b> — {icon:download}: salva la conversazione corrente come file di testo (.txt). "
@@ -1225,13 +1243,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
         "en": (
             "The chat toolbar uses compact icons; hover for tooltips.<br><br>"
-            "<b>{icon:brain} Import toggle</b> — Button: include or exclude the imported note from the next message "
-            "({icon:brain} = included, {icon:barred_brain} = excluded).<br>"
+            "<b>{icon:brain} Import toggle</b> — Button: open choices for what to include in the next message "
+            "(imported notes and note types).<br>"
             "<b>Edit menu</b> — {icon:pencil} menu: edit note, context wrapper, or templates (session only).<br>"
-            "<b>Preview</b> — {icon:eye}: open the imported note preview in a separate window.<br>"
+            "<b>Preview</b> — {icon:eye}: open an imported note preview in a separate window.<br>"
             "<b>Inspect</b> — {icon:lens}: read-only preview of the full prompt now, without sending.<br>"
-            "<b>Prompt cache</b> — {icon:cache}: session-only cache settings (creation toggle, TTL, segments, custom text). "
-            "Defaults follow Settings → Prompt cache.<br>"
+            "<b>Prompt cache</b> — {icon:cache}: cache settings saved to your configuration "
+            "(enable, TTL, segments, custom text). Active cache content follows the current chat session.<br>"
             "<b>Stop / priority</b> — Toggle: {icon:stop} = pre-send review before Gemini; "
             "{icon:priority} = send directly.<br>"
             "<b>Download</b> — {icon:download} menu: save the conversation as plain text to "
@@ -1829,14 +1847,16 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
     "settings.help.brain_import_message": {
         "it": (
-            "Quando clicchi {icon:brain} nell'editor, l'add-on importa tutti i campi della nota in chat e inserisce "
+            "Quando clicchi {icon:brain} nell'editor, l'add-on aggiunge tutti i campi della nota in chat "
+            "(si accumulano con altre note già importate nella sessione) e inserisce "
             "questo testo nella casella di input. I campi compaiono nella finestra di anteprima nota "
             "({icon:eye}); modificali con <b>Modifica nota</b> dal menu {icon:pencil} <b>Modifica</b>. "
             "Puoi personalizzarlo per chiedere sempre la stessa analisi (es. atomicità, semplificazione). "
             "Lascia il predefinito per il messaggio standard nella lingua scelta."
         ),
         "en": (
-            "When you click {icon:brain} in the editor, the add-on imports all note fields into chat and places "
+            "When you click {icon:brain} in the editor, the add-on adds all note fields to chat "
+            "(they accumulate with any notes already imported in this session) and places "
             "this text in the input box. Fields appear in the separate note preview window "
             "({icon:eye}); edit them via <b>Edit note</b> from the {icon:pencil} <b>Edit menu</b>. "
             "Customize it to always ask the same kind of analysis (e.g. atomicity, simplification). "
@@ -2284,13 +2304,73 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
     "chat.include_context": {
         "it": (
-            "Includi o escludi la nota importata dal prossimo messaggio. "
-            "{icon:brain} = inclusa; {icon:barred_brain} = esclusa."
+            "{icon:brain} = qualcosa verrà incluso nel prossimo messaggio; "
+            "{icon:barred_brain} = niente incluso. "
+            "Clic per scegliere nota / tipi di nota (campi, schema, template, CSS)."
         ),
         "en": (
-            "Include or exclude the imported note from the next message. "
-            "{icon:brain} = included; {icon:barred_brain} = excluded."
+            "{icon:brain} = something will be included in the next message; "
+            "{icon:barred_brain} = nothing included. "
+            "Click to choose note / note types (fields, schema, templates, CSS)."
         ),
+    },
+    "chat.include_panel.title": {
+        "it": "Includi nel prossimo messaggio",
+        "en": "Include in next message",
+    },
+    "chat.include_panel.intro": {
+        "it": (
+            "Scegli cosa allegare al prossimo invio. "
+            "Dopo un invio con contesto attivo, le selezioni si azzerano."
+        ),
+        "en": (
+            "Choose what to attach on the next send. "
+            "After a send that includes context, selections clear."
+        ),
+    },
+    "chat.include_panel.select_all": {
+        "it": "Seleziona tutto",
+        "en": "Select all",
+    },
+    "chat.include_panel.select_none": {
+        "it": "Deseleziona tutto",
+        "en": "Select none",
+    },
+    "chat.include_panel.close": {
+        "it": "Chiudi",
+        "en": "Close",
+    },
+    "chat.include_panel.empty": {
+        "it": "Nessuna nota o tipo di nota importato in questa sessione.",
+        "en": "No note or note type imported in this session.",
+    },
+    "chat.include_panel.fields": {
+        "it": "Campi",
+        "en": "Fields",
+    },
+    "chat.include_panel.schema": {
+        "it": "Tipo di nota",
+        "en": "Note type",
+    },
+    "chat.include_panel.templates": {
+        "it": "Template",
+        "en": "Templates",
+    },
+    "chat.include_panel.css": {
+        "it": "CSS",
+        "en": "CSS",
+    },
+    "chat.include_panel.note_row": {
+        "it": "Nota: {name}",
+        "en": "Note: {name}",
+    },
+    "chat.include_panel.notetype_row": {
+        "it": "Tipo di nota: {name}",
+        "en": "Note type: {name}",
+    },
+    "chat.include_panel.unknown_notetype": {
+        "it": "tipo sconosciuto",
+        "en": "unknown type",
     },
     "chat.include_context.short": {
         "it": "Importa",
@@ -2384,6 +2464,26 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Modifica template",
         "en": "Edit templates",
     },
+    "chat.edit_templates.window_title_named": {
+        "it": "Modifica template — {name}",
+        "en": "Edit templates — {name}",
+    },
+    "chat.edit_templates.pick.title": {
+        "it": "Scegli tipo di nota",
+        "en": "Choose note type",
+    },
+    "chat.edit_templates.pick.intro": {
+        "it": "Seleziona il tipo di nota importato di cui modificare template e stile CSS (solo per questa sessione).",
+        "en": "Select which imported note type's templates and CSS to edit (this session only).",
+    },
+    "chat.edit_templates.pick.hint": {
+        "it": "Sono elencati solo i tipi di nota importati che includono template o CSS.",
+        "en": "Only imported note types that include templates or CSS are listed.",
+    },
+    "chat.edit_templates.pick.edit": {
+        "it": "Modifica",
+        "en": "Edit",
+    },
     "chat.edit_templates.tooltip": {
         "it": "Modifica template",
         "en": "Edit templates",
@@ -2440,9 +2540,41 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Modifica nota",
         "en": "Edit note",
     },
+    "chat.edit_note.window_title_named": {
+        "it": "Modifica nota — {name}",
+        "en": "Edit note — {name}",
+    },
     "chat.edit_note.send_empty_fields": {
         "it": "Invia campi vuoti",
         "en": "Send empty fields",
+    },
+    "chat.imported_note.pick.title.edit": {
+        "it": "Scegli nota da modificare",
+        "en": "Choose note to edit",
+    },
+    "chat.imported_note.pick.title.preview": {
+        "it": "Scegli nota da anteprima",
+        "en": "Choose note to preview",
+    },
+    "chat.imported_note.pick.intro.edit": {
+        "it": "Seleziona quale nota importata modificare (solo per questa sessione).",
+        "en": "Select which imported note to edit (this session only).",
+    },
+    "chat.imported_note.pick.intro.preview": {
+        "it": "Seleziona quale nota importata aprire in anteprima.",
+        "en": "Select which imported note to open in the preview.",
+    },
+    "chat.imported_note.pick.hint": {
+        "it": "Le note si accumulano nella sessione chat finché non inizi una nuova conversazione.",
+        "en": "Notes accumulate in the chat session until you start a new conversation.",
+    },
+    "chat.imported_note.pick.edit": {
+        "it": "Modifica",
+        "en": "Edit",
+    },
+    "chat.imported_note.pick.preview": {
+        "it": "Anteprima",
+        "en": "Preview",
     },
     "chat.new_conversation": {
         "it": "{icon:plus} Nuova conversazione",
@@ -2509,8 +2641,93 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "The current note is completely empty.",
     },
     "chat.note_imported": {
-        "it": "Contenuto della nota importato con successo!",
-        "en": "Note content imported successfully!",
+        "it": "Contenuto della nota aggiunto alla sessione chat.",
+        "en": "Note content added to the chat session.",
+    },
+    "chat.notes_imported": {
+        "it": "{count} note aggiunte alla sessione chat.",
+        "en": "{count} notes added to the chat session.",
+    },
+    "chat.import_notes.none_selected": {
+        "it": "Seleziona almeno una nota nel browser.",
+        "en": "Select at least one note in the browser.",
+    },
+    "chat.import_notes.empty_selection": {
+        "it": "Nessuna delle note selezionate ha campi con contenuto da importare.",
+        "en": "None of the selected notes have field content to import.",
+    },
+    "chat.import_notes.skipped_empty": {
+        "it": "{count} nota/e vuota/e saltata/e.",
+        "en": "Skipped {count} empty note(s).",
+    },
+    "chat.send_failed": {
+        "it": "Invio chat non riuscito:\n{error}",
+        "en": "Chat send failed:\n{error}",
+    },
+    "chat.edit_templates.empty": {
+        "it": "Nessun template o CSS disponibile da modificare.",
+        "en": "No templates or CSS available to edit.",
+    },
+    "chat.edit_templates.open_failed": {
+        "it": "Impossibile aprire l'editor template:\n{error}",
+        "en": "Could not open the templates editor:\n{error}",
+    },
+    "chat.import_notetype.title": {
+        "it": "Importa tipi di nota",
+        "en": "Import note types",
+    },
+    "chat.import_notetype.intro": {
+        "it": (
+            "Seleziona uno o più tipi di nota da includere nel contesto chat. "
+            "Ogni tipo porta i nomi dei campi; opzionalmente puoi includere "
+            "template delle carte e CSS."
+        ),
+        "en": (
+            "Select one or more note types to include in the chat context. "
+            "Each type brings field names; optionally include card templates and CSS."
+        ),
+    },
+    "chat.import_notetype.selection_hint": {
+        "it": (
+            "Ctrl+clic (⌘+clic su Mac) per aggiungere o togliere singoli tipi di nota. "
+            "Maiusc+clic per selezionare un intervallo."
+        ),
+        "en": (
+            "Ctrl+click (⌘+click on Mac) to add or remove individual note types. "
+            "Shift+click to select a range."
+        ),
+    },
+    "chat.import_notetype.import_button": {
+        "it": "Importa",
+        "en": "Import",
+    },
+    "chat.import_notetype.tooltip": {
+        "it": "{icon:import} Importa tipi di nota (campi e, opzionalmente, template/CSS)",
+        "en": "{icon:import} Import note types (fields and optionally templates/CSS)",
+    },
+    "chat.import_notetype.imported": {
+        "it": "Importati {count} tipi di nota: {names}",
+        "en": "Imported {count} note type(s): {names}",
+    },
+    "chat.import_notetype.schema_block": {
+        "it": "[TIPO DI NOTA: {name}]\nCampi: {fields}",
+        "en": "[NOTE TYPE: {name}]\nFields: {fields}",
+    },
+    "chat.import_notetype.no_fields": {
+        "it": "(nessun campo)",
+        "en": "(no fields)",
+    },
+    "chat.import_notetype.templates_header": {
+        "it": "[TIPO DI NOTA: {name}]",
+        "en": "[NOTE TYPE: {name}]",
+    },
+    "chat.import_notetype.styling_header": {
+        "it": "[STILE TIPO DI NOTA: {name}]",
+        "en": "[NOTE TYPE STYLING: {name}]",
+    },
+    "chat.import_notetype.styling_block": {
+        "it": "[STILE TIPO DI NOTA: {name}]\n{css}",
+        "en": "[NOTE TYPE STYLING: {name}]\n{css}",
     },
     "chat.preview.hide_imported_note": {
         "it": "Nascondi nota importata",
@@ -2531,6 +2748,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "chat.preview.window_title": {
         "it": "Anteprima nota importata",
         "en": "Imported note preview",
+    },
+    "chat.preview.window_title_named": {
+        "it": "Anteprima — {name}",
+        "en": "Preview — {name}",
     },
     "chat.preview.refresh": {
         "it": "Aggiorna anteprima",
@@ -2608,14 +2829,6 @@ _STRINGS: dict[str, dict[str, str]] = {
             "the prompt (and cached content when enabled). {icon:priority} (off): messages "
             "send directly. Use {icon:lens} anytime for a read-only prompt preview without sending."
         ),
-    },
-    "chat.edit_templates.include_templates": {
-        "it": "Includi template carte nel messaggio",
-        "en": "Include card templates in message",
-    },
-    "chat.edit_templates.include_css": {
-        "it": "Includi CSS nota nel messaggio",
-        "en": "Include note CSS in message",
     },
     "chat.settings_stale.message": {
         "it": "Avvia una nuova conversazione perché tutte le impostazioni vengano aggiornate.",
@@ -2872,24 +3085,24 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Back to chat cache settings",
     },
     "chat.prompt_cache.session.default": {
-        "it": "valori predefiniti globali",
-        "en": "global defaults",
+        "it": "impostazioni salvate",
+        "en": "saved settings",
     },
     "chat.prompt_cache.session.modified": {
-        "it": "override di sessione attivo",
-        "en": "session override active",
+        "it": "modificate rispetto ai predefiniti",
+        "en": "changed from defaults",
     },
     "chat.prompt_cache.session.tooltip.active": {
-        "it": "{icon:cache} Cache prompt: attiva, creazione consentita ({modified})",
-        "en": "{icon:cache} Prompt cache: on, creation allowed ({modified})",
+        "it": "{icon:cache} Cache prompt: attiva",
+        "en": "{icon:cache} Prompt cache: on",
     },
     "chat.prompt_cache.session.tooltip.reuse_only": {
-        "it": "{icon:cache} Cache prompt: attiva, solo riuso — nessuna nuova cache ({modified})",
-        "en": "{icon:cache} Prompt cache: on, reuse only — no new cache ({modified})",
+        "it": "{icon:cache} Cache prompt: attiva, solo riuso — nessuna nuova cache",
+        "en": "{icon:cache} Prompt cache: on, reuse only — no new cache",
     },
     "chat.prompt_cache.session.tooltip.disabled": {
-        "it": "{icon:cache} Cache prompt chat: disattivata nelle impostazioni globali ({modified})",
-        "en": "{icon:cache} Chat prompt cache: off in global Settings ({modified})",
+        "it": "{icon:cache} Cache prompt chat: disattivata",
+        "en": "{icon:cache} Chat prompt cache: off",
     },
     "chat.rules_updated": {
         "it": "Memoria dinamica dell'add-on aggiornata e salvata!",
@@ -3020,6 +3233,18 @@ _STRINGS: dict[str, dict[str, str]] = {
     "chat.context.field": {
         "it": "Campo [{name}]",
         "en": "Field [{name}]",
+    },
+    "chat.context.imported_note": {
+        "it": "[NOTA IMPORTATA: {label}]",
+        "en": "[IMPORTED NOTE: {label}]",
+    },
+    "chat.context.imported_note_id": {
+        "it": "[NOTA IMPORTATA #{note_id}]",
+        "en": "[IMPORTED NOTE #{note_id}]",
+    },
+    "chat.context.imported_notetype": {
+        "it": "[TIPO DI NOTA IMPORTATO: {name}]",
+        "en": "[IMPORTED NOTE TYPE: {name}]",
     },
     "chat.context.empty_field": {
         "it": "(Questo campo è vuoto)",
@@ -3189,10 +3414,14 @@ _STRINGS: dict[str, dict[str, str]] = {
             "- Ogni blocco code avrà un pulsante Copia: l'utente decide cosa incollare in Anki.\n"
             "- I blocchi code possono anche servire per esempi non legati a un campo; in quel caso non mettere un nome campo sulla riga sopra.\n"
             "- Usa i blocchi code sopra per suggerimenti parziali o copia manuale di singoli campi.\n\n"
-            "[META-REGOLA DI SISTEMA — AGGIORNAMENTO NOTA ANKI]: Se l'utente chiede di riscrivere, ottimizzare, "
-            "scomporre per atomicità o restituire valori aggiornati per l'intera nota importata (o più note), "
-            "includi TASSATIVAMENTE in fondo alla risposta un blocco JSON dentro <APPLY_NOTE> e </APPLY_NOTE> "
-            "(non usare APPLY_NOTE per suggerimenti parziali di un solo campo: usa i blocchi code).\n"
+            "[META-REGOLA DI SISTEMA — AGGIORNAMENTO NOTA ANKI]: Usa <APPLY_NOTE> solo quando l'utente "
+            "chiede di applicare, scrivere, creare, riscrivere, ottimizzare, scomporre per atomicità "
+            "o restituire valori aggiornati per l'intera nota importata (o più note). "
+            "In quei casi includi TASSATIVAMENTE in fondo alla risposta un blocco JSON dentro "
+            "<APPLY_NOTE> e </APPLY_NOTE>.\n"
+            "Non usare APPLY_NOTE per: risposte sì/no, sole raccomandazioni, domande del tipo "
+            "«dovremmo…?», spiegazioni, o suggerimenti parziali di un solo campo — in questi casi "
+            "usa solo Markdown e, se serve, i blocchi code dei campi.\n"
             "L'add-on nasconde il JSON in chat ma mostra anteprime copiabili dei campi.\n"
             "Formato singola nota — includi TUTTI i campi da scrivere in `fields`, ciascuno con HTML/MathJax grezzo:\n"
             '{"notetype": "Nome tipo nota", "deck": "Nome mazzo opzionale", '
@@ -3236,10 +3465,12 @@ _STRINGS: dict[str, dict[str, str]] = {
             "- Each code block gets a Copy button; the user chooses what to paste into Anki.\n"
             "- Code blocks may also show examples not tied to a field; then omit the field name line above.\n"
             "- Use the code blocks above for partial suggestions or manual copy of individual fields.\n\n"
-            "[META-SYSTEM RULE — ANKI NOTE UPDATE]: If the user asks to rewrite, optimize, split for atomicity, "
-            "or return updated values for the entire imported note (or multiple notes), you MUST include at the "
-            "end of your reply a JSON block inside <APPLY_NOTE> and </APPLY_NOTE> "
-            "(do not use APPLY_NOTE for partial single-field suggestions — use code blocks instead).\n"
+            "[META-SYSTEM RULE — ANKI NOTE UPDATE]: Use <APPLY_NOTE> only when the user asks to apply, write, "
+            "create, rewrite, optimize, split for atomicity, or return updated values for the entire imported "
+            "note (or multiple notes). In those cases you MUST include at the end of your reply a JSON block "
+            "inside <APPLY_NOTE> and </APPLY_NOTE>.\n"
+            "Do NOT use APPLY_NOTE for: yes/no answers, recommendations alone, “should we…?” discussion, "
+            "explanations, or partial single-field suggestions — use Markdown and field code blocks instead.\n"
             "The add-on hides the JSON from chat but shows copyable field previews from it.\n"
             "Single note format — include ALL fields to write in `fields`, each with raw HTML/MathJax:\n"
             '{"notetype": "Note type name", "deck": "optional deck name", '
@@ -3836,14 +4067,23 @@ def format_chat_context_message(
     )
 
 
-def chat_edit_templates_title_text(config: dict[str, Any] | None = None) -> str:
+def chat_edit_templates_title_text(
+    config: dict[str, Any] | None = None,
+    *,
+    notetype_name: str | None = None,
+) -> str:
     templates = import_templates_enabled(config)
     css = import_css_enabled(config)
     if templates and css:
-        return tr("chat.edit_templates.title", config=config)
-    if css and not templates:
-        return tr("chat.edit_templates.title.styling_only", config=config)
-    return tr("chat.edit_templates.title.templates_only", config=config)
+        base = tr("chat.edit_templates.title", config=config)
+    elif css and not templates:
+        base = tr("chat.edit_templates.title.styling_only", config=config)
+    else:
+        base = tr("chat.edit_templates.title.templates_only", config=config)
+    name = (notetype_name or "").strip()
+    if name:
+        return f"{base} {name}"
+    return base
 
 
 def chat_edit_templates_detail_text(config: dict[str, Any] | None = None) -> str:

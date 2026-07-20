@@ -152,6 +152,7 @@ from .settings_compact_controls import (
     create_settings_spinbox,
     refresh_settings_text_edit_layouts,
     refresh_settings_text_edit_newlines,
+    refresh_text_edit_wrap,
 )
 from .widgets import ScrollAwareTextEdit
 from .theme import (
@@ -377,6 +378,10 @@ class SettingsDialog(QDialog):
             self,
             bool(self.config.get("settings_show_text_newlines", False)),
         )
+        refresh_text_edit_wrap(
+            self,
+            bool(self.config.get("settings_wrap_text_editors", True)),
+        )
         QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
 
     def showEvent(self, event) -> None:
@@ -385,7 +390,10 @@ class SettingsDialog(QDialog):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
+        # Height-only resizes are often caused by auto-height fields; remasuring
+        # every editor then feeds another resize loop. Only reflow on width change.
+        if event.size().width() != event.oldSize().width():
+            QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._force_shutdown:
@@ -654,6 +662,21 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.show_text_newlines_hint)
 
+        self.wrap_text_editors_checkbox = QCheckBox(
+            tr("settings.wrap_text_editors", config=config),
+            form_host,
+        )
+        self.wrap_text_editors_checkbox.setChecked(
+            bool(self.config.get("settings_wrap_text_editors", True))
+        )
+        self.wrap_text_editors_checkbox.toggled.connect(self._on_wrap_text_editors_toggled)
+        layout.addWidget(self.wrap_text_editors_checkbox)
+        self.wrap_text_editors_hint = create_settings_hint_label(
+            form_host,
+            tr("settings.wrap_text_editors.hint", config=config),
+        )
+        layout.addWidget(self.wrap_text_editors_hint)
+
         self._load_chat_export_quick_folder_rows(
             normalize_chat_export_quick_folders(
                 self.config.get("chat_export_quick_folders")
@@ -684,6 +707,7 @@ class SettingsDialog(QDialog):
         brain_shell, self.brain_message_input = create_settings_auto_height_text_edit(
             form_host,
             show_newlines=self.show_text_newlines_checkbox.isChecked(),
+            wrap=self.wrap_text_editors_checkbox.isChecked(),
         )
         self.brain_message_input.setPlainText(effective_brain_import_message(self.config))
         adjust = getattr(self.brain_message_input, "_auto_height_adjust", None)
@@ -711,6 +735,7 @@ class SettingsDialog(QDialog):
         instruction_shell, self.instruction_input = create_settings_auto_height_text_edit(
             self.instruction_shared_host,
             show_newlines=self.show_text_newlines_checkbox.isChecked(),
+            wrap=self.wrap_text_editors_checkbox.isChecked(),
         )
         shared_instruction_layout.addWidget(instruction_shell)
 
@@ -730,6 +755,7 @@ class SettingsDialog(QDialog):
         optimize_shell, self.instruction_optimize_input = create_settings_auto_height_text_edit(
             self.instruction_split_host,
             show_newlines=self.show_text_newlines_checkbox.isChecked(),
+            wrap=self.wrap_text_editors_checkbox.isChecked(),
         )
         split_instruction_layout.addWidget(optimize_shell)
         self.instruction_chat_label = QLabel(
@@ -745,6 +771,7 @@ class SettingsDialog(QDialog):
         chat_instr_shell, self.instruction_chat_input = create_settings_auto_height_text_edit(
             self.instruction_split_host,
             show_newlines=self.show_text_newlines_checkbox.isChecked(),
+            wrap=self.wrap_text_editors_checkbox.isChecked(),
         )
         split_instruction_layout.addWidget(chat_instr_shell)
 
@@ -764,6 +791,7 @@ class SettingsDialog(QDialog):
         dynamic_shell, self.dynamic_input = create_settings_auto_height_text_edit(
             form_host,
             show_newlines=self.show_text_newlines_checkbox.isChecked(),
+            wrap=self.wrap_text_editors_checkbox.isChecked(),
         )
         self.dynamic_input.setPlaceholderText(tr("settings.dynamic_placeholder", config=config))
         self.dynamic_input.setPlainText(self.config.get("dynamic_instructions", ""))
@@ -932,6 +960,7 @@ class SettingsDialog(QDialog):
         optimize_prompt_shell, self.prompt_optimize_user_input = create_settings_auto_height_text_edit(
             host,
             show_newlines=self.show_text_newlines_checkbox.isChecked(),
+            wrap=self.wrap_text_editors_checkbox.isChecked(),
         )
         self.prompt_optimize_user_input.setPlainText(effective_optimize_user_prompt(config))
         layout.addWidget(optimize_prompt_shell)
@@ -944,6 +973,7 @@ class SettingsDialog(QDialog):
         chat_addon_shell, self.prompt_chat_addon_input = create_settings_auto_height_text_edit(
             host,
             show_newlines=self.show_text_newlines_checkbox.isChecked(),
+            wrap=self.wrap_text_editors_checkbox.isChecked(),
         )
         self.prompt_chat_addon_input.setPlainText(effective_chat_system_addon(config))
         layout.addWidget(chat_addon_shell)
@@ -961,6 +991,7 @@ class SettingsDialog(QDialog):
         dynamic_prefix_shell, self.prompt_dynamic_rules_prefix_input = create_settings_auto_height_text_edit(
             host,
             show_newlines=self.show_text_newlines_checkbox.isChecked(),
+            wrap=self.wrap_text_editors_checkbox.isChecked(),
         )
         self.prompt_dynamic_rules_prefix_input.setPlainText(effective_dynamic_rules_prefix(config))
         layout.addWidget(dynamic_prefix_shell)
@@ -994,6 +1025,7 @@ class SettingsDialog(QDialog):
         self.wrapper_sections_editor = WrapperSectionsEditor(
             host,
             show_newlines=self.show_text_newlines_checkbox.isChecked(),
+            wrap=self.wrap_text_editors_checkbox.isChecked(),
         )
         self.wrapper_sections_editor.load_from_config(config)
         layout.addWidget(self.wrapper_sections_editor)
@@ -1011,6 +1043,7 @@ class SettingsDialog(QDialog):
         preamble_shell, self.mathjax_preview_preamble_input = create_settings_auto_height_text_edit(
             host,
             show_newlines=self.show_text_newlines_checkbox.isChecked(),
+            wrap=self.wrap_text_editors_checkbox.isChecked(),
         )
         self.mathjax_preview_preamble_input.setPlainText(effective_mathjax_preview_preamble(config))
         layout.addWidget(preamble_shell)
@@ -1196,6 +1229,7 @@ class SettingsDialog(QDialog):
         custom_cache_shell, self.prompt_cache_custom_text_input = create_settings_auto_height_text_edit(
             host,
             show_newlines=self.show_text_newlines_checkbox.isChecked(),
+            wrap=self.wrap_text_editors_checkbox.isChecked(),
         )
         self.prompt_cache_custom_text_input.setPlainText(
             (config.get("prompt_cache_custom_text_optimize") or "").strip()
@@ -1415,6 +1449,12 @@ class SettingsDialog(QDialog):
         self.show_text_newlines_hint.setText(
             muted_hint_html(tr("settings.show_text_newlines.hint", config=config))
         )
+        self.wrap_text_editors_checkbox.setText(
+            tr("settings.wrap_text_editors", config=config)
+        )
+        self.wrap_text_editors_hint.setText(
+            muted_hint_html(tr("settings.wrap_text_editors.hint", config=config))
+        )
         self.shortcuts_panel.setText(
             panel_content_html(tr("settings.shortcuts.body", config=config))
         )
@@ -1632,6 +1672,7 @@ class SettingsDialog(QDialog):
         config["temperature_chat"] = self.temp_chat_input.value()
         config["confirm_before_apply"] = self.confirm_checkbox.isChecked()
         config["settings_show_text_newlines"] = self.show_text_newlines_checkbox.isChecked()
+        config["settings_wrap_text_editors"] = self.wrap_text_editors_checkbox.isChecked()
         brain_message = self.brain_message_input.toPlainText().strip()
         config["brain_import_message"] = normalize_brain_import_message_for_save(
             brain_message, config
@@ -1823,7 +1864,11 @@ class SettingsDialog(QDialog):
         self.stack.setCurrentIndex(3)
         self._refresh_prompt_cache_status()
         self._set_subpage_mode("advanced")
-        QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
+        page = self.stack.currentWidget()
+        QTimer.singleShot(
+            0,
+            lambda: refresh_settings_text_edit_layouts(page if page is not None else self),
+        )
 
     def _leave_advanced_mode(self) -> None:
         self.stack.setCurrentIndex(0)
@@ -2069,9 +2114,28 @@ class SettingsDialog(QDialog):
         self._refresh_warning_restore_checkboxes()
         self._leave_restore_warnings_mode()
 
-    def _on_show_text_newlines_toggled(self, checked: bool) -> None:
-        refresh_settings_text_edit_newlines(self, checked)
+    def _on_wrap_text_editors_toggled(self, checked: bool) -> None:
+        if hasattr(self, "wrapper_sections_editor"):
+            self.wrapper_sections_editor.set_wrap(checked)
+        refresh_text_edit_wrap(self, checked)
+        if (
+            self._optimize_prompt_inspection_window is not None
+            and self._optimize_prompt_inspection_window.isVisible()
+        ):
+            refresh_text_edit_wrap(self._optimize_prompt_inspection_window, checked)
         refresh_settings_text_edit_layouts(self)
+
+    def _on_show_text_newlines_toggled(self, checked: bool) -> None:
+        if hasattr(self, "wrapper_sections_editor"):
+            self.wrapper_sections_editor.set_show_newlines(checked)
+        refresh_settings_text_edit_newlines(self, checked)
+        if (
+            self._optimize_prompt_inspection_window is not None
+            and self._optimize_prompt_inspection_window.isVisible()
+        ):
+            refresh_settings_text_edit_newlines(
+                self._optimize_prompt_inspection_window, checked
+            )
 
     def _on_language_changed(self) -> None:
         lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
@@ -2187,7 +2251,7 @@ class SettingsDialog(QDialog):
             return
         self.config = load_config()
         self._refresh_prompt_cache_status()
-        refresh_chat_from_settings(self.config)
+        refresh_chat_from_settings()
 
     def _change_prompt_cache_ttl(self) -> None:
         config = self._ui_config()
@@ -2382,6 +2446,7 @@ class SettingsDialog(QDialog):
             return
         config = self._ui_config()
         show_newlines = self.show_text_newlines_checkbox.isChecked()
+        wrap = self.wrap_text_editors_checkbox.isChecked()
         row_host = QWidget(self._chat_export_quick_folders_container)
         row = QHBoxLayout(row_host)
         row.setContentsMargins(0, 0, 0, 0)
@@ -2396,6 +2461,7 @@ class SettingsDialog(QDialog):
             minimum=_QUICK_FOLDER_ROW_TEXT_MIN_HEIGHT,
             maximum=_QUICK_FOLDER_ROW_TEXT_MAX_HEIGHT,
             show_newlines=show_newlines,
+            wrap=wrap,
         )
         label_input.setPlaceholderText(
             tr("settings.chat_export_quick_folders.label", config=config)
@@ -2407,6 +2473,7 @@ class SettingsDialog(QDialog):
             minimum=_QUICK_FOLDER_ROW_TEXT_MIN_HEIGHT,
             maximum=_QUICK_FOLDER_ROW_TEXT_MAX_HEIGHT,
             show_newlines=show_newlines,
+            wrap=wrap,
         )
         path_input.setPlaceholderText(
             tr("settings.chat_export_quick_folders.path", config=config)

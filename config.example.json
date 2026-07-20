@@ -13,6 +13,7 @@
     "thinking_budget_chat": -1,
     "chat_streaming": true,
     "settings_show_text_newlines": false,
+    "settings_wrap_text_editors": true,
     "temperature_optimize": 0.1,
     "temperature_chat": 0.2,
     "timeout_seconds": 30,
@@ -32,11 +33,11 @@
     "prompt_dynamic_rules_prefix": "",
     "prompt_chat_context": "",
     "prompt_chat_context_order": [
+        "request",
         "context",
         "format_guide",
         "templates",
-        "styling",
-        "request"
+        "styling"
     ],
     "prompt_chat_context_sections": {},
     "prompt_card_templates_format": "",

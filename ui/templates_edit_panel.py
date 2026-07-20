@@ -29,7 +29,7 @@ from .theme import (
     muted_hint_html,
     strong_label_html,
 )
-from .widgets import PlainNoWheelComboBox, ScrollAwareTextEdit, bind_text_edit_auto_height
+from .widgets import PlainNoWheelComboBox, ScrollAwareTextEdit
 
 _CARD_BLOCK_SPACING = 12
 _SECTION_GAP = 6
@@ -44,6 +44,10 @@ def _clear_layout(layout: QVBoxLayout) -> None:
         item = layout.takeAt(0)
         widget = item.widget()
         if widget is not None:
+            # Detach immediately so ScrollAwareTextEdit peers are not touched while
+            # deleteLater is still pending (avoids Qt use-after-free crashes).
+            widget.hide()
+            widget.setParent(None)
             widget.deleteLater()
 
 
@@ -60,11 +64,14 @@ class TemplatesEditPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.on_templates_changed: Callable[[], None] | None = None
-        self._template_editors: list[tuple[str, ScrollAwareTextEdit, ScrollAwareTextEdit]] = []
+        self._template_editors: list[
+            tuple[str, ScrollAwareTextEdit, ScrollAwareTextEdit, str | None]
+        ] = []
         self._card_blocks: list[QWidget] = []
         self._styling_block: QWidget | None = None
         self._styling_editor: ScrollAwareTextEdit | None = None
         self._jump_targets: list[tuple[QWidget, str]] = []
+        self._notetype_name: str | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 4)
@@ -118,13 +125,20 @@ class TemplatesEditPanel(QWidget):
         apply_native_fields_scroll_theme(self, self._scroll)
         if self._styling_editor is not None:
             apply_native_text_edit_surface_theme(self._styling_editor)
-        for _, front_editor, back_editor in self._template_editors:
+        for _, front_editor, back_editor, _ in self._template_editors:
             apply_native_text_edit_surface_theme(front_editor)
             apply_native_text_edit_surface_theme(back_editor)
 
     def apply_language(self, config: dict[str, Any] | None = None) -> None:
         config = config or load_config()
-        self._title.setText(strong_label_html(chat_edit_templates_title_text(config)))
+        self._title.setText(
+            strong_label_html(
+                chat_edit_templates_title_text(
+                    config,
+                    notetype_name=self._notetype_name,
+                )
+            )
+        )
         self._detail.setText(muted_hint_html(chat_edit_templates_detail_text(config)))
         self._refresh_jump_combo(config)
 
@@ -137,6 +151,7 @@ class TemplatesEditPanel(QWidget):
         self._jump_targets.clear()
         self._jump_combo.clear()
         self._jump_host.setVisible(False)
+        self._notetype_name = None
         self.setVisible(False)
 
     def has_templates(self) -> bool:
@@ -156,11 +171,17 @@ class TemplatesEditPanel(QWidget):
                 name=name,
                 front=front_editor.toPlainText(),
                 back=back_editor.toPlainText(),
+                notetype_name=notetype_name,
             )
-            for name, front_editor, back_editor in self._template_editors
+            for name, front_editor, back_editor, notetype_name in self._template_editors
         ]
 
-    def set_styling_only(self, styling: str) -> None:
+    def set_styling_only(
+        self,
+        styling: str,
+        *,
+        notetype_name: str | None = None,
+    ) -> None:
         if not styling.strip():
             self.clear()
             return
@@ -170,11 +191,13 @@ class TemplatesEditPanel(QWidget):
         self._styling_block = None
         self._styling_editor = None
         self._jump_targets.clear()
+        self._notetype_name = (notetype_name or "").strip() or None
         config = load_config()
         self._add_styling_section(styling, config)
         self._refresh_jump_combo(config)
         self._jump_host.setVisible(bool(self._jump_targets))
         self.apply_language(config)
+        self.setVisible(True)
 
     def _add_styling_section(self, styling: str, config: dict[str, Any]) -> None:
         styling_label = tr("chat.context.section.styling", config=config)
@@ -197,16 +220,13 @@ class TemplatesEditPanel(QWidget):
         styling_shell, styling_editor = create_ui_text_edit(
             styling_block,
             editor_class=ScrollAwareTextEdit,
+            auto_height=True,
+            minimum=_TEMPLATE_EDITOR_MIN_HEIGHT,
         )
         styling_editor.setPlainText(styling)
         apply_native_text_edit_surface_theme(styling_editor)
         styling_editor.document().setDocumentMargin(0)
         styling_editor.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        bind_text_edit_auto_height(
-            styling_editor,
-            minimum=_TEMPLATE_EDITOR_MIN_HEIGHT,
-            maximum=None,
-        )
         styling_editor.textChanged.connect(self._emit_templates_changed)
         styling_layout.addWidget(styling_shell)
         self._styling_editor = styling_editor
@@ -220,6 +240,7 @@ class TemplatesEditPanel(QWidget):
         *,
         styling: str = "",
         include_styling: bool = True,
+        notetype_name: str | None = None,
     ) -> None:
         _clear_layout(self._fields_layout)
         self._template_editors.clear()
@@ -230,6 +251,15 @@ class TemplatesEditPanel(QWidget):
         if not templates:
             self.clear()
             return
+
+        resolved_name = (notetype_name or "").strip() or None
+        if resolved_name is None:
+            for template in templates:
+                candidate = (template.notetype_name or "").strip()
+                if candidate:
+                    resolved_name = candidate
+                    break
+        self._notetype_name = resolved_name
 
         config = load_config()
         if include_styling:
@@ -273,16 +303,13 @@ class TemplatesEditPanel(QWidget):
             front_shell, front_editor = create_ui_text_edit(
                 card_block,
                 editor_class=ScrollAwareTextEdit,
+                auto_height=True,
+                minimum=_TEMPLATE_EDITOR_MIN_HEIGHT,
             )
             front_editor.setPlainText(template.front)
             apply_native_text_edit_surface_theme(front_editor)
             front_editor.document().setDocumentMargin(0)
             front_editor.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-            bind_text_edit_auto_height(
-                front_editor,
-                minimum=_TEMPLATE_EDITOR_MIN_HEIGHT,
-                maximum=None,
-            )
             front_editor.textChanged.connect(self._emit_templates_changed)
             card_layout.addWidget(front_shell)
 
@@ -299,21 +326,25 @@ class TemplatesEditPanel(QWidget):
             back_shell, back_editor = create_ui_text_edit(
                 card_block,
                 editor_class=ScrollAwareTextEdit,
+                auto_height=True,
+                minimum=_TEMPLATE_EDITOR_MIN_HEIGHT,
             )
             back_editor.setPlainText(template.back)
             apply_native_text_edit_surface_theme(back_editor)
             back_editor.document().setDocumentMargin(0)
             back_editor.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-            bind_text_edit_auto_height(
-                back_editor,
-                minimum=_TEMPLATE_EDITOR_MIN_HEIGHT,
-                maximum=None,
-            )
             back_editor.textChanged.connect(self._emit_templates_changed)
             card_layout.addWidget(back_shell)
 
             self._fields_layout.addWidget(card_block)
-            self._template_editors.append((template.name, front_editor, back_editor))
+            self._template_editors.append(
+                (
+                    template.name,
+                    front_editor,
+                    back_editor,
+                    (template.notetype_name or "").strip() or self._notetype_name,
+                )
+            )
             card_jump_label = tr(
                 "chat.edit_templates.card_label",
                 config=config,
@@ -325,6 +356,7 @@ class TemplatesEditPanel(QWidget):
         self._refresh_jump_combo(config)
         self._jump_host.setVisible(True)
         self.apply_language(config)
+        self.setVisible(True)
 
     def _refresh_jump_combo(self, config: dict[str, Any] | None = None) -> None:
         config = config or load_config()

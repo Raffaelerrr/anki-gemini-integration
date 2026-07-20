@@ -324,13 +324,9 @@ def apply_native_text_edit_surface_theme(editor: QTextEdit | QPlainTextEdit) -> 
         + scrollbar_stylesheet(track_bg=surface, colors=palette)
     )
     if is_plain:
-        editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        pass
     elif auto_height:
-        editor.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-        editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    else:
-        editor.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
     if not auto_height:
         editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     editor.setMinimumWidth(0)
@@ -809,19 +805,28 @@ def refresh_native_text_edits_in(host: QWidget) -> None:
     from aqt.qt import QTimer
 
     from ..config import load_config
-    from .settings_compact_controls import apply_settings_text_edit_newlines
+    from .settings_compact_controls import (
+        apply_settings_text_edit_newlines,
+        apply_text_edit_wrap,
+    )
 
-    show_newlines = bool(load_config().get("settings_show_text_newlines", False))
+    config = load_config()
+    show_newlines = bool(config.get("settings_show_text_newlines", False))
+    wrap = bool(config.get("settings_wrap_text_editors", True))
     for editor in host.findChildren(QTextEdit):
         apply_native_text_edit_surface_theme(editor)
         apply_settings_text_edit_newlines(editor, show=show_newlines)
-        editor.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        apply_text_edit_wrap(editor, wrap=wrap)
         refresh_tokens = getattr(editor, "refresh_token_theme", None)
         if refresh_tokens is not None:
             refresh_tokens()
         adjust = getattr(editor, "_auto_height_adjust", None)
         if adjust is not None:
             QTimer.singleShot(0, adjust)
+    for editor in host.findChildren(QPlainTextEdit):
+        apply_native_text_edit_surface_theme(editor)
+        apply_settings_text_edit_newlines(editor, show=show_newlines)
+        apply_text_edit_wrap(editor, wrap=wrap)
 
 
 def refresh_addon_theme() -> None:

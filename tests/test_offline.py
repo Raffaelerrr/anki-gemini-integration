@@ -552,13 +552,37 @@ class TestI18n(unittest.TestCase):
             {"language": "en", "brain_import_templates": True, "brain_import_css": True}
         )
         self.assertIn("templates", templates_title.lower())
+        named_title = self.i18n.chat_edit_templates_title_text(
+            {"language": "en", "brain_import_templates": True, "brain_import_css": True},
+            notetype_name="Basic",
+        )
+        self.assertTrue(named_title.endswith("Basic"))
+        self.assertEqual(
+            self.i18n.tr(
+                "chat.edit_templates.window_title_named",
+                config=en,
+                name="Cloze",
+            ),
+            "Edit templates — Cloze",
+        )
+        self.assertEqual(
+            self.i18n.tr("chat.edit_templates.pick.title", config=en),
+            "Choose note type",
+        )
+        toolbar_help = self.i18n.tr("settings.help.chat_toolbar_icons", config=en)
+        self.assertIn("saved to your configuration", toolbar_help)
+        self.assertNotIn("session-only cache", toolbar_help)
         self.assertEqual(
             self.i18n.chat_edit_templates_detail_text({"language": "en"}),
             "Not shown in the note preview.",
         )
         self.assertIn(
-            "excluded",
+            "nothing included",
             self.i18n.tr("chat.include_context", config=en).lower(),
+        )
+        self.assertEqual(
+            self.i18n.tr("chat.include_panel.title", config=en),
+            "Include in next message",
         )
 
     def test_normalize_language(self):
@@ -611,8 +635,22 @@ class TestI18n(unittest.TestCase):
         self.assertIn("CHAT REPLY FORMATTING RULES", en)
         self.assertIn("outside code blocks", en)
         self.assertIn("render in the chat window", en)
+        self.assertIn("<APPLY_NOTE>", en)
+        self.assertIn("Do NOT use APPLY_NOTE for", en)
+        self.assertIn("should we", en)
         self.assertIn("UPDATE_DYNAMIC_RULES", en)
         self.assertIn("META-SYSTEM RULE", en)
+        it = self.i18n.default_chat_system_addon({"language": "it"})
+        self.assertIn("<APPLY_NOTE>", it)
+        self.assertIn("Non usare APPLY_NOTE", it)
+
+    def test_default_wrapper_order_puts_request_first(self):
+        order = self.i18n.default_wrapper_section_order()
+        self.assertEqual(order[0], "request")
+        self.assertEqual(
+            order,
+            ["request", "context", "format_guide", "templates", "styling"],
+        )
 
     def test_effective_advanced_prompts_use_config_overrides(self):
         custom = {"language": "en", "prompt_optimize_user": "Custom optimize prefix"}
@@ -854,9 +892,9 @@ class TestI18n(unittest.TestCase):
             templates="[FRONT TEMPLATE]\n{{Front}}",
         )
         self.assertIn("[HOW TO READ ANKI CARD TEMPLATES AND STYLING]", result)
+        self.assertLess(result.index("[STUDENT REQUEST]"), result.index("ctx"))
         self.assertLess(result.index("ctx"), result.index("[HOW TO READ ANKI"))
         self.assertLess(result.index("[HOW TO READ ANKI"), result.index("{{Front}}"))
-        self.assertLess(result.index("{{Front}}"), result.index("req"))
 
     def test_format_chat_context_message_omits_format_guide_without_templates(self):
         config = {"language": "en"}
@@ -928,6 +966,201 @@ class TestI18n(unittest.TestCase):
         self.assertIn("[CARD TYPE 1 NAME] Basic", block)
         self.assertIn("[FRONT TEMPLATE]", block)
         self.assertIn("{{Front}}", block)
+
+    def test_merge_imported_notetypes_dedupes_by_id(self):
+        card_templates = _load_addon_module("ui.card_templates")
+        basic = card_templates.ImportedNotetypeData(
+            notetype_id=1,
+            name="Basic",
+            field_names=["Front", "Back"],
+            templates=[
+                card_templates.CardTemplateData(
+                    name="Card 1",
+                    front="{{Front}}",
+                    back="{{Back}}",
+                    notetype_name="Basic",
+                )
+            ],
+            css=".card {}",
+        )
+        refreshed = card_templates.ImportedNotetypeData(
+            notetype_id=1,
+            name="Basic",
+            field_names=["Front", "Back"],
+            templates=[
+                card_templates.CardTemplateData(
+                    name="Card 1 updated",
+                    front="{{Front}}",
+                    back="{{Back}}",
+                    notetype_name="Basic",
+                )
+            ],
+            css=".card { color: red; }",
+        )
+        merged = card_templates.merge_imported_notetypes({1: basic}, [refreshed])
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[1].templates[0].name, "Card 1 updated")
+        self.assertEqual(merged[1].css, ".card { color: red; }")
+
+    def test_format_notetype_schemas_block_excludes_imported_note(self):
+        card_templates = _load_addon_module("ui.card_templates")
+        block = card_templates.format_notetype_schemas_block(
+            [
+                card_templates.ImportedNotetypeData(
+                    notetype_id=1,
+                    name="Basic",
+                    field_names=["Front", "Back"],
+                ),
+                card_templates.ImportedNotetypeData(
+                    notetype_id=2,
+                    name="Cloze",
+                    field_names=["Text"],
+                ),
+            ],
+            config={"language": "en"},
+            exclude_notetype_ids={1},
+        )
+        self.assertNotIn("Basic", block)
+        self.assertIn("[NOTE TYPE: Cloze]", block)
+        self.assertIn("Fields: Text", block)
+
+    def test_format_multi_notetype_templates_and_styling(self):
+        card_templates = _load_addon_module("ui.card_templates")
+        notetypes = {
+            1: card_templates.ImportedNotetypeData(
+                notetype_id=1,
+                name="Basic",
+                templates=[
+                    card_templates.CardTemplateData(
+                        name="Card 1",
+                        front="{{Front}}",
+                        back="{{Back}}",
+                        notetype_name="Basic",
+                    )
+                ],
+                css=".basic {}",
+            ),
+            2: card_templates.ImportedNotetypeData(
+                notetype_id=2,
+                name="Cloze",
+                templates=[
+                    card_templates.CardTemplateData(
+                        name="Cloze",
+                        front="{{Text}}",
+                        back="{{Text}}",
+                        notetype_name="Cloze",
+                    )
+                ],
+                css=".cloze {}",
+            ),
+        }
+        templates_block = card_templates.format_imported_notetype_templates(
+            notetypes,
+            config={"language": "en"},
+        )
+        styling_block = card_templates.format_imported_notetype_styling(
+            notetypes,
+            config={"language": "en"},
+        )
+        self.assertIn("[NOTE TYPE: Basic]", templates_block)
+        self.assertIn("[NOTE TYPE: Cloze]", templates_block)
+        self.assertIn("[NOTE TYPE STYLING: Basic]", styling_block)
+        self.assertIn("[NOTE TYPE STYLING: Cloze]", styling_block)
+        filtered_templates = card_templates.format_imported_notetype_templates(
+            notetypes,
+            config={"language": "en"},
+            include_notetype_ids={2},
+        )
+        filtered_styling = card_templates.format_imported_notetype_styling(
+            notetypes,
+            config={"language": "en"},
+            include_notetype_ids={1},
+        )
+        self.assertNotIn("Basic", filtered_templates)
+        self.assertIn("{{Text}}", filtered_templates)
+        self.assertIn("[NOTE TYPE STYLING: Basic]", filtered_styling)
+        self.assertNotIn("Cloze", filtered_styling)
+
+    def test_include_next_message_mask_selection(self):
+        mask_mod = _load_addon_module("chat_include_mask")
+        mask = mask_mod.IncludeNextMessageMask()
+        self.assertFalse(mask.any_selected())
+        mask.ensure_note(5)
+        mask.note_fields[5] = True
+        self.assertTrue(mask.any_selected())
+        mask.ensure_notetype(10)
+        mask.ensure_notetype(20)
+        mask.schemas[10] = True
+        mask.templates[20] = True
+        mask.css[20] = True
+        self.assertEqual(mask.selected_note_ids(), [5])
+        self.assertEqual(mask.selected_schema_ids(), [10])
+        self.assertEqual(mask.selected_template_ids(), [20])
+        self.assertEqual(mask.selected_css_ids(), [20])
+        mask.clear_selections()
+        self.assertFalse(mask.any_selected())
+        self.assertIn(5, mask.note_fields)
+        self.assertFalse(mask.note_fields[5])
+        self.assertIn(10, mask.schemas)
+        self.assertFalse(mask.schemas[10])
+        mask.prune_to_note_ids({5})
+        mask.prune_to_notetype_ids({20})
+        self.assertIn(5, mask.note_fields)
+        self.assertNotIn(10, mask.schemas)
+        self.assertIn(20, mask.templates)
+
+    def test_primary_templates_notetype_id_prefers_contentful(self):
+        card_templates = _load_addon_module("ui.card_templates")
+        notetypes = {
+            1: card_templates.ImportedNotetypeData(
+                notetype_id=1,
+                name="Schema Only",
+                field_names=["Front"],
+            ),
+            2: card_templates.ImportedNotetypeData(
+                notetype_id=2,
+                name="With Templates",
+                templates=[
+                    card_templates.CardTemplateData(
+                        name="Card 1",
+                        front="{{Front}}",
+                        back="{{Back}}",
+                    )
+                ],
+                css=".card {}",
+            ),
+        }
+        self.assertEqual(
+            card_templates.primary_templates_notetype_id(notetypes),
+            2,
+        )
+        templates, styling = card_templates.templates_and_styling_for_editor(notetypes)
+        self.assertEqual(len(templates), 1)
+        self.assertIn(".card", styling)
+
+        editable = card_templates.editable_templates_notetypes(notetypes)
+        self.assertEqual([item.notetype_id for item in editable], [2])
+        explicit_templates, explicit_css = card_templates.templates_and_styling_for_editor(
+            {
+                2: notetypes[2],
+                3: card_templates.ImportedNotetypeData(
+                    notetype_id=3,
+                    name="Another",
+                    templates=[
+                        card_templates.CardTemplateData(
+                            name="Card 1",
+                            front="{{A}}",
+                            back="{{B}}",
+                            notetype_name="Another",
+                        )
+                    ],
+                    css=".other {}",
+                ),
+            },
+            notetype_id=3,
+        )
+        self.assertEqual(explicit_templates[0].front, "{{A}}")
+        self.assertIn(".other", explicit_css)
 
     def test_wrapper_section_missing_request_placeholder(self):
         fn = self.wrapper.wrapper_section_missing_placeholders
@@ -1452,8 +1685,11 @@ class TestHelpIcons(unittest.TestCase):
                 "brain",
                 "barred_brain",
                 "pencil",
+                "import",
                 "eye",
                 "lens",
+                "download",
+                "cache",
                 "plus",
                 "stop",
                 "priority",
@@ -1587,6 +1823,64 @@ class TestNoteContextFields(unittest.TestCase):
         text = self.fields.format_note_context([("Front", ""), ("Back", "Hi")], config)
         self.assertIn("Field [Front]\n(This field is empty)", text)
         self.assertIn("Field [Back]\nHi", text)
+
+    def test_format_note_context_includes_imported_notetype(self):
+        config = {"language": "en", "chat_send_empty_fields": False}
+        text = self.fields.format_note_context(
+            [("Text", "Teorema")],
+            config,
+            notetype_name="Cloze",
+        )
+        self.assertTrue(text.startswith("[IMPORTED NOTE TYPE: Cloze]"))
+        self.assertIn("Field [Text]\nTeorema", text)
+
+    def test_merge_and_format_multiple_imported_notes(self):
+        config = {"language": "en"}
+        note_a = self.fields.ImportedNoteData(
+            note_id=1,
+            notetype_id=10,
+            notetype_name="Basic",
+            fields=[("Front", "Hello"), ("Back", "World")],
+        )
+        note_b = self.fields.ImportedNoteData(
+            note_id=2,
+            notetype_id=20,
+            notetype_name="Cloze",
+            fields=[("Text", "Teorema")],
+        )
+        merged = self.fields.merge_imported_notes({}, [note_a, note_b])
+        self.assertEqual(set(merged.keys()), {1, 2})
+        replaced = self.fields.merge_imported_notes(
+            merged,
+            [
+                self.fields.ImportedNoteData(
+                    note_id=1,
+                    notetype_id=10,
+                    notetype_name="Basic",
+                    fields=[("Front", "Updated")],
+                )
+            ],
+        )
+        self.assertEqual(replaced[1].fields[0][1], "Updated")
+        self.assertEqual(replaced[2].fields[0][1], "Teorema")
+        text = self.fields.format_imported_notes_context(
+            replaced,
+            config,
+            include_note_ids={1, 2},
+        )
+        self.assertIn("[IMPORTED NOTE:", text)
+        self.assertIn("[IMPORTED NOTE TYPE: Basic]", text)
+        self.assertIn("[IMPORTED NOTE TYPE: Cloze]", text)
+        self.assertIn("Field [Front]\nUpdated", text)
+        self.assertIn("Field [Text]\nTeorema", text)
+        only_b = self.fields.format_imported_notes_context(
+            replaced,
+            config,
+            include_note_ids={2},
+        )
+        self.assertNotIn("Updated", only_b)
+        self.assertIn("Teorema", only_b)
+        self.assertIn("Basic:", note_a.display_label())
 
     def test_fields_for_note_preview_shows_placeholder_when_enabled(self):
         config = {"language": "en", "chat_send_empty_fields": True}
@@ -2189,6 +2483,7 @@ class TestConfig(unittest.TestCase):
                 "prompt_cache_active_preset_id_optimize",
                 "chat_download_directory",
                 "settings_show_text_newlines",
+                "settings_wrap_text_editors",
                 "dev_mock_mode",
             },
         )
@@ -3357,6 +3652,273 @@ class TestPromptCacheConfirmLogic(unittest.TestCase):
         self.assertNotIn("prompt_cache_import_note_default", keys)
 
 
+class TestAutoHeightFreezeIsolation(unittest.TestCase):
+    """Isolate scrollbar ↔ wrap-width ↔ height loop risks without opening Anki UI."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.widgets = _load_addon_module("ui.widgets")
+        cls.controls = _load_addon_module("ui.settings_compact_controls")
+        cls.qt = sys.modules["aqt.qt"]
+
+    def test_form_available_width_stable_when_only_viewport_shrinks(self) -> None:
+        """Page scrollbar chrome must not change wrap measure (classic freeze loop)."""
+        qt = self.qt
+
+        class _Bar:
+            def sizeHint(self):
+                size = qt.QSize()
+                size.setWidth(15)
+                size.setHeight(100)
+                return size
+
+        class _Scroll(qt.QScrollArea):
+            def __init__(self, frame_width: int):
+                self._frame_width = frame_width
+                self._viewport_width = frame_width - 20
+                self._bar = _Bar()
+                self._parent = None
+
+            def width(self):
+                return self._frame_width
+
+            def parentWidget(self):
+                return self._parent
+
+            def verticalScrollBar(self):
+                return self._bar
+
+            def shrink_viewport(self, by: int = 15) -> None:
+                self._viewport_width = max(self._viewport_width - by, 1)
+
+        class _Editor:
+            def __init__(self, parent):
+                self._parent = parent
+
+            def parentWidget(self):
+                return self._parent
+
+        scroll = _Scroll(520)
+        editor = _Editor(scroll)
+        before = self.widgets._settings_form_available_width(editor)
+        scroll.shrink_viewport(20)
+        after = self.widgets._settings_form_available_width(editor)
+        self.assertEqual(before, after)
+        self.assertGreaterEqual(before, self.widgets._SETTINGS_TEXT_EDIT_MIN_WIDTH)
+
+    def test_row_field_measure_width_tracks_viewport(self) -> None:
+        """Documents residual risk: row fields still measure wrap from viewport."""
+
+        class _Viewport:
+            def __init__(self, width: int):
+                self._width = width
+
+            def width(self):
+                return self._width
+
+        class _Editor:
+            def __init__(self, viewport_width: int):
+                self._viewport = _Viewport(viewport_width)
+
+            def viewport(self):
+                return self._viewport
+
+            def width(self):
+                return self._viewport.width() + 8
+
+            def parentWidget(self):
+                return None
+
+        editor = _Editor(200)
+        wide = self.widgets._settings_row_field_measure_width(editor, frame=8)
+        editor._viewport._width = 180
+        narrow = self.widgets._settings_row_field_measure_width(editor, frame=8)
+        self.assertEqual(wide, 200)
+        self.assertEqual(narrow, 180)
+        self.assertNotEqual(wide, narrow)
+
+    def test_configure_addon_text_edit_never_uncaps_for_scroll_free(self) -> None:
+        editor = MagicMock()
+        editor.document.return_value = MagicMock()
+        with patch.object(
+            self.controls,
+            "load_config",
+            return_value={
+                "settings_show_text_newlines": False,
+                "settings_wrap_text_editors": True,
+            },
+        ):
+            with patch.object(self.controls, "bind_text_edit_auto_height") as bind:
+                with patch.object(self.controls, "apply_text_edit_wrap"):
+                    self.controls.configure_addon_text_edit(
+                        editor,
+                        auto_height=True,
+                        scroll_free=True,
+                    )
+        self.assertIsNotNone(bind.call_args.kwargs.get("maximum"))
+        self.assertEqual(
+            bind.call_args.kwargs.get("maximum"),
+            self.controls.SETTINGS_TEXT_EDIT_MAX_HEIGHT,
+        )
+
+    def test_pre_send_prompt_editor_disables_auto_height(self) -> None:
+        source = (
+            Path(__file__).resolve().parent.parent
+            / "ui"
+            / "pre_send_prompt_dialog.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("auto_height=False", source)
+        self.assertIn("def _add_prompt_editor", source)
+        self.assertIn("setFixedHeight", source)
+        self.assertNotIn("maximum=None", source)
+
+    def test_apply_text_edit_wrap_forces_vertical_always_on(self) -> None:
+        """WidgetWidth + AsNeeded vertical is the pre-send freeze/crash loop."""
+        qt = self.qt
+
+        class _Editor(qt.QTextEdit):
+            def __init__(self) -> None:
+                self.v_policy = None
+                self.h_policy = None
+                self.wrap_mode = None
+
+            def setVerticalScrollBarPolicy(self, policy) -> None:
+                self.v_policy = policy
+
+            def setHorizontalScrollBarPolicy(self, policy) -> None:
+                self.h_policy = policy
+
+            def setLineWrapMode(self, mode) -> None:
+                self.wrap_mode = mode
+
+            def lineWrapMode(self):
+                return self.wrap_mode
+
+        editor = _Editor()
+        self.controls.apply_text_edit_wrap(editor, wrap=True)
+        self.assertEqual(editor.wrap_mode, qt.QTextEdit.LineWrapMode.WidgetWidth)
+        self.assertEqual(editor.h_policy, qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.assertEqual(editor.v_policy, qt.Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+
+        editor.v_policy = "sentinel"
+        self.controls.apply_text_edit_wrap(editor, wrap=False)
+        self.assertEqual(editor.wrap_mode, qt.QTextEdit.LineWrapMode.NoWrap)
+        self.assertEqual(editor.h_policy, qt.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.assertEqual(editor.v_policy, qt.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+    def test_capped_scrollbar_policy_helpers_exist(self) -> None:
+        import inspect
+
+        source = inspect.getsource(self.widgets.bind_text_edit_auto_height)
+        self.assertIn("ScrollBarAlwaysOn", source)
+        self.assertIn("ScrollBarAlwaysOff", source)
+        self.assertIn("needs_scroll", source)
+        # AsNeeded on the vertical bar at the height cap is the flicker path.
+        self.assertNotRegex(
+            source,
+            r"setVerticalScrollBarPolicy\(\s*[\n\r\s]*Qt\.ScrollBarPolicy\.ScrollBarAsNeeded",
+        )
+
+    def test_scroll_area_by_wheel_does_not_call_wheel_event(self) -> None:
+        """Regression: scroll.wheelEvent re-entered the app filter → stack overflow."""
+        calls = {"wheelEvent": 0, "setValue": 0}
+
+        class _Bar:
+            def __init__(self) -> None:
+                self._value = 50
+
+            def singleStep(self):
+                return 10
+
+            def minimum(self):
+                return 0
+
+            def maximum(self):
+                return 100
+
+            def value(self):
+                return self._value
+
+            def setValue(self, value):
+                calls["setValue"] += 1
+                self._value = value
+
+        class _Scroll:
+            def __init__(self) -> None:
+                self._v = _Bar()
+                self._h = _Bar()
+
+            def verticalScrollBar(self):
+                return self._v
+
+            def horizontalScrollBar(self):
+                return self._h
+
+            def wheelEvent(self, event):
+                calls["wheelEvent"] += 1
+                # Simulate the buggy Qt path: wheelEvent re-enters the helper.
+                self.widgets._scroll_area_by_wheel(self, event)
+
+        class _Delta:
+            def __init__(self, x=0, y=0):
+                self._x = x
+                self._y = y
+
+            def x(self):
+                return self._x
+
+            def y(self):
+                return self._y
+
+        class _Event:
+            def pixelDelta(self):
+                return _Delta(0, 0)
+
+            def angleDelta(self):
+                return _Delta(0, 120)
+
+            def accept(self):
+                return None
+
+        scroll = _Scroll()
+        scroll.widgets = self.widgets
+        before = scroll.verticalScrollBar().value()
+        self.widgets._scroll_area_by_wheel(scroll, _Event())
+        self.assertEqual(calls["wheelEvent"], 0)
+        self.assertGreater(calls["setValue"], 0)
+        self.assertNotEqual(scroll.verticalScrollBar().value(), before)
+
+
+class TestModelSelectorFilterStability(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.ms = _load_addon_module("ui.model_selector")
+
+    def test_repopulate_does_not_reenter_apply_filter(self) -> None:
+        calls = {"n": 0}
+        combo = MagicMock()
+        combo.property.return_value = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+        combo.lineEdit.return_value = MagicMock(hasFocus=MagicMock(return_value=False))
+
+        original = self.ms._repopulate_combo
+
+        def _counting_repopulate(target, items, *, edit_text: str) -> None:
+            calls["n"] += 1
+            if calls["n"] > 5:
+                self.fail("_repopulate_combo re-entered in a loop")
+            original(target, items, edit_text=edit_text)
+
+        with patch.object(self.ms, "_repopulate_combo", side_effect=_counting_repopulate):
+            self.ms._apply_model_filter(combo, "flash")
+        self.assertEqual(calls["n"], 1)
+
+    def test_filter_then_clear_returns_full_list(self) -> None:
+        models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+        filtered = self.ms.filter_model_choices(models, "lite")
+        self.assertEqual(filtered, ["gemini-2.5-flash-lite"])
+        self.assertEqual(self.ms.filter_model_choices(models, ""), models)
+
+
 class TestSettingsCompactControls(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -3369,10 +3931,28 @@ class TestSettingsCompactControls(unittest.TestCase):
     def test_configure_addon_text_edit_marks_editor(self) -> None:
         editor = MagicMock()
         editor.document.return_value = MagicMock()
-        with patch.object(self.controls, "load_config", return_value={"settings_show_text_newlines": False}):
-            with patch.object(self.controls, "bind_text_edit_auto_height"):
-                self.controls.configure_addon_text_edit(editor, scroll_free=True)
+        with patch.object(
+            self.controls,
+            "load_config",
+            return_value={
+                "settings_show_text_newlines": False,
+                "settings_wrap_text_editors": True,
+            },
+        ):
+            with patch.object(self.controls, "bind_text_edit_auto_height") as bind:
+                with patch.object(self.controls, "apply_text_edit_wrap") as wrap_fn:
+                    self.controls.configure_addon_text_edit(editor, scroll_free=True)
         self.assertTrue(getattr(editor, "_addon_text_edit", False))
+        bind.assert_called_once()
+        wrap_fn.assert_called_once_with(editor, wrap=True)
+        self.assertEqual(
+            bind.call_args.kwargs.get("maximum"),
+            self.controls.SETTINGS_TEXT_EDIT_MAX_HEIGHT,
+        )
+
+    def test_apply_text_edit_wrap_helper_exists(self) -> None:
+        self.assertTrue(callable(self.controls.apply_text_edit_wrap))
+        self.assertTrue(callable(self.controls.refresh_text_edit_wrap))
 
     def test_configure_settings_text_edit_marks_editor(self) -> None:
         editor = MagicMock()

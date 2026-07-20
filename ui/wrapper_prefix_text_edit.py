@@ -124,13 +124,20 @@ class _WrapperTokenRenderer(QObject, QTextObjectInterface):
 
 
 class WrapperPrefixTextEdit(ScrollAwareTextEdit):
-    def __init__(self, parent, *, section_id: str, show_newlines: bool = False) -> None:
+    def __init__(
+        self,
+        parent,
+        *,
+        section_id: str,
+        show_newlines: bool = False,
+        wrap: bool | None = None,
+    ) -> None:
         super().__init__(parent)
         self._section_id = section_id
         self._loading = False
         self._wrapper_prefix_editor = True
         self.setAcceptRichText(True)
-        configure_settings_text_edit(self, show_newlines=show_newlines)
+        configure_settings_text_edit(self, show_newlines=show_newlines, wrap=wrap)
         self._token_renderer = _WrapperTokenRenderer(self)
         layout = self.document().documentLayout()
         layout.registerHandler(WRAPPER_TOKEN_OBJECT_TYPE, self._token_renderer)
@@ -383,6 +390,7 @@ def create_wrapper_prefix_text_edit(
     *,
     section_id: str,
     show_newlines: bool = False,
+    wrap: bool | None = None,
 ) -> tuple[object, WrapperPrefixTextEdit]:
     from .settings_compact_controls import SETTINGS_TEXT_EDIT_MAX_HEIGHT, SETTINGS_TEXT_EDIT_MIN_HEIGHT
     from aqt.qt import QVBoxLayout, QWidget, QSizePolicy
@@ -394,7 +402,12 @@ def create_wrapper_prefix_text_edit(
     shell_layout.setContentsMargins(0, 0, 0, 0)
     shell_layout.setSpacing(0)
 
-    editor = WrapperPrefixTextEdit(shell, section_id=section_id, show_newlines=show_newlines)
+    editor = WrapperPrefixTextEdit(
+        shell,
+        section_id=section_id,
+        show_newlines=show_newlines,
+        wrap=wrap,
+    )
     editor._settings_shell = shell
     from .theme import apply_native_text_edit_surface_theme
     from .widgets import bind_text_edit_auto_height

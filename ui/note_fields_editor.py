@@ -11,13 +11,13 @@ from aqt.qt import (
 )
 
 from ..config import load_config
-from .settings_compact_controls import configure_addon_text_edit, create_ui_text_edit
+from .settings_compact_controls import apply_settings_text_edit_newlines, create_ui_text_edit
 from .theme import (
     apply_native_fields_scroll_theme,
     apply_native_text_edit_surface_theme,
     field_name_label_html,
 )
-from .widgets import ScrollAwareTextEdit, _qt_widget_alive, bind_text_edit_auto_height
+from .widgets import ScrollAwareTextEdit, _qt_widget_alive
 
 _LABEL_EDITOR_SPACING = 2
 _FIELD_BLOCK_SPACING = 8
@@ -73,7 +73,7 @@ class NoteFieldsEditor(QWidget):
 
     def apply_newline_visibility(self, show: bool) -> None:
         for _, editor in self._field_editors:
-            configure_addon_text_edit(editor, show_newlines=show)
+            apply_settings_text_edit_newlines(editor, show=show)
 
     def clear(self) -> None:
         _clear_layout(self._fields_layout)
@@ -112,16 +112,12 @@ class NoteFieldsEditor(QWidget):
                 self._host,
                 editor_class=ScrollAwareTextEdit,
                 show_newlines=bool(load_config().get("settings_show_text_newlines", False)),
+                auto_height=True,
+                minimum=_FIELD_EDITOR_MIN_HEIGHT,
             )
             editor.setPlainText(value)
-            apply_native_text_edit_surface_theme(editor)
-            configure_addon_text_edit(
-                editor,
-                show_newlines=bool(load_config().get("settings_show_text_newlines", False)),
-            )
             editor.document().setDocumentMargin(0)
             editor.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-            bind_text_edit_auto_height(editor, minimum=_FIELD_EDITOR_MIN_HEIGHT, maximum=None)
             editor.textChanged.connect(self._schedule_reflow)
             self._fields_layout.addWidget(editor_shell)
             self._field_editors.append((name, editor))
@@ -141,7 +137,8 @@ class NoteFieldsEditor(QWidget):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        QTimer.singleShot(0, self.reflow)
+        if event.size().width() != event.oldSize().width():
+            QTimer.singleShot(0, self.reflow)
 
     def _schedule_reflow(self) -> None:
         QTimer.singleShot(0, self.reflow)

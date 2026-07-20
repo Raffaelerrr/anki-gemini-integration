@@ -63,3 +63,4 @@ codice vecchio.txt
 *.swp
 *~
 *.orig
+pre_send_crash_trace.log

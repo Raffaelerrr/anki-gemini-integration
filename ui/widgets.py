@@ -73,9 +73,55 @@ def _forward_wheel_event(widget: QWidget, event) -> None:
     event.ignore()
 
 
-def _scroll_area_by_wheel(scroll: QScrollArea, event) -> None:
-    scroll.wheelEvent(event)
+_SCROLL_AREA_WHEEL_DEPTH = 0
+
+
+def _scroll_bars_by_wheel_event(vertical: QScrollBar | None, horizontal: QScrollBar | None, event) -> None:
+    """Move bars directly. Never call widget.wheelEvent — it re-enters app filters."""
+    pixel = event.pixelDelta()
+    angle = event.angleDelta()
+    px = pixel.x()
+    py = pixel.y()
+    ax = angle.x()
+    ay = angle.y()
+
+    if px or py:
+        if py and vertical is not None:
+            vertical.setValue(
+                max(vertical.minimum(), min(vertical.maximum(), vertical.value() - py))
+            )
+        if px and horizontal is not None:
+            horizontal.setValue(
+                max(horizontal.minimum(), min(horizontal.maximum(), horizontal.value() - px))
+            )
+    else:
+        if ay and vertical is not None:
+            _scroll_bar_by_wheel_delta(vertical, ay)
+        if ax and horizontal is not None:
+            _scroll_bar_by_wheel_delta(horizontal, ax)
     event.accept()
+
+
+def _scroll_area_by_wheel(scroll: QScrollArea, event) -> None:
+    """Scroll a page QScrollArea without re-entering the ScrollAware app filter.
+
+    Calling ``scroll.wheelEvent(event)`` re-delivers through the app filter on
+    Anki/Qt builds and stack-overflows:
+    eventFilter → _dispatch_wheel_to_lock → _scroll_area_by_wheel → wheelEvent → …
+    """
+    global _SCROLL_AREA_WHEEL_DEPTH
+    if _SCROLL_AREA_WHEEL_DEPTH > 0:
+        event.accept()
+        return
+    _SCROLL_AREA_WHEEL_DEPTH += 1
+    try:
+        _scroll_bars_by_wheel_event(
+            scroll.verticalScrollBar(),
+            scroll.horizontalScrollBar(),
+            event,
+        )
+    finally:
+        _SCROLL_AREA_WHEEL_DEPTH -= 1
 
 
 def _scroll_bar_by_wheel_delta(bar: QScrollBar, delta: int) -> None:
@@ -90,32 +136,11 @@ def _scroll_bar_by_wheel_delta(bar: QScrollBar, delta: int) -> None:
 
 def _apply_native_wheel_scroll(editor: QTextEdit, event) -> None:
     """Move scroll bars directly; Qt wheel delivery is unreliable once filters intercept."""
-    pixel = event.pixelDelta()
-    angle = event.angleDelta()
-    px = pixel.x()
-    py = pixel.y()
-    ax = angle.x()
-    ay = angle.y()
-
-    if px or py:
-        if py:
-            bar = editor.verticalScrollBar()
-            if bar is not None:
-                bar.setValue(max(bar.minimum(), min(bar.maximum(), bar.value() - py)))
-        if px:
-            bar = editor.horizontalScrollBar()
-            if bar is not None:
-                bar.setValue(max(bar.minimum(), min(bar.maximum(), bar.value() - px)))
-    else:
-        if ay:
-            bar = editor.verticalScrollBar()
-            if bar is not None:
-                _scroll_bar_by_wheel_delta(bar, ay)
-        if ax:
-            bar = editor.horizontalScrollBar()
-            if bar is not None:
-                _scroll_bar_by_wheel_delta(bar, ax)
-    event.accept()
+    _scroll_bars_by_wheel_event(
+        editor.verticalScrollBar(),
+        editor.horizontalScrollBar(),
+        event,
+    )
 
 
 _WIDGET_SIZE_MAX = 16777215
@@ -135,9 +160,16 @@ def _settings_form_available_width(widget: QWidget) -> int:
     parent = widget.parentWidget()
     while parent is not None:
         if isinstance(parent, QScrollArea):
-            viewport = parent.viewport()
-            if viewport is not None and viewport.width() > 0:
-                return max(viewport.width() - 16, _SETTINGS_TEXT_EDIT_MIN_WIDTH)
+            # Use the scroll area frame width with a fixed gutter. Measuring the
+            # viewport shrinks when the vertical scrollbar appears and reflows
+            # wrapped text → height changes → scrollbar toggles → crash loop.
+            gutter = 28
+            bar = parent.verticalScrollBar()
+            if bar is not None:
+                gutter = max(gutter, int(bar.sizeHint().width()) + 16)
+            width = parent.width()
+            if width > 0:
+                return max(width - gutter, _SETTINGS_TEXT_EDIT_MIN_WIDTH)
         width = parent.width()
         if width > best:
             best = width
@@ -232,7 +264,8 @@ def bind_text_edit_auto_height(
 ) -> None:
     """Grow the editor with its content; scroll internally only after *maximum*.
 
-    Pass ``maximum=None`` to expand to full content height (for nested scroll areas).
+    Prefer a finite *maximum* inside page ``QScrollArea``s. Uncapped growth
+    (``maximum=None``) can fight the outer scrollbar and freeze the UI.
     """
     existing_adjust = getattr(editor, "_auto_height_adjust", None)
     if existing_adjust is not None:
@@ -271,6 +304,7 @@ def bind_text_edit_auto_height(
             frame = editor.frameWidth() * 2
             wrap_mode = editor.lineWrapMode()
             settings_width = None
+            wrap_measure_width = None
             is_row_field = getattr(editor, "_settings_row_field", False)
             document = editor.document()
             document.blockSignals(True)
@@ -279,18 +313,19 @@ def bind_text_edit_auto_height(
                     document.setTextWidth(-1)
                 elif getattr(editor, "_settings_text_edit", False) and not is_row_field:
                     settings_width = _settings_target_width(editor, frame=frame)
+                    wrap_measure_width = settings_width
                     document.setTextWidth(max(settings_width - frame - 8, 1))
-                else:
-                    viewport_width = editor.viewport().width()
-                    if viewport_width <= 0:
-                        viewport_width = max(editor.width() - frame, 0)
-                    if viewport_width <= 0:
-                        parent = editor.parentWidget()
-                        if parent is not None and parent.width() > 0:
-                            viewport_width = max(parent.width() - 8, 1)
-                    document.setTextWidth(
-                        max(viewport_width, 1) if viewport_width > 0 else -1
+                elif is_row_field:
+                    wrap_measure_width = _settings_row_field_measure_width(
+                        editor, frame=frame
                     )
+                    document.setTextWidth(max(wrap_measure_width, 1))
+                else:
+                    # Use scroll-area frame width (not viewport). Viewport shrinks when
+                    # the scrollbar appears → wrap width changes → height oscillates.
+                    available = _settings_form_available_width(editor)
+                    wrap_measure_width = max(available - frame - 8, 1)
+                    document.setTextWidth(wrap_measure_width)
             finally:
                 document.blockSignals(False)
             natural = _content_height()
@@ -315,28 +350,8 @@ def bind_text_edit_auto_height(
                 )
             if max_height is None:
                 height = int(max(min_height, natural))
-                editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-                editor.setHorizontalScrollBarPolicy(
-                    Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-                    if wrap_mode != QTextEdit.LineWrapMode.NoWrap
-                    else Qt.ScrollBarPolicy.ScrollBarAsNeeded
-                )
-                editor.setMinimumHeight(height)
-                editor.setMaximumHeight(_WIDGET_SIZE_MAX)
             else:
                 height = int(max(min_height, min(natural, max_height)))
-                editor.setVerticalScrollBarPolicy(
-                    Qt.ScrollBarPolicy.ScrollBarAsNeeded
-                    if natural > max_height
-                    else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-                )
-                editor.setHorizontalScrollBarPolicy(
-                    Qt.ScrollBarPolicy.ScrollBarAsNeeded
-                    if wrap_mode == QTextEdit.LineWrapMode.NoWrap
-                    else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-                )
-                editor.setMinimumHeight(min_height)
-                editor.setMaximumHeight(height)
 
             shell = getattr(editor, "_settings_shell", None)
             shell_height_ok = shell is None or shell.height() == height
@@ -345,40 +360,125 @@ def bind_text_edit_auto_height(
                 or shell is None
                 or shell.width() == settings_width
             )
-            if editor.height() == height and shell_height_ok and shell_width_ok:
+            last_height = getattr(editor, "_auto_height_last_height", None)
+            last_width = getattr(editor, "_auto_height_last_width", None)
+            # Uncapped editors must stay truly fixed (min == max == height).
+            if max_height is None:
+                height_locked = (
+                    editor.minimumHeight() == height
+                    and editor.maximumHeight() == height
+                    and editor.height() == height
+                )
+            else:
+                height_locked = (
+                    editor.maximumHeight() == height
+                    and editor.minimumHeight() == min_height
+                    and editor.height() == height
+                )
+            if (
+                height_locked
+                and shell_height_ok
+                and shell_width_ok
+                and last_height == height
+                and last_width == wrap_measure_width
+            ):
                 return
 
-            editor.setFixedHeight(height)
-            editor.updateGeometry()
-            if settings_width is not None:
-                _sync_settings_text_edit_shell(
-                    editor,
-                    width=settings_width,
-                    height=height,
+            geometry_changed = False
+            if max_height is None:
+                editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                editor.setHorizontalScrollBarPolicy(
+                    Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+                    if wrap_mode != QTextEdit.LineWrapMode.NoWrap
+                    else Qt.ScrollBarPolicy.ScrollBarAsNeeded
                 )
+                if editor.height() != height or editor.minimumHeight() != height:
+                    editor.setFixedHeight(height)
+                    geometry_changed = True
+            else:
+                # AlwaysOn when capped avoids AsNeeded threshold flicker that
+                # resizes the viewport and restarts wrap/height measurement.
+                needs_scroll = natural > max_height
+                editor.setVerticalScrollBarPolicy(
+                    Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+                    if needs_scroll
+                    else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+                )
+                editor.setHorizontalScrollBarPolicy(
+                    Qt.ScrollBarPolicy.ScrollBarAsNeeded
+                    if wrap_mode == QTextEdit.LineWrapMode.NoWrap
+                    else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+                )
+                if (
+                    editor.height() != height
+                    or editor.maximumHeight() != height
+                    or editor.minimumHeight() != min_height
+                ):
+                    editor.setMinimumHeight(min_height)
+                    editor.setMaximumHeight(height)
+                    editor.setFixedHeight(height)
+                    geometry_changed = True
+
+            if settings_width is not None:
+                shell = getattr(editor, "_settings_shell", None)
+                if shell is not None and (
+                    shell.width() != settings_width or shell.height() != height
+                ):
+                    _sync_settings_text_edit_shell(
+                        editor,
+                        width=settings_width,
+                        height=height,
+                    )
+                    geometry_changed = True
             elif is_row_field:
-                _sync_settings_text_edit_shell_height(editor, height=height)
-            _propagate_widget_geometry(editor)
+                shell = getattr(editor, "_settings_shell", None)
+                if shell is not None and shell.height() != height:
+                    _sync_settings_text_edit_shell_height(editor, height=height)
+                    geometry_changed = True
+
+            editor._auto_height_last_height = height
+            editor._auto_height_last_width = wrap_measure_width
+            editor._auto_height_last_editor_width = editor.width()
+            if geometry_changed:
+                editor.updateGeometry()
+                _propagate_widget_geometry(editor)
         except RuntimeError:
             return
         finally:
             editor._auto_height_adjusting = False
+
+    def _schedule_adjust() -> None:
+        if getattr(editor, "_auto_height_adjusting", False):
+            return
+        if getattr(editor, "_auto_height_adjust_pending", False):
+            return
+        editor._auto_height_adjust_pending = True
+
+        def _run() -> None:
+            editor._auto_height_adjust_pending = False
+            _adjust()
+
+        QTimer.singleShot(0, _run)
 
     editor._auto_height_minimum = minimum
     editor._auto_height_maximum = maximum
 
     class _ResizeFilter(QObject):
         def eventFilter(self, obj, event) -> bool:
-            if event.type() == 14:  # QEvent.Type.Resize
-                _adjust()
+            # Only remasure on the editor's own width changes. Viewport resizes
+            # from scrollbar chrome must not restart wrap/height measurement.
+            if obj is editor and event.type() == 14:  # QEvent.Type.Resize
+                new_width = editor.width()
+                last_width = getattr(editor, "_auto_height_last_editor_width", None)
+                if last_width is not None and new_width == last_width:
+                    return False
+                editor._auto_height_last_editor_width = new_width
+                _schedule_adjust()
             return False
 
     editor.textChanged.connect(_adjust)
     resize_filter = _ResizeFilter(editor)
     editor.installEventFilter(resize_filter)
-    viewport = editor.viewport()
-    if viewport is not None:
-        viewport.installEventFilter(resize_filter)
     editor._auto_height_resize_filter = resize_filter  # prevent GC
     editor._auto_height_adjust = _adjust
     QTimer.singleShot(0, _adjust)
@@ -389,6 +489,10 @@ class _ScrollAwareWheelAppFilter(QObject):
 
     def eventFilter(self, obj, event) -> bool:
         if event.type() != _WHEEL_EVENT_TYPE or not isinstance(obj, QWidget):
+            return False
+        # While we move page scroll bars, Qt may re-deliver wheel traffic into this
+        # filter. Never dispatch again from that nested delivery.
+        if _SCROLL_AREA_WHEEL_DEPTH > 0:
             return False
         window = obj.window()
         if window is None or not ScrollAwareTextEdit._window_uses_scroll_aware_wheel(window):

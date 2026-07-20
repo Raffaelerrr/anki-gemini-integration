@@ -74,7 +74,11 @@ def _install_anki_mocks() -> None:
         )
         WidgetAttribute = _Enum(WA_QuitOnClose=1, WA_StyledBackground=2)
         WindowModality = _Enum(NonModal=0)
-        ScrollBarPolicy = _Enum(ScrollBarAlwaysOff=0, ScrollBarAsNeeded=1)
+        ScrollBarPolicy = _Enum(
+            ScrollBarAlwaysOff=0,
+            ScrollBarAsNeeded=1,
+            ScrollBarAlwaysOn=2,
+        )
         FocusPolicy = _Enum(StrongFocus=1)
         FocusReason = _Enum(OtherFocusReason=1)
         Key = _Enum(Key_Return=16777220, Key_Enter=16777221)

@@ -12,6 +12,7 @@ from aqt.qt import (
     QLabel,
     QLineEdit,
     QObject,
+    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -54,8 +55,9 @@ SETTINGS_COMBO_HORIZONTAL_PADDING = 52
 # Fallback before the parent layout has a width.
 SETTINGS_TEXT_EDIT_FALLBACK_WIDTH = 520
 _SETTINGS_PANEL_PADDING = 16
-# Settings pages live inside a QScrollArea — grow to full content height (no cap).
-SETTINGS_TEXT_EDIT_MAX_HEIGHT: int | None = None
+# Cap so Advanced (long prompts / wrapper) cannot build multi-thousand-pixel
+# editors that freeze layout and break page scrolling.
+SETTINGS_TEXT_EDIT_MAX_HEIGHT = 280
 
 
 def create_settings_hint_label(parent: QWidget, text: str) -> QLabel:
@@ -291,7 +293,11 @@ def add_settings_stacked_field(
     layout.addWidget(group)
 
 
-def apply_settings_text_edit_newlines(editor: QTextEdit, *, show: bool) -> None:
+def apply_settings_text_edit_newlines(
+    editor: QTextEdit | QPlainTextEdit,
+    *,
+    show: bool,
+) -> None:
     option = editor.document().defaultTextOption()
     flags = option.flags()
     marker = QTextOption.Flag.ShowLineAndParagraphSeparators
@@ -306,15 +312,65 @@ def apply_settings_text_edit_newlines(editor: QTextEdit, *, show: bool) -> None:
         viewport.update()
 
 
+def apply_text_edit_wrap(
+    editor: QTextEdit | QPlainTextEdit,
+    *,
+    wrap: bool,
+) -> None:
+    if isinstance(editor, QPlainTextEdit):
+        editor.setLineWrapMode(
+            QPlainTextEdit.LineWrapMode.WidgetWidth
+            if wrap
+            else QPlainTextEdit.LineWrapMode.NoWrap
+        )
+    else:
+        editor.setLineWrapMode(
+            QTextEdit.LineWrapMode.WidgetWidth
+            if wrap
+            else QTextEdit.LineWrapMode.NoWrap
+        )
+    if wrap:
+        editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # AsNeeded vertical bars shrink the viewport when they appear, which
+        # reflows WidgetWidth wrap and can freeze/crash (stack overflow) even
+        # on fixed-height editors. Keep the bar reserved while wrapping.
+        editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+    else:
+        editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # No wrap-reflow from viewport width; AsNeeded is safe. Auto-height
+        # binders may still override this on their next adjust pass.
+        if getattr(editor, "_auto_height_adjust", None) is None:
+            editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    adjust = getattr(editor, "_auto_height_adjust", None)
+    if adjust is not None:
+        adjust()
+
+
 def refresh_settings_text_edit_newlines(root: QWidget, show: bool) -> None:
     for editor in root.findChildren(QTextEdit):
         apply_settings_text_edit_newlines(editor, show=show)
+    for editor in root.findChildren(QPlainTextEdit):
+        apply_settings_text_edit_newlines(editor, show=show)
+
+
+def refresh_text_edit_wrap(root: QWidget, wrap: bool) -> None:
+    for editor in root.findChildren(QTextEdit):
+        if getattr(editor, "_addon_text_edit", False) or getattr(
+            editor, "_settings_text_edit", False
+        ):
+            apply_text_edit_wrap(editor, wrap=wrap)
+    for editor in root.findChildren(QPlainTextEdit):
+        if getattr(editor, "_addon_text_edit", False) or getattr(
+            editor, "_settings_text_edit", False
+        ):
+            apply_text_edit_wrap(editor, wrap=wrap)
 
 
 def configure_addon_text_edit(
     editor: QTextEdit,
     *,
     show_newlines: bool | None = None,
+    wrap: bool | None = None,
     auto_height: bool = True,
     minimum: int = SETTINGS_TEXT_EDIT_MIN_HEIGHT,
     maximum: int | None = SETTINGS_TEXT_EDIT_MAX_HEIGHT,
@@ -322,13 +378,18 @@ def configure_addon_text_edit(
 ) -> None:
     editor._addon_text_edit = True
     editor.document().setDocumentMargin(0)
-    editor.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-    editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    if show_newlines is None:
-        show_newlines = bool(load_config().get("settings_show_text_newlines", False))
+    if show_newlines is None or wrap is None:
+        config = load_config()
+        if show_newlines is None:
+            show_newlines = bool(config.get("settings_show_text_newlines", False))
+        if wrap is None:
+            wrap = bool(config.get("settings_wrap_text_editors", True))
     apply_settings_text_edit_newlines(editor, show=show_newlines)
-    if scroll_free:
-        maximum = None
+    apply_text_edit_wrap(editor, wrap=wrap)
+    # scroll_free used to force maximum=None (uncapped growth inside page scroll
+    # areas). That caused scrollbar ↔ wrap-width ↔ height crash loops. Keep the
+    # height cap; long content scrolls inside the editor instead.
+    _ = scroll_free
     if auto_height:
         bind_text_edit_auto_height(editor, minimum=minimum, maximum=maximum)
 
@@ -367,12 +428,15 @@ def configure_settings_text_edit(
     minimum: int = SETTINGS_TEXT_EDIT_MIN_HEIGHT,
     maximum: int | None = SETTINGS_TEXT_EDIT_MAX_HEIGHT,
     show_newlines: bool = False,
+    wrap: bool | None = None,
 ) -> None:
     editor._settings_text_edit = True
     editor.document().setDocumentMargin(0)
-    editor.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
     editor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     apply_settings_text_edit_newlines(editor, show=show_newlines)
+    if wrap is None:
+        wrap = bool(load_config().get("settings_wrap_text_editors", True))
+    apply_text_edit_wrap(editor, wrap=wrap)
     bind_text_edit_auto_height(editor, minimum=minimum, maximum=maximum)
 
 
@@ -516,10 +580,14 @@ def refresh_settings_text_edit_layouts(root: QWidget) -> None:
     def _run() -> None:
         root._settings_layout_refresh_pending = False
         for editor in root.findChildren(QTextEdit):
+            if not editor.isVisible():
+                continue
             adjust = getattr(editor, "_auto_height_adjust", None)
             if adjust is not None:
                 adjust()
         for shell in root.findChildren(QWidget):
+            if not shell.isVisible():
+                continue
             if getattr(shell, "_settings_panel", False):
                 adjust_settings_panel_shell(shell)
             elif getattr(shell, "_settings_compact_control", None) is not None:
@@ -537,6 +605,7 @@ def create_ui_text_edit(
     *,
     editor_class: type[_TEditor] = ScrollAwareTextEdit,
     show_newlines: bool | None = None,
+    wrap: bool | None = None,
     auto_height: bool = False,
     minimum: int = SETTINGS_TEXT_EDIT_MIN_HEIGHT,
     maximum: int | None = SETTINGS_TEXT_EDIT_MAX_HEIGHT,
@@ -547,6 +616,7 @@ def create_ui_text_edit(
     configure_addon_text_edit(
         editor,
         show_newlines=show_newlines,
+        wrap=wrap,
         auto_height=auto_height,
         minimum=minimum,
         maximum=maximum,
@@ -574,6 +644,7 @@ def create_settings_auto_height_text_edit(
     minimum: int = SETTINGS_TEXT_EDIT_MIN_HEIGHT,
     maximum: int | None = SETTINGS_TEXT_EDIT_MAX_HEIGHT,
     show_newlines: bool = False,
+    wrap: bool | None = None,
 ) -> tuple[QWidget, _TEditor]:
     shell = QWidget(parent)
     shell.setObjectName("settingsTextEditShell")
@@ -590,6 +661,7 @@ def create_settings_auto_height_text_edit(
         minimum=minimum,
         maximum=maximum,
         show_newlines=show_newlines,
+        wrap=wrap,
     )
     shell_layout.addWidget(editor)
     return shell, editor
@@ -602,6 +674,7 @@ def create_settings_row_auto_height_text_edit(
     minimum: int = SETTINGS_TEXT_EDIT_MIN_HEIGHT,
     maximum: int | None = SETTINGS_TEXT_EDIT_MAX_HEIGHT,
     show_newlines: bool = False,
+    wrap: bool | None = None,
 ) -> tuple[QWidget, _TEditor]:
     """Auto-height settings field sized by its row column, not the full form width."""
     shell = QWidget(parent)
@@ -621,6 +694,7 @@ def create_settings_row_auto_height_text_edit(
         minimum=minimum,
         maximum=maximum,
         show_newlines=show_newlines,
+        wrap=wrap,
     )
     shell_layout.addWidget(editor)
     return shell, editor

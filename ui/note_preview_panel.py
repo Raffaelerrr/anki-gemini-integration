@@ -22,7 +22,7 @@ from .theme import (
     apply_native_text_edit_surface_theme,
     field_name_label_html,
 )
-from .widgets import ScrollAwareTextEdit, _qt_widget_alive, bind_text_edit_auto_height
+from .widgets import ScrollAwareTextEdit, _qt_widget_alive
 
 _LABEL_EDITOR_SPACING = 2
 _FIELD_BLOCK_SPACING = 8
@@ -143,12 +143,13 @@ class NotePreviewPanel(QWidget):
             editor_shell, editor = create_ui_text_edit(
                 self._host,
                 editor_class=ScrollAwareTextEdit,
+                auto_height=True,
+                minimum=_FIELD_EDITOR_MIN_HEIGHT,
             )
             editor.setPlainText(value)
             apply_native_text_edit_surface_theme(editor)
             editor.document().setDocumentMargin(0)
             editor.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-            bind_text_edit_auto_height(editor, minimum=_FIELD_EDITOR_MIN_HEIGHT, maximum=None)
             editor.textChanged.connect(self._emit_fields_changed)
             self._fields_layout.addWidget(editor_shell)
             self._field_editors.append((name, editor))
@@ -180,7 +181,11 @@ class NotePreviewPanel(QWidget):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if self._has_content and self._content_visible:
+        if (
+            self._has_content
+            and self._content_visible
+            and event.size().width() != event.oldSize().width()
+        ):
             QTimer.singleShot(0, self.reflow)
 
     def _emit_fields_changed(self) -> None:

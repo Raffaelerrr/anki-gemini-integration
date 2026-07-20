@@ -26,7 +26,6 @@ from .theme import (
     apply_native_fields_scroll_theme,
     field_name_label_html,
 )
-from .widgets import bind_text_edit_auto_height
 from .themed_windows import configure_snappable_window
 
 _LABEL_EDITOR_SPACING = 2
@@ -184,10 +183,11 @@ class ImportedNotePreviewWindow(QWidget):
             editor_shell, editor = create_ui_text_edit(
                 self._host,
                 editor_class=QTextEdit,
+                auto_height=True,
+                minimum=_FIELD_MIN_HEIGHT,
             )
             editor.setReadOnly(True)
             load_field_rich_edit(editor, value)
             editor.document().setDocumentMargin(0)
             editor.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-            bind_text_edit_auto_height(editor, minimum=_FIELD_MIN_HEIGHT, maximum=None)
             self._fields_layout.addWidget(editor_shell)
