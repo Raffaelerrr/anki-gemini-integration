@@ -2872,6 +2872,7 @@ class TestConfig(unittest.TestCase):
                 "suppress_import_note_cache_warning",
                 "suppress_prompt_cache_custom_text_load_confirm",
                 "suppress_prompt_cache_delete_orphans_confirm",
+                "suppress_apply_note_duplicate_warning",
                 "prompt_cache_change_ttl_seconds",
                 "prompt_cache_recreate_default",
                 "prompt_cache_new_conversation_cache_default",
@@ -2883,6 +2884,8 @@ class TestConfig(unittest.TestCase):
                 "prompt_cache_segments_chat",
                 "prompt_cache_active_preset_id_chat",
                 "prompt_cache_active_preset_id_optimize",
+                "settings_presets",
+                "active_settings_preset_id",
                 "chat_download_directory",
                 "settings_show_text_newlines",
                 "settings_wrap_text_editors",
@@ -4038,6 +4041,89 @@ class TestPromptCacheConfirmLogic(unittest.TestCase):
             )
         self.assertEqual(choice, "skip_cache")
 
+    def test_resolve_recreate_clears_ack_when_not_needed(self) -> None:
+        ack = self.pcc.PromptCacheRecreateAcknowledgment(
+            fingerprint="fp-old",
+            choice="proceed",
+        )
+        with patch.object(self.pcc, "needs_prompt_cache_recreate_confirm", return_value=False):
+            choice, updated = self.pcc.resolve_prompt_cache_recreate_choice(
+                None,
+                {"language": "en"},
+                MagicMock(fingerprint="fp-new"),
+                purpose="chat",
+                acknowledgment=ack,
+            )
+        self.assertEqual(choice, "proceed")
+        self.assertIsNone(updated)
+
+    def test_resolve_recreate_reuses_matching_ack(self) -> None:
+        ack = self.pcc.PromptCacheRecreateAcknowledgment(
+            fingerprint="fp-same",
+            choice="skip_cache",
+        )
+        with patch.object(self.pcc, "needs_prompt_cache_recreate_confirm", return_value=True):
+            with patch.object(
+                self.pcc,
+                "confirm_prompt_cache_recreate_if_needed",
+            ) as confirm:
+                choice, updated = self.pcc.resolve_prompt_cache_recreate_choice(
+                    None,
+                    {"language": "en"},
+                    MagicMock(fingerprint="fp-same"),
+                    purpose="chat",
+                    acknowledgment=ack,
+                )
+        confirm.assert_not_called()
+        self.assertEqual(choice, "skip_cache")
+        self.assertEqual(updated, ack)
+
+    def test_resolve_recreate_asks_again_when_fingerprint_changes(self) -> None:
+        ack = self.pcc.PromptCacheRecreateAcknowledgment(
+            fingerprint="fp-old",
+            choice="proceed",
+        )
+        with patch.object(self.pcc, "needs_prompt_cache_recreate_confirm", return_value=True):
+            with patch.object(
+                self.pcc,
+                "confirm_prompt_cache_recreate_if_needed",
+                return_value="skip_cache",
+            ) as confirm:
+                choice, updated = self.pcc.resolve_prompt_cache_recreate_choice(
+                    None,
+                    {"language": "en"},
+                    MagicMock(fingerprint="fp-new"),
+                    purpose="chat",
+                    acknowledgment=ack,
+                    prompt_context="session_edit",
+                )
+        confirm.assert_called_once()
+        self.assertEqual(confirm.call_args.kwargs.get("prompt_context"), "session_edit")
+        self.assertEqual(choice, "skip_cache")
+        self.assertEqual(updated.fingerprint, "fp-new")
+        self.assertEqual(updated.choice, "skip_cache")
+
+    def test_resolve_recreate_abort_keeps_prior_ack(self) -> None:
+        ack = self.pcc.PromptCacheRecreateAcknowledgment(
+            fingerprint="fp-old",
+            choice="proceed",
+        )
+        with patch.object(self.pcc, "needs_prompt_cache_recreate_confirm", return_value=True):
+            with patch.object(
+                self.pcc,
+                "confirm_prompt_cache_recreate_if_needed",
+                return_value="abort",
+            ):
+                choice, updated = self.pcc.resolve_prompt_cache_recreate_choice(
+                    None,
+                    {"language": "en"},
+                    MagicMock(fingerprint="fp-new"),
+                    purpose="chat",
+                    acknowledgment=ack,
+                )
+        self.assertEqual(choice, "abort")
+        self.assertEqual(updated, ack)
+
     def test_import_note_dismissed_always_proceeds(self) -> None:
         config = {
             "language": "en",
@@ -4052,6 +4138,98 @@ class TestPromptCacheConfirmLogic(unittest.TestCase):
         config_mod = _load_addon_module("config")
         keys = {entry[0] for entry in config_mod.DEFAULT_ACTION_SETTINGS}
         self.assertNotIn("prompt_cache_import_note_default", keys)
+
+
+class TestSettingsPresets(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.presets = _load_addon_module("settings_presets")
+        cls.config = _load_addon_module("config")
+
+    def test_normalize_caps_and_mints_ids(self) -> None:
+        raw = [{"name": f"p{i}", "values": {}} for i in range(25)]
+        normalized = self.presets.normalize_settings_presets(raw)
+        self.assertEqual(len(normalized), self.presets.MAX_SETTINGS_PRESETS)
+        self.assertTrue(all(item["id"] for item in normalized))
+        self.assertTrue(all("system_instruction" in item["values"] for item in normalized))
+
+    def test_builtin_id_rejected_in_named_list(self) -> None:
+        normalized = self.presets.normalize_settings_presets(
+            [{"id": self.presets.BUILTIN_SETTINGS_PRESET_ID, "name": "X", "values": {}}]
+        )
+        self.assertEqual(len(normalized), 1)
+        self.assertNotEqual(normalized[0]["id"], self.presets.BUILTIN_SETTINGS_PRESET_ID)
+
+    def test_collect_optional_dynamic(self) -> None:
+        config = {
+            "system_instruction": "A",
+            "system_instruction_shared": True,
+            "system_instruction_optimize": "",
+            "system_instruction_chat": "",
+            "brain_import_message": "",
+            "prompt_optimize_user": "",
+            "prompt_chat_addon": "",
+            "prompt_dynamic_rules_prefix": "",
+            "prompt_chat_context_order": list(
+                self.config.DEFAULT_CONFIG["prompt_chat_context_order"]
+            ),
+            "prompt_chat_context_sections": {},
+            "prompt_card_templates_format": "",
+            "dynamic_instructions": "live rules",
+        }
+        without = self.presets.collect_prompt_pack_from_config(config, include_dynamic=False)
+        self.assertNotIn("dynamic_instructions", without)
+        with_dyn = self.presets.collect_prompt_pack_from_config(config, include_dynamic=True)
+        self.assertEqual(with_dyn["dynamic_instructions"], "live rules")
+
+    def test_export_import_roundtrip(self) -> None:
+        preset = self.presets.new_settings_preset(
+            name="Exam",
+            values={"system_instruction": "Study hard", "dynamic_instructions": "dyn"},
+        )
+        text = self.presets.dumps_settings_presets_export([preset])
+        imported = self.presets.loads_settings_presets_import(text)
+        self.assertEqual(len(imported), 1)
+        self.assertEqual(imported[0]["name"], "Exam")
+        self.assertEqual(imported[0]["values"]["system_instruction"], "Study hard")
+        self.assertEqual(imported[0]["values"]["dynamic_instructions"], "dyn")
+
+    def test_resolve_active_falls_back_to_builtin(self) -> None:
+        config = {
+            "settings_presets": [{"id": "abc", "name": "A", "values": {}}],
+            "active_settings_preset_id": "missing",
+        }
+        presets = self.presets.normalize_settings_presets(config["settings_presets"])
+        self.assertEqual(
+            self.presets.resolve_active_settings_preset_id(config, presets),
+            self.presets.BUILTIN_SETTINGS_PRESET_ID,
+        )
+
+    def test_merge_import_respects_cap(self) -> None:
+        existing = [
+            self.presets.new_settings_preset(name=f"e{i}")
+            for i in range(self.presets.MAX_SETTINGS_PRESETS - 1)
+        ]
+        incoming = [
+            self.presets.new_settings_preset(name="in1"),
+            self.presets.new_settings_preset(name="in2"),
+        ]
+        merged, added = self.presets.merge_imported_settings_presets(existing, incoming)
+        self.assertEqual(added, 1)
+        self.assertEqual(len(merged), self.presets.MAX_SETTINGS_PRESETS)
+
+    def test_config_normalize_adds_preset_keys(self) -> None:
+        stored = {"config_version": 4, "language": "en"}
+        merged = self.config._normalize_config(
+            {**self.config.DEFAULT_CONFIG, **stored},
+            stored,
+        )
+        self.assertEqual(merged["config_version"], 5)
+        self.assertEqual(merged["settings_presets"], [])
+        self.assertEqual(
+            merged["active_settings_preset_id"],
+            self.presets.BUILTIN_SETTINGS_PRESET_ID,
+        )
 
 
 class TestAutoHeightFreezeIsolation(unittest.TestCase):

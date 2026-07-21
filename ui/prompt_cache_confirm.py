@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from aqt.qt import QCheckBox, QMessageBox, QWidget
@@ -20,8 +21,17 @@ from ..prompt_cache_policy import (
 )
 
 PromptCacheRecreateChoice = Literal["proceed", "skip_cache", "abort"]
+PromptCacheRecreatePromptContext = Literal["send", "session_edit"]
 NewConversationCacheChoice = Literal["keep", "clear", "abort"]
 ImportNoteCacheChoice = Literal["proceed", "abort"]
+
+
+@dataclass(frozen=True)
+class PromptCacheRecreateAcknowledgment:
+    """Consent to recreate/skip for a specific pending cache fingerprint."""
+
+    fingerprint: str
+    choice: Literal["proceed", "skip_cache"]
 
 
 def _save_dismiss_flag(config: dict[str, Any], key: str) -> None:
@@ -85,6 +95,7 @@ def confirm_prompt_cache_recreate_if_needed(
     bundle: PromptCacheBundle | None,
     *,
     purpose: Purpose,
+    prompt_context: PromptCacheRecreatePromptContext = "send",
 ) -> PromptCacheRecreateChoice:
     if not needs_prompt_cache_recreate_confirm(config, bundle, purpose=purpose):
         return "proceed"
@@ -94,6 +105,11 @@ def confirm_prompt_cache_recreate_if_needed(
 
     ttl_seconds = prompt_cache_ttl_seconds(config, purpose)
     ttl_minutes = max(1, ttl_seconds // 60)
+    detail_key = (
+        "prompt_cache.recreate_confirm.detail_session_edit"
+        if prompt_context == "session_edit"
+        else "prompt_cache.recreate_confirm.detail"
+    )
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Warning)
     box.setWindowTitle(tr("prompt_cache.recreate_confirm.title", config=config))
@@ -107,7 +123,7 @@ def confirm_prompt_cache_recreate_if_needed(
     )
     box.setInformativeText(
         tr(
-            "prompt_cache.recreate_confirm.detail",
+            detail_key,
             config=config,
             billing_url=GEMINI_AI_STUDIO_BILLING_URL,
         )
@@ -146,6 +162,49 @@ def confirm_prompt_cache_recreate_if_needed(
             _save_dismiss_flag(config, "suppress_prompt_cache_recreate_confirm")
 
     return choice
+
+
+def resolve_prompt_cache_recreate_choice(
+    parent: QWidget,
+    config: dict[str, Any],
+    bundle: PromptCacheBundle | None,
+    *,
+    purpose: Purpose,
+    acknowledgment: PromptCacheRecreateAcknowledgment | None = None,
+    prompt_context: PromptCacheRecreatePromptContext = "send",
+) -> tuple[PromptCacheRecreateChoice, PromptCacheRecreateAcknowledgment | None]:
+    """Resolve recreate consent, reusing a matching fingerprint acknowledgment.
+
+    Returns ``(choice, updated_acknowledgment)``. When recreate is not needed the
+    acknowledgment is cleared (``None``). Abort leaves the prior acknowledgment
+    unchanged.
+    """
+    if not needs_prompt_cache_recreate_confirm(config, bundle, purpose=purpose):
+        return "proceed", None
+
+    fingerprint = bundle.fingerprint if bundle is not None else ""
+    if (
+        acknowledgment is not None
+        and fingerprint
+        and acknowledgment.fingerprint == fingerprint
+    ):
+        return acknowledgment.choice, acknowledgment
+
+    choice = confirm_prompt_cache_recreate_if_needed(
+        parent,
+        config,
+        bundle,
+        purpose=purpose,
+        prompt_context=prompt_context,
+    )
+    if choice == "abort":
+        return "abort", acknowledgment
+    if not fingerprint:
+        return choice, None
+    return choice, PromptCacheRecreateAcknowledgment(
+        fingerprint=fingerprint,
+        choice=choice,
+    )
 
 
 def _new_conversation_cache_default(config: dict[str, Any]) -> NewConversationCacheChoice:

@@ -23,6 +23,8 @@
         "prompt_chat_addon": "",
         "prompt_dynamic_rules_prefix": "",
         "prompt_chat_context": "",
+        "settings_presets": [],
+        "active_settings_preset_id": "",
         "suppress_default_system_instruction_warning": false,
         "suppress_api_key_restore_warning": false,
         "suppress_settings_unsaved_close_warning": false,

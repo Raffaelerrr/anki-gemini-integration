@@ -240,6 +240,11 @@ def _install_anki_mocks() -> None:
         def getSaveFileName(*args, **kwargs):
             return ("", "")
 
+    class QInputDialog(_Stub):
+        @staticmethod
+        def getText(*args, **kwargs):
+            return ("", False)
+
     class QTextOption(_Stub):
         Flag = _Enum(ShowLineAndParagraphSeparators=1)
         WrapMode = _Enum(WrapAtWordBoundaryOrAnywhere=1)
@@ -409,6 +414,7 @@ def _install_anki_mocks() -> None:
 
     aqt_qt.QIcon = QIcon
     aqt_qt.QFileDialog = QFileDialog
+    aqt_qt.QInputDialog = QInputDialog
     aqt_qt.QTextOption = QTextOption
 
     class QFont(_Stub):

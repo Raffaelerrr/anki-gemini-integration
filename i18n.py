@@ -414,6 +414,24 @@ _STRINGS: dict[str, dict[str, str]] = {
             "<a href=\"{billing_url}\">AI Studio → Billing</a>."
         ),
     },
+    "prompt_cache.recreate_confirm.detail_session_edit": {
+        "it": (
+            "Sì = salva; al prossimo invio la cache verrà ricreata. "
+            "No = salva; al prossimo invio senza usare/ricreare la cache "
+            "(solo prompt live). "
+            "Annulla = non salvare. "
+            "L'add-on non mostra importi: vedi "
+            "<a href=\"{billing_url}\">AI Studio → Fatturazione</a>."
+        ),
+        "en": (
+            "Yes = save; the next send will recreate the cache. "
+            "No = save; the next send will skip using/recreating the cache "
+            "(live prompt only). "
+            "Cancel = do not save. "
+            "The add-on does not show dollar amounts — see "
+            "<a href=\"{billing_url}\">AI Studio → Billing</a>."
+        ),
+    },
     "prompt_cache.recreate_default.title": {
         "it": "Azione predefinita",
         "en": "Default action",
@@ -1195,6 +1213,112 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.prompt_cache_presets.limit": {
         "it": "Numero massimo di preset raggiunto ({max}).",
         "en": "Maximum number of presets reached ({max}).",
+    },
+    "settings.presets": {
+        "it": "Preset prompt",
+        "en": "Prompt presets",
+    },
+    "settings.presets.hint": {
+        "it": (
+            "Salva e richiama pacchetti di istruzioni, wrapper e messaggi correlati. "
+            "Caricare un preset aggiorna il modulo; premi Salva per applicarlo."
+        ),
+        "en": (
+            "Save and recall packs of instructions, wrapper, and related prompt text. "
+            "Loading a preset fills the form; press Save to apply it."
+        ),
+    },
+    "settings.presets.active": {
+        "it": "Preset attivo",
+        "en": "Active preset",
+    },
+    "settings.presets.builtin": {
+        "it": "Predefinito",
+        "en": "Default",
+    },
+    "settings.presets.dirty": {
+        "it": "Il modulo differisce dal preset — Aggiorna o Salva come.",
+        "en": "Form differs from preset — Update or Save as.",
+    },
+    "settings.presets.include_dynamic": {
+        "it": "Includi istruzioni dinamiche",
+        "en": "Include dynamic instructions",
+    },
+    "settings.presets.save_as": {
+        "it": "Salva come…",
+        "en": "Save as…",
+    },
+    "settings.presets.update": {
+        "it": "Aggiorna preset",
+        "en": "Update preset",
+    },
+    "settings.presets.rename": {
+        "it": "Rinomina…",
+        "en": "Rename…",
+    },
+    "settings.presets.delete": {
+        "it": "Elimina",
+        "en": "Delete",
+    },
+    "settings.presets.export": {
+        "it": "Esporta…",
+        "en": "Export…",
+    },
+    "settings.presets.import": {
+        "it": "Importa…",
+        "en": "Import…",
+    },
+    "settings.presets.name_prompt": {
+        "it": "Nome del preset",
+        "en": "Preset name",
+    },
+    "settings.presets.rename_prompt": {
+        "it": "Nuovo nome",
+        "en": "New name",
+    },
+    "settings.presets.limit": {
+        "it": "Numero massimo di preset raggiunto ({max}).",
+        "en": "Maximum number of presets reached ({max}).",
+    },
+    "settings.presets.cannot_modify_builtin": {
+        "it": "Il preset Predefinito non può essere modificato o eliminato.",
+        "en": "The Default preset cannot be modified or deleted.",
+    },
+    "settings.presets.delete_confirm": {
+        "it": "Eliminare il preset “{name}”?",
+        "en": "Delete preset “{name}”?",
+    },
+    "settings.presets.export.title": {
+        "it": "Esporta preset prompt",
+        "en": "Export prompt presets",
+    },
+    "settings.presets.import.title": {
+        "it": "Importa preset prompt",
+        "en": "Import prompt presets",
+    },
+    "settings.presets.file_filter": {
+        "it": "JSON (*.json)",
+        "en": "JSON (*.json)",
+    },
+    "settings.presets.export_done": {
+        "it": "Esportati {count} preset.",
+        "en": "Exported {count} preset(s).",
+    },
+    "settings.presets.import_done": {
+        "it": "Importati {count} preset.",
+        "en": "Imported {count} preset(s).",
+    },
+    "settings.presets.import_error": {
+        "it": "Importazione non riuscita: {error}",
+        "en": "Import failed: {error}",
+    },
+    "settings.presets.export_error": {
+        "it": "Esportazione non riuscita: {error}",
+        "en": "Export failed: {error}",
+    },
+    "chat.edit_wrapper.sync_from_settings": {
+        "it": "Sincronizza dalle impostazioni",
+        "en": "Sync from settings",
     },
     "settings.optimize_modify_prompt_before_send": {
         "it": "Modifica prompt prima di ottimizzare",

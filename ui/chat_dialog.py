@@ -68,6 +68,10 @@ from ..prompt_cache import (
     flatten_bundle_for_live_send,
     prompt_cache_enabled,
 )
+from ..prompt_cache_policy import (
+    chat_cache_includes_session_content,
+    has_tracked_active_cache,
+)
 from .chat_include_panel import ChatIncludePanel
 from .chat_prompt_cache_dialog import ChatPromptCacheDialog
 from .chat_templates_edit_window import ChatTemplatesEditWindow
@@ -85,9 +89,11 @@ from ..prompt_inspection import (
 )
 from ..token_estimate import estimate_chat_request_chars
 from .prompt_cache_confirm import (
+    PromptCacheRecreateAcknowledgment,
+    PromptCacheRecreatePromptContext,
     confirm_import_note_cache_if_needed,
     confirm_new_conversation_cache_if_needed,
-    confirm_prompt_cache_recreate_if_needed,
+    resolve_prompt_cache_recreate_choice,
 )
 from .pre_send_prompt_dialog import (
     PreSendPromptContext,
@@ -214,6 +220,7 @@ class ChatWindow(QWidget):
             clamp_apply_history_max(load_config().get("chat_apply_history_max", 7))
         )
         self._session_wrapper_override: dict[str, Any] | None = None
+        self._prompt_cache_recreate_ack: PromptCacheRecreateAcknowledgment | None = None
         self._messages: list[ChatMessage] = []
         self._loading_phase = 0
         self._loading_rotation_degrees = 0
@@ -799,6 +806,7 @@ class ChatWindow(QWidget):
         self._prompt_cache_dialog = None
         if not accepted:
             return
+        self._prompt_cache_recreate_ack = None
         config = load_config()
         self._refresh_prompt_cache_toolbar_tooltip(config)
         if (
@@ -1417,6 +1425,7 @@ class ChatWindow(QWidget):
         clear_apply_undo()
         self._refresh_edit_menu_actions()
         self._session_wrapper_override = None
+        self._prompt_cache_recreate_ack = None
         self._messages.clear()
         self._copy_blocks.clear()
         self._stream_visible = False
@@ -1540,6 +1549,7 @@ class ChatWindow(QWidget):
         self._imported_notes = merge_imported_notes(self._imported_notes, refreshed)
 
         self._session_wrapper_override = None
+        self._prompt_cache_recreate_ack = None
         if import_cache_choice == "proceed":
             clear_prompt_cache(config=config, purpose="chat")
         self._apply_default_mask_for_note_import([note.note_id for note in notes])
@@ -1591,6 +1601,7 @@ class ChatWindow(QWidget):
         )
         self._sync_legacy_notetype_cache()
         self._refresh_edit_menu_actions()
+        self._prompt_cache_recreate_ack = None
         if import_cache_choice == "proceed":
             clear_prompt_cache(config=config, purpose="chat")
         self._apply_default_mask_for_notetype_import(incoming)
@@ -1644,13 +1655,16 @@ class ChatWindow(QWidget):
                 parts.append(schema_block)
         return "\n\n".join(parts)
 
-    def _commit_open_session_editors(self) -> None:
+    def _commit_open_session_editors(self) -> bool:
         if self._note_edit_window is not None and self._note_edit_window.isVisible():
             self._note_edit_window.commit()
         if self._wrapper_edit_window is not None and self._wrapper_edit_window.isVisible():
-            self._wrapper_edit_window.commit()
+            if not self._wrapper_edit_window.commit():
+                return False
         if self._templates_edit_window is not None and self._templates_edit_window.isVisible():
-            self._templates_edit_window.commit()
+            if not self._templates_edit_window.commit():
+                return False
+        return True
 
     def _wrapper_editor_config(self, config: dict[str, Any]) -> dict[str, Any]:
         if self._session_wrapper_override is None:
@@ -1672,6 +1686,41 @@ class ChatWindow(QWidget):
             "format_guide": self._session_wrapper_override.get("format_guide"),
         }
 
+    def _cache_impact_include_context(self, config: dict[str, Any]) -> bool:
+        """Whether session materials should be considered for cache recreate checks."""
+        if self._include_context_active():
+            return True
+        if not has_tracked_active_cache("chat"):
+            return False
+        if not chat_cache_includes_session_content(config):
+            return False
+        return bool(
+            self._imported_notes
+            or self._imported_notetypes
+            or self._imported_card_templates
+            or self._imported_notetype_css.strip()
+        )
+
+    def _resolve_chat_cache_recreate(
+        self,
+        config: dict[str, Any],
+        session: PromptCacheSessionContext,
+        *,
+        prompt_context: PromptCacheRecreatePromptContext = "send",
+    ):
+        bundle = build_prompt_cache_bundle(config, purpose="chat", session=session)
+        choice, ack = resolve_prompt_cache_recreate_choice(
+            self,
+            config,
+            bundle,
+            purpose="chat",
+            acknowledgment=self._prompt_cache_recreate_ack,
+            prompt_context=prompt_context,
+        )
+        if choice != "abort":
+            self._prompt_cache_recreate_ack = ack
+        return choice
+
     def _prompt_cache_session(
         self,
         config: dict[str, Any],
@@ -1685,7 +1734,9 @@ class ChatWindow(QWidget):
             styling_block=self._styling_for_message(config) if included_context else "",
             include_note_context=included_context,
             wrapper_section_order=list(override["order"]) if override else None,
-            wrapper_section_prefixes=dict(override.get("sections") or {}) if override else None,
+            wrapper_section_prefixes=(
+                dict(override.get("sections") or {}) if override else None
+            ),
             wrapper_format_guide=override.get("format_guide") if override else None,
         )
 
@@ -1817,13 +1868,18 @@ class ChatWindow(QWidget):
         templates: list[CardTemplateData],
         styling: str,
         notetype_id: int | None = None,
-    ) -> None:
+    ) -> bool:
         target_id = notetype_id
         if target_id is None or target_id not in self._imported_notetypes:
             target_id = primary_templates_notetype_id(
                 self._imported_notetypes,
                 preferred_id=self._imported_notetype_id,
             )
+
+        provisional_notetypes = dict(self._imported_notetypes)
+        provisional_legacy_templates = list(self._imported_card_templates)
+        provisional_legacy_css = self._imported_notetype_css
+
         if target_id is not None and target_id in self._imported_notetypes:
             current = self._imported_notetypes[target_id]
             resolved_name = current.name
@@ -1836,14 +1892,48 @@ class ChatWindow(QWidget):
                 )
                 for item in templates
             ]
-            self._imported_notetypes[target_id] = ImportedNotetypeData(
+            provisional_notetypes[target_id] = ImportedNotetypeData(
                 notetype_id=current.notetype_id,
                 name=current.name,
                 field_names=list(current.field_names),
                 templates=saved_templates,
                 css=styling,
             )
-        self._sync_legacy_notetype_cache()
+        else:
+            provisional_legacy_templates = list(templates)
+            provisional_legacy_css = styling
+
+        config = load_config()
+        included = self._cache_impact_include_context(config)
+        saved_notetypes = self._imported_notetypes
+        saved_templates = self._imported_card_templates
+        saved_css = self._imported_notetype_css
+        self._imported_notetypes = provisional_notetypes
+        self._imported_card_templates = provisional_legacy_templates
+        self._imported_notetype_css = provisional_legacy_css
+        try:
+            session = self._prompt_cache_session(config, included_context=included)
+            if (
+                self._resolve_chat_cache_recreate(
+                    config,
+                    session,
+                    prompt_context="session_edit",
+                )
+                == "abort"
+            ):
+                return False
+        finally:
+            self._imported_notetypes = saved_notetypes
+            self._imported_card_templates = saved_templates
+            self._imported_notetype_css = saved_css
+
+        self._imported_notetypes = provisional_notetypes
+        if target_id is not None and target_id in provisional_notetypes:
+            self._sync_legacy_notetype_cache()
+        else:
+            self._imported_card_templates = provisional_legacy_templates
+            self._imported_notetype_css = provisional_legacy_css
+        return True
 
     def _open_wrapper_edit_window(self) -> None:
         config = self._chat_effective_config()
@@ -2079,7 +2169,7 @@ class ChatWindow(QWidget):
         order: list[str],
         sections: dict[str, str],
         format_guide: str,
-    ) -> None:
+    ) -> bool:
         config = load_config()
         stored_sections = normalize_wrapper_sections_for_save(sections, config=config)
         stored_format = format_guide.strip()
@@ -2092,13 +2182,33 @@ class ChatWindow(QWidget):
             )
             and (format_builtin or not stored_format)
         ):
-            self._session_wrapper_override = None
-            return
-        self._session_wrapper_override = {
-            "order": order,
-            "sections": dict(sections),
-            "format_guide": format_guide,
-        }
+            provisional_override: dict[str, Any] | None = None
+        else:
+            provisional_override = {
+                "order": order,
+                "sections": dict(sections),
+                "format_guide": format_guide,
+            }
+
+        included = self._cache_impact_include_context(config)
+        saved_override = self._session_wrapper_override
+        self._session_wrapper_override = provisional_override
+        try:
+            session = self._prompt_cache_session(config, included_context=included)
+            if (
+                self._resolve_chat_cache_recreate(
+                    config,
+                    session,
+                    prompt_context="session_edit",
+                )
+                == "abort"
+            ):
+                return False
+        finally:
+            self._session_wrapper_override = saved_override
+
+        self._session_wrapper_override = provisional_override
+        return True
 
     def _on_send_button_clicked(self) -> None:
         if self._request_in_flight:
@@ -2191,11 +2301,10 @@ class ChatWindow(QWidget):
                 system_instruction = pre_send_overrides.system_instruction
                 if pre_send_overrides.bundle is not None:
                     bundle = pre_send_overrides.bundle
-            cache_choice = confirm_prompt_cache_recreate_if_needed(
-                self,
+            cache_choice = self._resolve_chat_cache_recreate(
                 config,
-                bundle,
-                purpose="chat",
+                cache_session,
+                prompt_context="send",
             )
             if cache_choice == "abort":
                 return

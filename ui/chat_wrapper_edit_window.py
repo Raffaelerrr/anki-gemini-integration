@@ -33,7 +33,7 @@ from .theme import (
 from .wrapper_sections_editor import WrapperSectionsEditor
 from .themed_windows import configure_snappable_window
 
-_OnSave = Callable[[list[str], dict[str, str], str], None]
+_OnSave = Callable[[list[str], dict[str, str], str], bool]
 
 
 class ChatWrapperEditWindow(QWidget):
@@ -82,12 +82,15 @@ class ChatWrapperEditWindow(QWidget):
 
         footer = QHBoxLayout()
         footer.addStretch(1)
+        self._sync_from_settings_btn = QPushButton(self)
+        self._sync_from_settings_btn.clicked.connect(self._sync_from_settings)
         self._cancel_btn = QPushButton(self)
         self._cancel_btn.clicked.connect(self.close)
         self._save_btn = QPushButton(self)
         self._save_btn.clicked.connect(self._save_and_close)
         self._save_btn.setDefault(True)
         self._save_btn.setAutoDefault(True)
+        footer.addWidget(self._sync_from_settings_btn)
         footer.addWidget(self._cancel_btn)
         footer.addWidget(self._save_btn)
         root.addLayout(footer)
@@ -98,15 +101,21 @@ class ChatWrapperEditWindow(QWidget):
         self._editor.load_from_config(config)
         refresh_settings_text_edit_layouts(self._editor)
 
-    def commit(self) -> None:
+    def _sync_from_settings(self) -> None:
+        self.load_from_config(load_config())
+
+    def commit(self) -> bool:
         order, sections, format_guide = self._editor.collect()
-        self._on_save(order, sections, format_guide)
+        return bool(self._on_save(order, sections, format_guide))
 
     def apply_language(self, config: dict[str, Any] | None = None) -> None:
         config = config or load_config()
         self.setWindowTitle(tr("chat.edit_wrapper", config=config))
         self._label.setText(strong_label_html(chat_edit_wrapper_label_text(config)))
         self._hint.setText(muted_hint_html(chat_edit_wrapper_hint_text(config)))
+        self._sync_from_settings_btn.setText(
+            tr("chat.edit_wrapper.sync_from_settings", config=config)
+        )
         self._cancel_btn.setText(tr("settings.cancel", config=config))
         self._save_btn.setText(tr("settings.save", config=config))
 
@@ -115,5 +124,5 @@ class ChatWrapperEditWindow(QWidget):
         refresh_settings_text_edit_layouts(self._editor)
 
     def _save_and_close(self) -> None:
-        self.commit()
-        self.close()
+        if self.commit():
+            self.close()

@@ -20,7 +20,7 @@ ADDON_MODULE = os.path.basename(ADDON_DIR)
 LEGACY_CONFIG_PATH = os.path.join(ADDON_DIR, "config_gemini.json")
 META_CONFIG_PATH = os.path.join(ADDON_DIR, "meta.json")
 
-CONFIG_VERSION = 4
+CONFIG_VERSION = 5
 
 _OBSOLETE_CONFIG_KEYS: tuple[str, ...] = (
     "thinking_budget",
@@ -86,6 +86,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "prompt_chat_context_sections": {},
     "prompt_card_templates_format": "",
     "mathjax_preview_preamble": "",
+    "settings_presets": [],
+    "active_settings_preset_id": "",
     "prompt_cache_enabled_chat": False,
     "prompt_cache_enabled_optimize": False,
     "prompt_cache_ttl_seconds_chat": 3600,
@@ -406,6 +408,9 @@ def _normalize_config(config: dict[str, Any], stored: dict[str, Any] | None = No
                 config["prompt_chat_context_order"] = list(
                     DEFAULT_CONFIG["prompt_chat_context_order"]
                 )
+        if stored_version < 5:
+            config.setdefault("settings_presets", [])
+            config.setdefault("active_settings_preset_id", "")
         config["config_version"] = CONFIG_VERSION
 
     for key in _OBSOLETE_CONFIG_KEYS:
@@ -443,10 +448,16 @@ def _normalize_config(config: dict[str, Any], stored: dict[str, Any] | None = No
         config[text_key] = str(config.get(text_key) or "")
 
     from .prompt_cache_policy import normalize_custom_text_presets
+    from .settings_presets import (
+        normalize_settings_presets,
+        resolve_active_settings_preset_id,
+    )
 
     config["prompt_cache_custom_text_presets"] = normalize_custom_text_presets(
         config.get("prompt_cache_custom_text_presets")
     )
+    config["settings_presets"] = normalize_settings_presets(config.get("settings_presets"))
+    config["active_settings_preset_id"] = resolve_active_settings_preset_id(config)
     recreate = str(config.get("prompt_cache_recreate_default") or "recreate")
     config["prompt_cache_recreate_default"] = (
         recreate if recreate in ("recreate", "skip_cache") else "recreate"
