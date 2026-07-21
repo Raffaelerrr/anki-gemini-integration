@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import time
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -117,7 +117,7 @@ def normalize_prompt_cache_segments_for_purpose(
 GEMINI_CACHED_CONTENTS_PATH = "/v1beta/cachedContents"
 ADDON_CACHE_DISPLAY_PREFIX = "anki-ai-"
 PROMPT_CACHE_PURPOSES: tuple[Purpose, ...] = ("chat", "optimize")
-PROMPT_CACHE_STATE_PATH = os.path.join(ADDON_DIR, "prompt_cache_state.json")
+PROMPT_CACHE_STATE_PATH = Path(ADDON_DIR) / "prompt_cache_state.json"
 
 
 @dataclass(frozen=True)
@@ -234,8 +234,10 @@ def _persist_stores() -> None:
         if store is not None and store.active is not None:
             payload[purpose] = _active_to_dict(store.active)
     try:
-        with open(PROMPT_CACHE_STATE_PATH, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, ensure_ascii=False)
+        Path(PROMPT_CACHE_STATE_PATH).write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
     except OSError:
         pass
 
@@ -247,11 +249,11 @@ def _hydrate_stores_from_disk() -> None:
     _stores_hydrated = True
     for purpose in PROMPT_CACHE_PURPOSES:
         _stores.setdefault(purpose, PromptCacheStore(purpose=purpose))
-    if not os.path.exists(PROMPT_CACHE_STATE_PATH):
+    state_path = Path(PROMPT_CACHE_STATE_PATH)
+    if not state_path.is_file():
         return
     try:
-        with open(PROMPT_CACHE_STATE_PATH, "r", encoding="utf-8") as handle:
-            stored = json.load(handle)
+        stored = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return
     if not isinstance(stored, dict):
@@ -285,8 +287,7 @@ def clear_prompt_cache_store(purpose: Purpose | None = None) -> None:
         _stores_hydrated = False
         _orphans_reconciled = False
         try:
-            if os.path.exists(PROMPT_CACHE_STATE_PATH):
-                os.remove(PROMPT_CACHE_STATE_PATH)
+            Path(PROMPT_CACHE_STATE_PATH).unlink(missing_ok=True)
         except OSError:
             pass
         return

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import html
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +80,7 @@ from ..settings_presets import (
 )
 from .chat_include_panel import ChatIncludePanel
 from .chat_prompt_cache_dialog import ChatPromptCacheDialog
+from .chat_request_lifecycle import ChatRequestGate
 from .chat_templates_edit_window import ChatTemplatesEditWindow
 from .chat_wrapper_edit_window import ChatWrapperEditWindow
 from .note_apply_dialog import open_note_apply_dialog
@@ -239,11 +239,8 @@ class ChatWindow(QWidget):
         self._stream_visible = False
         self._loading_mode: str | None = None
         self._closing = False
-        self._request_in_flight = False
-        self._cancel_event = threading.Event()
-        self._active_response = None
+        self._request_gate = ChatRequestGate()
         self._restorable_user_text = ""
-        self._request_token = 0
         self._note_preview_window: ImportedNotePreviewWindow | None = None
         self._note_edit_window: ChatNoteEditWindow | None = None
         self._wrapper_edit_window: ChatWrapperEditWindow | None = None
@@ -450,7 +447,7 @@ class ChatWindow(QWidget):
                 self.chat_log = create_chat_log_webview(self._body_splitter)
                 self.chat_log.set_bridge_command(self._on_chat_log_bridge_cmd, self)
                 self._uses_web_chat_log = True
-            except Exception:
+            except (RuntimeError, AttributeError, ImportError, TypeError, ValueError):
                 self.chat_log = None
         if not self._uses_web_chat_log:
             self.chat_log = QTextBrowser(self._body_splitter)
@@ -503,9 +500,9 @@ class ChatWindow(QWidget):
         self._apply_chat_theme()
         self._apply_static_texts()
         self._add_system_message(
-            tr("chat.welcome"),
+            tr("chat.welcome", config=load_config()),
             kind="gemini",
-            label=tr("chat.label.gemini"),
+            label=tr("chat.label.gemini", config=load_config()),
         )
         self._capture_session_config()
 
@@ -981,7 +978,7 @@ class ChatWindow(QWidget):
         if not self._uses_web_chat_log:
             self.chat_log.setPlaceholderText(tr("chat.log_placeholder", config=config))
         self.input_field.setPlaceholderText(tr("chat.input_placeholder", config=config))
-        if self._request_in_flight:
+        if self._request_gate.in_flight:
             self.send_button.setText(tr("chat.stop", config=config))
         else:
             self.send_button.setText(tr("chat.send", config=config))
@@ -1049,7 +1046,7 @@ class ChatWindow(QWidget):
         else:
             match = next((p for p in presets if p.get("id") == preset_id), None)
             name = str((match or {}).get("name") or preset_id[:8])
-        diffs = preset_diff_from_builtin(values, runtime)
+        diffs = preset_diff_from_builtin(values, runtime, config=config)
         if not diffs:
             summary = tr("settings.presets.preview.matches_default", config=config)
         else:
@@ -1259,7 +1256,7 @@ class ChatWindow(QWidget):
         label: str | None = None,
     ) -> None:
         if label is None:
-            label = tr("chat.label.system")
+            label = tr("chat.label.system", config=load_config())
         label_class = {
             "gemini": "chat-label-gemini",
             "system": "chat-label-system",
@@ -1280,7 +1277,7 @@ class ChatWindow(QWidget):
         if content is None:
             return
         QApplication.clipboard().setText(content)
-        tooltip(tr("chat.copied"))
+        tooltip(tr("chat.copied", config=load_config()))
 
     def _preview_codeblock(self, block_id: str) -> None:
         stored = self._copy_blocks.get(block_id)
@@ -1485,8 +1482,8 @@ class ChatWindow(QWidget):
             return
         if not self._confirm_new_conversation(config):
             return
-        if self._request_in_flight:
-            self._request_token += 1
+        if self._request_gate.in_flight:
+            self._request_gate.invalidate()
             self._restorable_user_text = ""
             self._cancel_in_flight_request()
         self.api_history.clear()
@@ -2290,30 +2287,19 @@ class ChatWindow(QWidget):
         return True
 
     def _on_send_button_clicked(self) -> None:
-        if self._request_in_flight:
+        if self._request_gate.in_flight:
             self._cancel_in_flight_request()
             return
         self.send_message()
 
-    def _register_active_response(self, response) -> None:
-        self._active_response = response
-
     def _cancel_in_flight_request(self) -> None:
-        if not self._request_in_flight:
+        if not self._request_gate.request_cancel():
             return
-        self._cancel_event.set()
-        if self._active_response is not None:
-            try:
-                self._active_response.close()
-            except Exception:
-                pass
-            self._active_response = None
         self._start_stopping()
         self.send_button.setEnabled(False)
 
     def _begin_request(self) -> None:
-        self._request_in_flight = True
-        self._cancel_event.clear()
+        self._request_gate.set_in_flight(True)
         config = load_config()
         self.send_button.setText(tr("chat.stop", config=config))
         self.send_button.setEnabled(True)
@@ -2321,9 +2307,7 @@ class ChatWindow(QWidget):
         self.btn_clear.setEnabled(False)
 
     def _end_request(self) -> None:
-        self._request_in_flight = False
-        self._cancel_event.clear()
-        self._active_response = None
+        self._request_gate.set_in_flight(False)
         config = load_config()
         self.send_button.setText(tr("chat.send", config=config))
         self.send_button.setEnabled(True)
@@ -2353,7 +2337,7 @@ class ChatWindow(QWidget):
         mw.taskman.run_on_main(lambda cache=active: self._notify_prompt_cache_created(cache))
 
     def send_message(self) -> None:
-        if self._request_in_flight:
+        if self._request_gate.in_flight:
             return
 
         user_text = self.input_field.toPlainText().strip()
@@ -2457,10 +2441,9 @@ class ChatWindow(QWidget):
             history_for_request = trim_history(self.api_history[:-1], max_turns)
             temperature = float(config.get("temperature_chat", 0.2))
             use_streaming = bool(config.get("chat_streaming", False))
-            cancel_check = self._cancel_event.is_set
-            register_response = self._register_active_response
-            self._request_token += 1
-            request_token = self._request_token
+            cancel_check = self._request_gate.should_cancel
+            register_response = self._request_gate.register_response
+            request_token = self._request_gate.issue_token()
             request_kwargs = {
                 "config": config,
                 "user_text": user_text,
@@ -2511,7 +2494,7 @@ class ChatWindow(QWidget):
             self._end_request()
 
     def _handle_stream_chunk_safe(self, accumulated: str) -> None:
-        if self._closing or self._cancel_event.is_set():
+        if self._closing or self._request_gate.should_cancel():
             return
         self._handle_stream_chunk(accumulated)
 
@@ -2583,7 +2566,7 @@ class ChatWindow(QWidget):
                 clamp_apply_history_max(config.get("chat_apply_history_max", 7))
             )
             self._apply_history.extend_from_batch(apply_batch)
-            preview_text = format_apply_batch_for_display(apply_batch)
+            preview_text = format_apply_batch_for_display(apply_batch, config=config)
             if preview_text.strip() and not prose_contains_labeled_field_fences(
                 display_text
             ):
@@ -2718,12 +2701,12 @@ class ChatWindow(QWidget):
         )
 
     def _handle_response(self, future, request_token: int) -> None:
-        if self._closing or request_token != self._request_token:
+        if not self._request_gate.should_handle(request_token, closing=self._closing):
             self._stop_loading()
             self._end_request()
             return
         self._stop_loading()
-        cancelled = self._cancel_event.is_set()
+        cancelled = self._request_gate.should_cancel()
 
         try:
             raw_text = future.result()
@@ -2745,7 +2728,7 @@ class ChatWindow(QWidget):
 
     def _set_input_enabled(self, enabled: bool) -> None:
         self.input_field.setEnabled(enabled)
-        if not self._request_in_flight:
+        if not self._request_gate.in_flight:
             self.send_button.setEnabled(enabled)
 
     def _start_loading(self) -> None:
@@ -2770,9 +2753,10 @@ class ChatWindow(QWidget):
         self._loading_mode = None
 
     def _loading_base_text(self) -> str:
+        config = load_config()
         if self._loading_mode == "stopping":
-            return tr("chat.stopping")
-        return tr("chat.loading")
+            return tr("chat.stopping", config=config)
+        return tr("chat.loading", config=config)
 
     def _apply_loading_display(self) -> None:
         dots = "." * self._loading_phase if self._loading_phase else ""
@@ -2805,11 +2789,6 @@ def refresh_chat_language() -> None:
 def refresh_chat_from_settings() -> None:
     if _chat_window is not None:
         _chat_window.apply_settings_refresh()
-
-
-def refresh_chat_theme() -> None:
-    if _chat_window is not None:
-        _chat_window.apply_theme()
 
 
 def get_chat_window() -> ChatWindow:

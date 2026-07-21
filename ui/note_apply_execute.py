@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+try:
+    from anki.errors import NotFoundError
+except ImportError:  # offline tests / non-Anki hosts
+    class NotFoundError(Exception):
+        """Stub when the Anki package is unavailable."""
+
 from aqt import dialogs, mw
 from aqt.qt import QTimer
 from aqt.utils import tooltip
@@ -62,7 +68,7 @@ def undo_last_note_apply(
         )
     try:
         note = col.get_note(snapshot.note_id)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return NoteApplyExecutionResult(
             ok=False,
             mode="update",
@@ -80,7 +86,7 @@ def undo_last_note_apply(
             col.update_note(note)
         else:
             note.flush()
-    except Exception as exc:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError) as exc:
         # Put the snapshot back so the user can retry.
         store_apply_undo(snapshot)
         return NoteApplyExecutionResult(
@@ -133,7 +139,7 @@ def _execute_update(
         )
     try:
         note = col.get_note(note_id)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         # Stale / deleted note → fall back to create when possible.
         return _fallback_create_from_missing_update(plan, config=config)
 
@@ -158,7 +164,7 @@ def _execute_update(
             col.update_note(note)
         else:
             note.flush()
-    except Exception as exc:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError) as exc:
         return NoteApplyExecutionResult(
             ok=False,
             mode="update",
@@ -241,7 +247,7 @@ def _resolve_deck_id(deck_name: str | None) -> Any | None:
         for item in decks.all_names_and_ids():
             if str(getattr(item, "name", "") or "") == deck_name:
                 return getattr(item, "id", None)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         pass
     return None
 
@@ -249,25 +255,25 @@ def _resolve_deck_id(deck_name: str | None) -> Any | None:
 def _new_note_for_model(col: Any, notetype_id: int) -> Any | None:
     try:
         model = col.models.get(notetype_id)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         model = None
     if model is None:
         try:
             model = col.models.get(int(notetype_id))
-        except Exception:
+        except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
             return None
     if model is None:
         return None
     try:
         if hasattr(col, "new_note"):
             return col.new_note(model)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         pass
     try:
         from anki.notes import Note
 
         return Note(col, model)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return None
 
 
@@ -276,12 +282,12 @@ def _reload_editor(editor: Any) -> None:
         try:
             editor.loadNoteKeepingFocus()
             return
-        except Exception:
+        except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
             pass
     if hasattr(editor, "loadNote"):
         try:
             editor.loadNote()
-        except Exception:
+        except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
             pass
 
 
@@ -333,7 +339,7 @@ def _execute_create(
 
     try:
         add_dialog = dialogs.open("AddCards", mw)
-    except Exception as exc:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError) as exc:
         return NoteApplyExecutionResult(
             ok=False,
             mode="create",
@@ -349,7 +355,7 @@ def _execute_create(
                 add_dialog.set_note(note)
         elif hasattr(add_dialog, "load_new_note"):
             add_dialog.load_new_note(deck_id=deck_id, notetype_id=notetype_id)
-    except Exception as exc:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError) as exc:
         return NoteApplyExecutionResult(
             ok=False,
             mode="create",
@@ -393,14 +399,14 @@ def _focus_addcards_window(add_dialog: Any) -> None:
             window = add_dialog.windowHandle()
             if window is not None and hasattr(window, "requestActivate"):
                 window.requestActivate()
-        except Exception:
+        except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
             return
         try:
             editor = getattr(add_dialog, "editor", None)
             web = getattr(editor, "web", None) if editor is not None else None
             if web is not None and hasattr(web, "setFocus"):
                 web.setFocus()
-        except Exception:
+        except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
             pass
 
     focus()
@@ -408,7 +414,7 @@ def _focus_addcards_window(add_dialog: Any) -> None:
         QTimer.singleShot(0, focus)
         QTimer.singleShot(50, focus)
         QTimer.singleShot(200, focus)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         pass
 
 
@@ -418,11 +424,11 @@ def _refresh_open_editors_for_note(note_id: int) -> None:
         return
     try:
         app = mw.app
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return
     try:
         widgets = list(app.topLevelWidgets())
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return
 
     for widget in widgets:
@@ -447,6 +453,6 @@ def _maybe_reload_editor(editor: Any, note_id: int) -> None:
         return
     try:
         editor.note = col.get_note(note_id)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return
     _reload_editor(editor)

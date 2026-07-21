@@ -92,10 +92,7 @@ def _load_svg_renderer(svg_path: Path, *, color: str):
     try:
         from PyQt6.QtSvg import QSvgRenderer
     except ImportError:
-        try:
-            from PyQt5.QtSvg import QSvgRenderer  # type: ignore[no-redef]
-        except ImportError:
-            return None
+        return None
 
     from aqt.qt import QByteArray
 

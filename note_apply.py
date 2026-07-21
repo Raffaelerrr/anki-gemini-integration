@@ -5,6 +5,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal
 
+try:
+    from anki.errors import NotFoundError
+except ImportError:  # offline tests / non-Anki hosts
+    class NotFoundError(Exception):
+        """Stub when the Anki package is unavailable."""
+
 _APPLY_NOTE_TAG_RE = re.compile(
     r"<\s*APPLY_NOTE\s*>(.*?)</\s*APPLY_NOTE\s*>",
     re.DOTALL | re.IGNORECASE,
@@ -308,7 +314,7 @@ def apply_mapped_fields_to_note(
     for name, value in mapped_fields.items():
         try:
             note[name] = value
-        except Exception:
+        except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
             # Fall back to fields[] by matching note.keys()/items() when available.
             try:
                 keys = list(note.keys())
@@ -323,13 +329,13 @@ def apply_mapped_fields_to_note(
                 if index is None:
                     continue
                 note.fields[index] = value
-            except Exception:
+            except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
                 continue
         updated.append(name)
     if tags is not None:
         try:
             note.tags = list(tags)
-        except Exception:
+        except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
             pass
     return updated
 
@@ -349,11 +355,11 @@ def model_field_names_from_note(note: Any) -> list[str]:
             for fld in model.get("flds", [])
             if str(fld.get("name") or "").strip()
         ]
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         pass
     try:
         return [str(name) for name, _value in note.items()]
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return []
 
 
@@ -464,24 +470,24 @@ def snapshot_note_for_undo(note: Any) -> ApplyUndoSnapshot | None:
     """Capture current field/tag values before an update write."""
     try:
         note_id = int(note.id)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return None
     fields: dict[str, str] = {}
     try:
         for name, value in note.items():
             fields[str(name)] = str(value if value is not None else "")
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         try:
             names = list(note.keys())
             values = list(note.fields)
             for name, value in zip(names, values):
                 fields[str(name)] = str(value if value is not None else "")
-        except Exception:
+        except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
             return None
     tags: tuple[str, ...] = ()
     try:
         tags = tuple(str(tag) for tag in (note.tags or []))
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         tags = ()
     return ApplyUndoSnapshot(note_id=note_id, fields=fields, tags=tags)
 
@@ -496,7 +502,7 @@ def collection_note_still_exists(note_id: int) -> bool:
             return False
         col.get_note(int(note_id))
         return True
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return False
 
 
@@ -509,7 +515,7 @@ def _target_from_note_data(
     try:
         note_id = int(note.note_id)
         notetype_id = int(note.notetype_id)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return None
     field_names = [name for name, _value in getattr(note, "fields", [])]
     score, report = score_proposal_against_fields(
@@ -641,7 +647,7 @@ def load_collection_notes_for_notetypes(
         from aqt import mw
 
         col = mw.col if mw is not None else None
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         col = None
     if col is None:
         return []
@@ -649,11 +655,11 @@ def load_collection_notes_for_notetypes(
     for raw_id in notetype_ids:
         try:
             notetype_id = int(raw_id)
-        except Exception:
+        except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
             continue
         try:
             note_ids = list(col.find_notes(f"mid:{notetype_id}"))
-        except Exception:
+        except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
             continue
         for nid in note_ids[: max(1, int(limit_per_type))]:
             note_id = int(nid)
@@ -661,7 +667,7 @@ def load_collection_notes_for_notetypes(
                 continue
             try:
                 note = col.get_note(note_id)
-            except Exception:
+            except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
                 continue
             imported = imported_note_from_anki_note(note)
             if imported is None:
@@ -688,7 +694,7 @@ def load_browser_selected_notes(
         browser = None
         try:
             browser = dialogs._dialogs.get("Browser", [None, None])[1]
-        except Exception:
+        except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
             browser = None
         if browser is None:
             return []
@@ -702,12 +708,12 @@ def load_browser_selected_notes(
                 continue
             try:
                 note = mw.col.get_note(note_id)
-            except Exception:
+            except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
                 continue
             imported = imported_note_from_anki_note(note)
             if imported is not None:
                 results.append(imported)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return []
     return results
 
@@ -747,7 +753,7 @@ def load_note_fields_for_preview(
         note = col.get_note(int(note_id))
         fields = [(str(name), str(value or "")) for name, value in note.items()]
         return fields, int(note.mid)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return [], None
 
 
@@ -757,7 +763,7 @@ def _strip_html_for_duplicate(value: str) -> str:
         from anki.utils import strip_html_media
 
         return str(strip_html_media(text) or "").strip()
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return re.sub(r"<[^>]+>", "", text).strip()
 
 
@@ -769,7 +775,7 @@ def _fields_check_is_duplicate(state: Any) -> bool:
         return True
     try:
         return int(state) == 2
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return "DUPLICATE" in str(state).upper()
 
 
@@ -789,7 +795,7 @@ def update_would_create_anki_duplicate(
         if col is None:
             return False
         note = col.get_note(int(note_id))
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return False
 
     field_names = model_field_names_from_note(note)
@@ -800,7 +806,7 @@ def update_would_create_anki_duplicate(
     original_fields: list[str] | None = None
     try:
         original_fields = list(note.fields)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         original_fields = None
 
     apply_mapped_fields_to_note(note, mapped, tags=None)
@@ -814,14 +820,14 @@ def update_would_create_anki_duplicate(
         elif hasattr(note, "dupeOrEmpty"):
             checked = True
             is_duplicate = _fields_check_is_duplicate(note.dupeOrEmpty())
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         checked = False
         is_duplicate = False
     finally:
         if original_fields is not None:
             try:
                 note.fields = list(original_fields)
-            except Exception:
+            except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
                 pass
 
     if checked:
@@ -838,7 +844,7 @@ def update_would_create_anki_duplicate(
         else:
             try:
                 current_first = str(note[first_name])
-            except Exception:
+            except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
                 current_first = ""
         needle = _strip_html_for_duplicate(current_first)
         if not needle:
@@ -850,11 +856,11 @@ def update_would_create_anki_duplicate(
             try:
                 other = col.get_note(oid)
                 other_val = _strip_html_for_duplicate(str(other[first_name]))
-            except Exception:
+            except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
                 continue
             if other_val == needle:
                 return True
-    except Exception:
+    except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
         return False
     return False
 
@@ -897,7 +903,7 @@ def collect_available_notetypes(
     for data in session_notetypes or ():
         try:
             notetype_id = int(data.notetype_id)
-        except Exception:
+        except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
             continue
         names = tuple(
             str(name).strip()
@@ -928,7 +934,7 @@ def collect_available_notetypes(
                         name=str(model.get("name") or "").strip() or f"#{notetype_id}",
                         field_names=names,
                     )
-        except Exception:
+        except (ImportError, AttributeError, TypeError, KeyError, IndexError, ValueError, RuntimeError, OSError, NotFoundError):
             pass
 
     return sorted(
@@ -1076,19 +1082,33 @@ def parse_apply_note_payload(raw_payload: str) -> NoteApplyBatch | None:
     return None
 
 
-def format_apply_batch_for_display(batch: NoteApplyBatch) -> str:
+def format_apply_batch_for_display(
+    batch: NoteApplyBatch,
+    *,
+    config: dict[str, Any] | None = None,
+) -> str:
     """Rebuild per-field code blocks for the chat log after APPLY_NOTE is stripped."""
+    from .i18n import tr
+
     parts: list[str] = []
     for index, note in enumerate(batch.notes, start=1):
         if batch.note_count > 1:
-            header = f"Note {index}"
+            header = tr("note_apply.display.note_header", config=config, n=index)
             meta: list[str] = []
             if note.notetype:
-                meta.append(f"notetype: {note.notetype}")
+                meta.append(
+                    tr("note_apply.display.notetype", config=config, name=note.notetype)
+                )
             if note.deck:
-                meta.append(f"deck: {note.deck}")
+                meta.append(tr("note_apply.display.deck", config=config, name=note.deck))
             if note.tags:
-                meta.append(f"tags: {', '.join(note.tags)}")
+                meta.append(
+                    tr(
+                        "note_apply.display.tags",
+                        config=config,
+                        tags=", ".join(note.tags),
+                    )
+                )
             if meta:
                 header = f"{header} ({'; '.join(meta)})"
             parts.append(f"### {header}")

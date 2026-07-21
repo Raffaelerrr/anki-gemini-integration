@@ -6,6 +6,7 @@ import importlib.util
 import sys
 import types
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 ADDON_DIR = Path(__file__).resolve().parent.parent
@@ -71,7 +72,11 @@ def _install_anki_mocks() -> None:
             WindowMinimizeButtonHint=2,
             WindowMaximizeButtonHint=4,
             WindowCloseButtonHint=8,
+            WindowSystemMenuHint=16,
+            ToolTip=32,
+            FramelessWindowHint=64,
         )
+        AlignmentFlag = _Enum(AlignTop=1, AlignLeft=2, AlignVCenter=4, AlignRight=8)
         WidgetAttribute = _Enum(
             WA_QuitOnClose=1,
             WA_StyledBackground=2,
@@ -756,18 +761,148 @@ def _install_anki_mocks() -> None:
         def applicationDisplayName():
             return "Anki"
 
+    class QAbstractItemView(_Stub):
+        SelectionMode = _Enum(
+            NoSelection=0,
+            SingleSelection=1,
+            MultiSelection=2,
+            ExtendedSelection=3,
+            ContiguousSelection=4,
+        )
+
+    class QButtonGroup(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._buttons: list[Any] = []
+
+        def addButton(self, button, id=-1):
+            self._buttons.append(button)
+            return None
+
+        def checkedButton(self):
+            return None
+
+    class QListWidget(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._items: list[Any] = []
+
+        def addItem(self, item):
+            self._items.append(item)
+
+        def clear(self):
+            self._items = []
+
+        def count(self):
+            return len(self._items)
+
+        def item(self, index):
+            return self._items[index] if 0 <= index < len(self._items) else None
+
+        def selectedItems(self):
+            return []
+
+        def setSelectionMode(self, *args, **kwargs):
+            return None
+
+    class QListWidgetItem(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._text = str(args[0]) if args else ""
+            self._data: dict[int, Any] = {}
+
+        def text(self):
+            return self._text
+
+        def setText(self, text):
+            self._text = text
+
+        def setData(self, role, value):
+            self._data[role] = value
+
+        def data(self, role):
+            return self._data.get(role)
+
+    class QRadioButton(_CheckBoxStub):
+        pass
+
+    class QProxyStyle(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        def styleHint(self, *args, **kwargs):
+            return 0
+
+        def drawControl(self, *args, **kwargs):
+            return None
+
+        def drawPrimitive(self, *args, **kwargs):
+            return None
+
+    class QStandardPaths(_Stub):
+        class StandardLocation:
+            DocumentsLocation = 0
+            DownloadLocation = 1
+            HomeLocation = 2
+
+        @staticmethod
+        def writableLocation(location):
+            return str(Path.home() / "Documents")
+
+    class QTextDocument(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._html = ""
+
+        def setHtml(self, html):
+            self._html = html
+
+        def toPlainText(self):
+            # Offline tests exercise the regex/unescape fallback in chat_export.
+            return ""
+
+        def setPlainText(self, text):
+            self._html = text
+
+    class QStyleOptionViewItem(_Stub):
+        pass
+
+    class QStyleOptionMenuItem(_Stub):
+        pass
+
+    class QStyledItemDelegate(_Stub):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        def paint(self, *args, **kwargs):
+            return None
+
+        def sizeHint(self, *args, **kwargs):
+            return QSize()
+
     for extra_name, extra_cls in (
+        ("QAbstractItemView", QAbstractItemView),
         ("QBrush", QBrush),
+        ("QButtonGroup", QButtonGroup),
         ("QDialogButtonBox", QDialogButtonBox),
         ("QEvent", QEvent),
         ("QGuiApplication", QGuiApplication),
         ("QKeyEvent", _Stub),
         ("QKeySequence", _Stub),
+        ("QListWidget", QListWidget),
+        ("QListWidgetItem", QListWidgetItem),
         ("QMenu", _Stub),
         ("QPointF", _Stub),
+        ("QProxyStyle", QProxyStyle),
+        ("QRadioButton", QRadioButton),
         ("QSizeF", _Stub),
         ("QSplitter", _Stub),
+        ("QStandardPaths", QStandardPaths),
+        ("QStyleOptionMenuItem", QStyleOptionMenuItem),
+        ("QStyleOptionViewItem", QStyleOptionViewItem),
+        ("QStyledItemDelegate", QStyledItemDelegate),
         ("QTextCharFormat", _Stub),
+        ("QTextDocument", QTextDocument),
         ("QTextFormat", type("QTextFormat", (_Stub,), {"UserObject": 1, "UserProperty": 2})),
         ("QTextObjectInterface", type("QTextObjectInterface", (), {})),
     ):
@@ -778,9 +913,14 @@ def _install_anki_mocks() -> None:
     aqt_utils.showWarning = MagicMock()
     aqt_utils.tooltip = MagicMock()
 
+    aqt_dialogs = types.ModuleType("aqt.dialogs")
+    aqt_dialogs.open = MagicMock(return_value=None)
+    aqt.dialogs = aqt_dialogs
+
     sys.modules["aqt"] = aqt
     sys.modules["aqt.qt"] = aqt_qt
     sys.modules["aqt.utils"] = aqt_utils
+    sys.modules["aqt.dialogs"] = aqt_dialogs
 
 
 def _ensure_package(name: str, path: Path) -> None:

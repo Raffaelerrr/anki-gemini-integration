@@ -845,12 +845,6 @@ def refresh_native_text_edits_in(host: QWidget) -> None:
 
 
 def refresh_addon_theme() -> None:
-    from .chat_dialog import refresh_chat_theme
-    from .dev_playground_dialog import refresh_dev_playground_theme
-    from .settings_dialog import refresh_settings_theme
     from .themed_windows import refresh_registered_themed_windows
 
-    refresh_chat_theme()
-    refresh_settings_theme()
-    refresh_dev_playground_theme()
     refresh_registered_themed_windows()

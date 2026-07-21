@@ -80,6 +80,20 @@ def _mock_chat_reply(*, user_text: str, payload: dict[str, Any]) -> str:
         "```\n"
         "Mock optimized field\n"
         "```\n\n"
+        "Sample Apply-to-Anki proposal (Edit → Apply to Anki…):\n\n"
+        "<APPLY_NOTE>\n"
+        "{\n"
+        '  "notes": [\n'
+        "    {\n"
+        '      "notetype": "Basic",\n'
+        '      "fields": {\n'
+        '        "Front": "Mock front",\n'
+        '        "Back": "Mock back"\n'
+        "      }\n"
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "</APPLY_NOTE>\n\n"
         "Use **Tools → Anki AI: Dev playground** to turn mock mode off."
     )
 

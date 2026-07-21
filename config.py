@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
+from pathlib import Path
 from typing import Any
 
 from aqt import mw
@@ -15,10 +15,10 @@ from .constants import (
 )
 from .i18n import DEFAULT_LANGUAGE, is_builtin_system_instruction, system_instruction_storage_key
 
-ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
-ADDON_MODULE = os.path.basename(ADDON_DIR)
-LEGACY_CONFIG_PATH = os.path.join(ADDON_DIR, "config_gemini.json")
-META_CONFIG_PATH = os.path.join(ADDON_DIR, "meta.json")
+ADDON_DIR = Path(__file__).resolve().parent
+ADDON_MODULE = ADDON_DIR.name
+LEGACY_CONFIG_PATH = ADDON_DIR / "config_gemini.json"
+META_CONFIG_PATH = ADDON_DIR / "meta.json"
 
 CONFIG_VERSION = 5
 
@@ -501,11 +501,10 @@ def _normalize_config(config: dict[str, Any], stored: dict[str, Any] | None = No
 
 
 def _migrate_legacy_config() -> dict[str, Any] | None:
-    if not os.path.exists(LEGACY_CONFIG_PATH):
+    if not LEGACY_CONFIG_PATH.is_file():
         return None
     try:
-        with open(LEGACY_CONFIG_PATH, "r", encoding="utf-8") as handle:
-            legacy = json.load(handle)
+        legacy = json.loads(LEGACY_CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         print(f"[Anki AI Add-on] Impossibile leggere config legacy: {exc}")
         return None
@@ -524,11 +523,10 @@ def _migrate_legacy_config() -> dict[str, Any] | None:
 
 
 def _read_meta_config() -> dict[str, Any]:
-    if not os.path.exists(META_CONFIG_PATH):
+    if not META_CONFIG_PATH.is_file():
         return {}
     try:
-        with open(META_CONFIG_PATH, "r", encoding="utf-8") as handle:
-            meta = json.load(handle)
+        meta = json.loads(META_CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         print(f"[Anki AI Add-on] Impossibile leggere meta.json: {exc}")
         return {}

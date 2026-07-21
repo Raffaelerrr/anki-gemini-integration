@@ -88,6 +88,7 @@ from ..settings_presets import (
     resolve_active_settings_preset_id,
     resolve_preset_payload,
     runtime_pack_values_equal,
+    translate_preset_import_error,
 )
 from .chat_prompt_cache_dialog import ChatPromptCacheDialog
 from .chat_export import (
@@ -2540,7 +2541,7 @@ class SettingsDialog(QDialog):
     def _confirm_load_settings_preset(self, preset_id: str) -> bool:
         config = self._ui_config()
         values, runtime = resolve_preset_payload(self._settings_presets, preset_id)
-        diffs = preset_diff_from_builtin(values, runtime)
+        diffs = preset_diff_from_builtin(values, runtime, config=config)
         name = self._preset_display_name(preset_id)
         if not diffs:
             summary = tr("settings.presets.preview.matches_default", config=config)
@@ -2758,7 +2759,7 @@ class SettingsDialog(QDialog):
         config = self._ui_config()
         preset_id = self._selected_settings_preset_id()
         values, runtime = resolve_preset_payload(self._settings_presets, preset_id)
-        diffs = preset_diff_from_builtin(values, runtime)
+        diffs = preset_diff_from_builtin(values, runtime, config=config)
         name = self._preset_display_name(preset_id)
         if not diffs:
             body = tr("settings.presets.preview.matches_default", config=config)
@@ -2833,7 +2834,11 @@ class SettingsDialog(QDialog):
             incoming = loads_settings_presets_import(text)
         except (OSError, ValueError) as exc:
             showWarning(
-                tr("settings.presets.import_error", config=config, error=str(exc))
+                tr(
+                    "settings.presets.import_error",
+                    config=config,
+                    error=translate_preset_import_error(exc, config=config),
+                )
             )
             return
         merged, added = merge_imported_settings_presets(self._settings_presets, incoming)
@@ -3297,8 +3302,3 @@ def open_settings_dialog(editor) -> None:
     _settings_dialog = SettingsDialog(None, config)
     _settings_dialog.finished.connect(_clear_settings_dialog_ref)
     _settings_dialog.show()
-
-
-def refresh_settings_theme() -> None:
-    if _settings_dialog is not None:
-        _settings_dialog.apply_theme()

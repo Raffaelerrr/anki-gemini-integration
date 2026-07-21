@@ -79,6 +79,7 @@ class SettingsHelpDialog(QDialog):
 
         self._default_buttons = (
             self.btn_overview,
+            self.btn_presets,
             self.btn_chat_live,
             self.btn_chat_toolbar,
             self.btn_track_costs,
@@ -102,6 +103,12 @@ class SettingsHelpDialog(QDialog):
         self.btn_overview.setDefault(False)
         self.btn_overview.clicked.connect(self._show_prompts_overview)
         outer.addWidget(self.btn_overview)
+
+        self.btn_presets = QPushButton(tr("settings.help.presets.link", config=self.config), page)
+        self.btn_presets.setAutoDefault(False)
+        self.btn_presets.setDefault(False)
+        self.btn_presets.clicked.connect(self._show_presets)
+        outer.addWidget(self.btn_presets)
 
         self.btn_chat_live = QPushButton(tr("settings.help.chat_live_settings.link", config=self.config), page)
         self.btn_chat_live.setAutoDefault(False)
@@ -209,6 +216,14 @@ class SettingsHelpDialog(QDialog):
             f"<b>{tr('settings.help.prompts_overview.title', config=self.config)}</b>"
         )
         self._set_detail_html(tr("settings.help.prompts_overview", config=self.config))
+        self.stack.setCurrentIndex(1)
+        self._set_help_page("detail")
+
+    def _show_presets(self) -> None:
+        self.detail_title.setText(
+            f"<b>{tr('settings.help.presets.title', config=self.config)}</b>"
+        )
+        self._set_detail_html(tr("settings.help.presets", config=self.config))
         self.stack.setCurrentIndex(1)
         self._set_help_page("detail")
 

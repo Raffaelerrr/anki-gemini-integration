@@ -630,6 +630,9 @@ def call_gemini(
     if mock_reply is not None:
         return mock_reply
 
+    if not api_key:
+        raise GeminiAuthError(tr("gemini.auth_error", config=config))
+
     headers = _request_headers(api_key)
 
     if should_cancel is not None:
@@ -698,7 +701,6 @@ def stream_gemini(
     temp = temperature if temperature is not None else float(config.get("temperature_chat") or 0.2)
 
     url = build_api_url(model, stream=True)
-    headers = _request_headers(api_key)
     prepared = prepare_gemini_request(
         config=config,
         user_text=user_text,
@@ -730,10 +732,13 @@ def stream_gemini(
     if mock_reply is not None:
         return mock_reply
 
+    if not api_key:
+        raise GeminiAuthError(tr("gemini.auth_error", config=config))
+
     return _run_streaming_request(
         config=config,
         url=url,
-        headers=headers,
+        headers=_request_headers(api_key),
         payload=payload,
         timeout=timeout,
         max_retries=max_retries,

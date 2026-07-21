@@ -22,6 +22,7 @@ from ..dev_mock import (
 )
 from ..i18n import tr
 from .chat_dialog import open_chat
+from .settings_dialog import open_settings_dialog
 from .theme import apply_native_text_edit_surface_theme, get_theme_colors
 from .themed_windows import configure_snappable_window
 
@@ -54,6 +55,13 @@ class DevPlaygroundDialog(QDialog):
         self.open_chat_btn = QPushButton(tr("dev.playground.open_chat", config=self._config), self)
         self.open_chat_btn.clicked.connect(lambda: open_chat())
         btn_row.addWidget(self.open_chat_btn)
+
+        self.open_settings_btn = QPushButton(
+            tr("dev.playground.open_settings", config=self._config),
+            self,
+        )
+        self.open_settings_btn.clicked.connect(lambda: open_settings_dialog(None))
+        btn_row.addWidget(self.open_settings_btn)
 
         self.reset_btn = QPushButton(tr("dev.playground.reset", config=self._config), self)
         self.reset_btn.clicked.connect(self._reset_mock_state)
@@ -130,6 +138,7 @@ class DevPlaygroundDialog(QDialog):
         self.intro.setText(tr("dev.playground.intro", config=config))
         self.mock_checkbox.setText(tr("dev.playground.enable", config=config))
         self.open_chat_btn.setText(tr("dev.playground.open_chat", config=config))
+        self.open_settings_btn.setText(tr("dev.playground.open_settings", config=config))
         self.reset_btn.setText(tr("dev.playground.reset", config=config))
         self.clear_log_btn.setText(tr("dev.playground.clear_log", config=config))
         self.activity_label.setText(
@@ -149,15 +158,6 @@ _dev_playground_dialog: DevPlaygroundDialog | None = None
 def _clear_dev_playground_dialog_ref(_result: int | None = None) -> None:
     global _dev_playground_dialog
     _dev_playground_dialog = None
-
-
-def refresh_dev_playground_theme() -> None:
-    if _dev_playground_dialog is not None:
-        try:
-            if _dev_playground_dialog.isVisible():
-                _dev_playground_dialog.apply_theme()
-        except RuntimeError:
-            pass
 
 
 def open_dev_playground_dialog(parent: QWidget | None = None) -> DevPlaygroundDialog:

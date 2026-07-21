@@ -135,7 +135,7 @@ class NoteApplyDiffPreviewWindow(QWidget):
                 self._after_web = create_note_preview_webview(self._after_host)
                 self._after_host_layout.addWidget(self._after_web, 1)
             return True
-        except Exception:
+        except (AttributeError, TypeError, RuntimeError, OSError):
             self._teardown_webviews()
             return False
 

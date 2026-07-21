@@ -5,7 +5,7 @@ An Anki add-on that integrates **Google Gemini** into the note editor: optimize 
 **Repository:** [github.com/Raffaelerrr/anki-gemini-integration](https://github.com/Raffaelerrr/anki-gemini-integration)  
 **Version:** 2.0.0 · see [CHANGELOG.md](CHANGELOG.md)  
 **Author:** Raffaele  
-**Requires:** Anki 2.1.49+ (point version 49)  
+**Requires:** Anki 2.1.49+ (point version 49; **Qt6** recommended — SVG toolbar icons use PyQt6)  
 **License:** [MIT](LICENSE)
 
 > **Disclaimer:** This add-on was developed with substantial assistance from AI coding tools (including Cursor and large language models). The author reviewed and tested the project, but errors or unexpected behavior may remain. Use at your own discretion.
@@ -24,17 +24,20 @@ Imports **all fields** of the current note into chat and asks Gemini whether the
 
 ### Chat (chat icon · `Ctrl+Alt+C` / `Cmd+Alt+C`)
 
-Streaming chat with Markdown replies. When Gemini suggests Anki field content, **copy buttons** appear on code blocks. Also in **Tools → Chat with Gemini**.
+Streaming chat with Markdown replies. When Gemini suggests Anki field content, **copy buttons** appear on code blocks. Also in **Tools → Gemini chat**.
 
-After **brain icon** note import, imported fields appear in an **editable preview** above the chat log (eye icon to show/hide). Check **Include note context in the next message** to wrap your next send with the note fields; use **Edit wrapper** to adjust the `{{context}}` / `{{request}}` template for that session. Field edits in the preview are included when context is sent.
+After **brain icon** note import, use the **include** panel to choose which imported notes and note types go into the next message. Check options there, then send; use **Edit wrapper** (pencil menu) to adjust the `{{context}}` / `{{request}}` template for that session.
 
 **Chat toolbar (compact icons — hover for tooltips):**
 
-- **Brain** — include/exclude imported note in the next message
-- **Pencil menu** — edit note fields, context wrapper, card templates, **Apply to Anki**, or undo last note apply
+- **Brain** — open include choices for imported notes / note types in the next message
+- **Pencil menu** — edit note fields, context wrapper, card templates, **Apply to Anki**, undo last note apply, or apply a **prompt preset**
+- **Import** — import note types (templates/CSS) into chat
 - **Eye** — open imported-note preview in a separate window
 - **Lens** — read-only **prompt inspect** (preview full outgoing prompt without sending)
+- **Cache** — chat prompt-cache settings (TTL, segments, custom text)
 - **Stop / priority** — toggle **pre-send review** (edit prompt before Gemini) vs send directly
+- **Download** — export the conversation as plain text (last folder, quick folders, or browse)
 - **Plus** — new conversation (applies settings that require a fresh session)
 
 From **Edit note**, you can optionally **send empty fields** when building note context.
@@ -56,6 +59,7 @@ Session history keeps recent proposals (configurable). Starting a **new conversa
 - **API key**, models, thinking budgets, temperatures, timeouts
 - **Shared or split system instructions** (optimize vs chat)
 - **Dynamic rules** learned from chat
+- **Prompt presets** — save/load/import/export instruction packs (optional models/temps/thinking); also from chat Edit menu
 - **Settings guide** (info button) — help while you edit
 - **Restore defaults** / **Restore warnings** — selective reset
 - **Filterable model picker** with API refresh
@@ -69,9 +73,11 @@ Session history keeps recent proposals (configurable). Starting a **new conversa
 ## Quick start
 
 1. **Install** (see below) and restart Anki.
-2. Open any note → click the **settings button** in the editor (or **Tools → Add-ons → Config**).
+2. Open any note → click the **settings button** in the editor.
 3. Paste your [Google AI Studio](https://aistudio.google.com/) API key → **Save and apply**.
 4. Focus a field → **Gemini** (or `Ctrl+Shift+G`) to optimize.
+
+> **Tools → Add-ons → Config** opens Anki’s raw JSON editor for this add-on. Prefer the **settings button** for the guided UI.
 
 ---
 
@@ -148,8 +154,15 @@ Use the **settings** dialog for normal setup; manual file copy is rarely needed.
 | `prompt_cache_segments_chat` / `_optimize` | *(see example)* | Which prompt parts to include in the cache |
 | `chat_payload_warning_chars` | `12000` | Warn before chat send when total input characters exceed this |
 | `chat_apply_history_max` | `7` | How many APPLY_NOTE proposals to keep in the chat session (1–30) |
+| `settings_presets` / `active_settings_preset_id` | `[]` / `""` | Named prompt presets and which one is active |
+| `brain_import_templates` / `brain_import_css` | `false` | Include card templates / note-type CSS when importing |
+| `chat_export_quick_folders` | `[]` | Quick folders for chat transcript download |
+| `chat_modify_prompt_before_send` | `false` | Default pre-send review toggle for chat |
+| `dev_mock_mode` | `false` | Dev playground mock (no real Gemini billing) |
 
 Enable prompt caching separately for **chat** and **optimize**. **Chat** caching is configured from the cache button in the chat window; **optimize** caching and preset libraries live under **Settings → Advanced prompts**. Cached content is billed at Gemini’s cached-input rate for the TTL; changing cached text or model invalidates the tracked cache and prompts you to confirm before recreating (with character count and a link to AI Studio Billing).
+
+**Prompt presets** (Settings → Prompt presets, or chat Edit → Prompt presets) store instruction/wrapper packs; optionally include models, temperatures, and thinking budgets. Import/export uses JSON schema v2. See the in-app settings guide topic **Prompt presets…**.
 
 Use **Manage caches…** in Advanced settings to list remote `anki-ai-*` caches, see which are tracked locally, delete individual caches, or remove orphaned ones. Tracked cache names persist in `prompt_cache_state.json` across Anki restarts; orphans are cleaned up automatically on the next cached request.
 
@@ -176,7 +189,7 @@ Git ignores secrets and generated files (`meta.json`, `config_gemini.json`, `__p
 
 ### Dev playground (no billing)
 
-**Tools → Anki AI: Dev playground** enables **dev mock mode**: fake Gemini replies (with streaming), in-memory prompt caches, and model list refresh — no API key required. See [TESTING.md](TESTING.md) §5.
+**Tools → Anki AI: Dev playground** enables **dev mock mode**: fake Gemini replies (with streaming and a sample `<APPLY_NOTE>` block), in-memory prompt caches, and model list refresh — no API key required. The playground can open chat or settings. See [TESTING.md](TESTING.md) §5.
 
 ### Run offline tests
 

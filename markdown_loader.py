@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import importlib
-import os
 import sys
+from pathlib import Path
 from typing import Any
 
-ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
-VENDOR_DIR = os.path.join(ADDON_DIR, "vendor")
+ADDON_DIR = Path(__file__).resolve().parent
+VENDOR_DIR = ADDON_DIR / "vendor"
 MIN_MARKDOWN_VERSION = (3, 0)
 
 _md_converter: Any | None = None
@@ -31,17 +31,17 @@ def _module_from_vendor(module: Any) -> bool:
     module_file = getattr(module, "__file__", "") or ""
     if not module_file:
         return False
-    vendor_path = VENDOR_DIR.replace("\\", "/").lower()
+    vendor_path = str(VENDOR_DIR).replace("\\", "/").lower()
     return vendor_path in module_file.replace("\\", "/").lower()
 
 
 def _load_markdown_module() -> Any | None:
-    if not os.path.isdir(VENDOR_DIR):
+    if not VENDOR_DIR.is_dir():
         print("[Anki AI Add-on] Cartella vendor/ non trovata; Markdown chat in modalità semplificata.")
         return None
 
     if VENDOR_DIR not in sys.path:
-        sys.path.insert(0, VENDOR_DIR)
+        sys.path.insert(0, str(VENDOR_DIR))
 
     try:
         existing = sys.modules.get("markdown")

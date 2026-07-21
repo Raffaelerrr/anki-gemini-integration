@@ -8,19 +8,32 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Prompt presets** — save/load/import/export instruction packs (optional runtime models/temps/thinking); apply from Settings or chat Edit menu; in-app help topic.
+- **Chat transcript download** — export conversation text with quick folders and remembered last directory.
+- **Note-type import** — import note types (templates/CSS) into chat; selective include panel for notes and note types.
 - **Apply to Anki from chat** — review Gemini `<APPLY_NOTE>` proposals, update imported or collection notes, or open prefilled Add; session history, before/after preview, and undo for the last update.
 - **Collection update targets** — choose notes beyond the chat import list (compatible note types), including Browser selection when open.
 - **Stale-note fallback** — if an update target was deleted, open Add with fields prefilled instead of failing hard.
 - **Duplicate-update warning** — dismissible confirm when an update would match Anki’s first-field duplicate rule.
 - **Browser selection sync** — reactivating the apply window refreshes update targets from the current Browser selection.
+- **Dev playground** — Open settings shortcut; mock chat replies include a sample `<APPLY_NOTE>` for Apply-to-Anki smoke tests.
 
 ### Changed
 
-- **Chat note import UI** — imported fields are editable in the preview above the chat log; **Edit wrapper** replaces the old “Edit imported context” panel (wrapper template only). Smaller default chat window (`520×520`).
+- **Chat note import UI** — imported fields are editable; **Edit wrapper** for session wrapper template; include panel for notes and note types.
+- Offline test harness updated for current Qt window flags / widgets and request-first wrapper defaults.
+- Preset diff/preview strings and several fallback labels are localized (EN/IT).
+- Empty API key is rejected in `gemini_client` after mock mode is considered (not only in the UI).
+- README / settings guide / example configs aligned with presets and chat toolbar.
+- Theme refresh unified via `register_themed_window` (chat/settings/playground included).
+- `i18n` catalog split into `i18n_strings.py`; chat request lifecycle extracted to `ui/chat_request_lifecycle.py`.
+- Path handling uses `pathlib` in config / prompt-cache / markdown loader; PyQt5 SVG fallback removed (PyQt6 only).
+- Note-apply soft-fail handlers narrowed (no bare `except Exception`).
 
 ### Fixed
 
 - Field name labels in the imported-note preview follow light/dark theme when Anki’s theme changes.
+- Offline suite was failing on stale Qt stubs and outdated wrapper-order / config-version assertions.
 
 ---
 
@@ -45,7 +58,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 - **Offline tests** — `tests/test_offline.py` (automated logic tests).
 - **CI** — GitHub Actions runs offline tests on push/PR.
 - **Optional live API tests** — `tests/test_live_api.py` (see [TESTING.md](TESTING.md)).
-- **Documentation** — README, CHANGELOG, example configs, screenshots.
+- **Documentation** — README, CHANGELOG, example configs.
 
 ### Changed
 

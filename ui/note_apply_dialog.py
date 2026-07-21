@@ -218,7 +218,7 @@ class NoteApplyDialog(QDialog):
                 return
             if not self.isActiveWindow():
                 return
-        except Exception:
+        except (AttributeError, TypeError, RuntimeError, OSError):
             return
         self._refresh_browser_targets_on_focus()
 
@@ -262,7 +262,7 @@ class NoteApplyDialog(QDialog):
                 int(plan.target_note_id),
                 plan.proposal.fields,
             )
-        except Exception:
+        except (AttributeError, TypeError, RuntimeError, OSError):
             is_dupe = False
         if not is_dupe:
             return True
@@ -905,7 +905,7 @@ def _prefer_combo_without_native_check(combo: QComboBox) -> None:
             QStyleOptionMenuItem,
             QStyleOptionViewItem,
         )
-    except Exception:
+    except (AttributeError, TypeError, RuntimeError, OSError):
         return
 
     def _clear_check_state(option) -> None:
@@ -914,18 +914,18 @@ def _prefer_combo_without_native_check(combo: QComboBox) -> None:
             has_check = getattr(features, "HasCheckIndicator", None) if features else None
             if has_check is not None and hasattr(option, "features"):
                 option.features &= ~has_check
-        except Exception:
+        except (AttributeError, TypeError, RuntimeError, OSError):
             pass
         try:
             option.checkState = Qt.CheckState.Unchecked
-        except Exception:
+        except (AttributeError, TypeError, RuntimeError, OSError):
             pass
         try:
             state_enum = getattr(QStyle, "StateFlag", QStyle)
             state_on = getattr(state_enum, "State_On", 0)
             if state_on and hasattr(option, "state"):
                 option.state &= ~state_on
-        except Exception:
+        except (AttributeError, TypeError, RuntimeError, OSError):
             pass
 
     class _NoCheckDelegate(QStyledItemDelegate):
@@ -963,14 +963,14 @@ def _prefer_combo_without_native_check(combo: QComboBox) -> None:
                     if not_checkable is not None:
                         opt.checkType = not_checkable
                     return super().drawControl(element, opt, painter, widget)
-                except Exception:
+                except (AttributeError, TypeError, RuntimeError, OSError):
                     pass
             if element == getattr(ce, "CE_ItemViewItem", None):
                 try:
                     opt = QStyleOptionViewItem(option)
                     _clear_check_state(opt)
                     return super().drawControl(element, opt, painter, widget)
-                except Exception:
+                except (AttributeError, TypeError, RuntimeError, OSError):
                     pass
             return super().drawControl(element, option, painter, widget)
 
@@ -987,14 +987,14 @@ def _prefer_combo_without_native_check(combo: QComboBox) -> None:
         view.setItemDelegate(delegate)
         combo.setView(view)
         combo.setItemDelegate(_NoCheckDelegate(combo))
-    except Exception:
+    except (AttributeError, TypeError, RuntimeError, OSError):
         pass
 
     try:
         style = _NoCheckComboStyle("Fusion")
         style.setParent(combo)
         combo.setStyle(style)
-    except Exception:
+    except (AttributeError, TypeError, RuntimeError, OSError):
         pass
 
 

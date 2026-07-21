@@ -42,27 +42,45 @@ SETTINGS_PRESET_ALL_KEYS: tuple[str, ...] = (
     SETTINGS_PRESET_CORE_KEYS + SETTINGS_PRESET_OPTIONAL_KEYS
 )
 
-_PRESET_SUMMARY_LABELS: dict[str, str] = {
-    "system_instruction": "system instruction",
-    "system_instruction_shared": "shared system instruction",
-    "system_instruction_optimize": "optimize system instruction",
-    "system_instruction_chat": "chat system instruction",
-    "brain_import_message": "brain import message",
-    "prompt_optimize_user": "optimize user prompt",
-    "prompt_chat_addon": "chat system addon",
-    "prompt_dynamic_rules_prefix": "dynamic rules prefix",
-    "prompt_chat_context_order": "wrapper order",
-    "prompt_chat_context_sections": "wrapper sections",
-    "prompt_card_templates_format": "format guide",
-    "mathjax_preview_preamble": "MathJax preamble",
-    "dynamic_instructions": "dynamic instructions",
-    "model_optimize": "optimize model",
-    "model_chat": "chat model",
-    "thinking_budget_optimize": "optimize thinking budget",
-    "thinking_budget_chat": "chat thinking budget",
-    "temperature_optimize": "optimize temperature",
-    "temperature_chat": "chat temperature",
+_PRESET_SUMMARY_LABEL_KEYS: dict[str, str] = {
+    "system_instruction": "settings.presets.summary.system_instruction",
+    "system_instruction_shared": "settings.presets.summary.system_instruction_shared",
+    "system_instruction_optimize": "settings.presets.summary.system_instruction_optimize",
+    "system_instruction_chat": "settings.presets.summary.system_instruction_chat",
+    "brain_import_message": "settings.presets.summary.brain_import_message",
+    "prompt_optimize_user": "settings.presets.summary.prompt_optimize_user",
+    "prompt_chat_addon": "settings.presets.summary.prompt_chat_addon",
+    "prompt_dynamic_rules_prefix": "settings.presets.summary.prompt_dynamic_rules_prefix",
+    "prompt_chat_context_order": "settings.presets.summary.prompt_chat_context_order",
+    "prompt_chat_context_sections": "settings.presets.summary.prompt_chat_context_sections",
+    "prompt_card_templates_format": "settings.presets.summary.prompt_card_templates_format",
+    "mathjax_preview_preamble": "settings.presets.summary.mathjax_preview_preamble",
+    "dynamic_instructions": "settings.presets.summary.dynamic_instructions",
+    "model_optimize": "settings.presets.summary.model_optimize",
+    "model_chat": "settings.presets.summary.model_chat",
+    "thinking_budget_optimize": "settings.presets.summary.thinking_budget_optimize",
+    "thinking_budget_chat": "settings.presets.summary.thinking_budget_chat",
+    "temperature_optimize": "settings.presets.summary.temperature_optimize",
+    "temperature_chat": "settings.presets.summary.temperature_chat",
 }
+
+_PRESET_IMPORT_ERROR_KEYS: dict[str, str] = {
+    "invalid schema_version": "settings.presets.error.invalid_schema_version",
+    "unsupported schema_version": "settings.presets.error.unsupported_schema_version",
+    "expected object or array": "settings.presets.error.expected_object_or_array",
+    "no presets found": "settings.presets.error.no_presets_found",
+    "invalid json": "settings.presets.error.invalid_json",
+}
+
+
+def translate_preset_import_error(error: str | BaseException, *, config: dict[str, Any] | None = None) -> str:
+    from .i18n import tr
+
+    text = str(error)
+    key = _PRESET_IMPORT_ERROR_KEYS.get(text)
+    if key is None:
+        return text
+    return tr(key, config=config)
 
 
 def _default_for_key(key: str) -> Any:
@@ -203,8 +221,18 @@ def duplicate_settings_preset(
     preset: dict[str, Any],
     *,
     name: str = "",
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    base_name = name.strip() or f"{str(preset.get('name') or 'preset').strip()} copy"
+    from .i18n import tr
+
+    if name.strip():
+        base_name = name.strip()
+    else:
+        source = str(preset.get("name") or "").strip() or tr(
+            "settings.presets.unnamed",
+            config=config,
+        )
+        base_name = tr("settings.presets.copy_name", config=config, name=source)
     return new_settings_preset(
         name=base_name,
         values=preset.get("values") if isinstance(preset.get("values"), dict) else {},
@@ -314,17 +342,31 @@ def runtime_pack_values_equal(
     return left_n == right_n
 
 
-def _summarize_value(value: Any, *, limit: int = 80) -> str:
+def _summarize_value(
+    value: Any,
+    *,
+    limit: int = 80,
+    config: dict[str, Any] | None = None,
+) -> str:
+    from .i18n import tr
+
     if isinstance(value, bool):
-        return "on" if value else "off"
+        return tr(
+            "settings.presets.summary.on" if value else "settings.presets.summary.off",
+            config=config,
+        )
     if isinstance(value, list):
         text = ", ".join(str(item) for item in value)
     elif isinstance(value, dict):
-        text = f"{len(value)} override(s)" if value else "(empty)"
+        text = (
+            tr("settings.presets.summary.overrides", config=config, count=len(value))
+            if value
+            else tr("settings.presets.summary.empty", config=config)
+        )
     else:
         text = str(value).replace("\n", " ").strip()
     if not text:
-        return "(empty)"
+        return tr("settings.presets.summary.empty", config=config)
     if len(text) > limit:
         return text[: limit - 1] + "…"
     return text
@@ -333,22 +375,27 @@ def _summarize_value(value: Any, *, limit: int = 80) -> str:
 def preset_diff_from_builtin(
     values: dict[str, Any],
     runtime: dict[str, Any] | None = None,
+    *,
+    config: dict[str, Any] | None = None,
 ) -> list[str]:
     """Human-readable lines for how a preset differs from Builtin Default."""
+    from .i18n import tr
+
     builtin_values = builtin_preset_values()
     normalized = normalize_preset_values(values)
     lines: list[str] = []
     for key in SETTINGS_PRESET_CORE_KEYS:
         if normalized.get(key) == builtin_values.get(key):
             continue
-        label = _PRESET_SUMMARY_LABELS.get(key, key)
-        lines.append(f"{label}: {_summarize_value(normalized.get(key))}")
+        label_key = _PRESET_SUMMARY_LABEL_KEYS.get(key)
+        label = tr(label_key, config=config) if label_key else key
+        lines.append(f"{label}: {_summarize_value(normalized.get(key), config=config)}")
     if "dynamic_instructions" in values:
         left = str(values.get("dynamic_instructions") or "")
         right = str(builtin_values.get("dynamic_instructions") or "")
         if left != right:
-            label = _PRESET_SUMMARY_LABELS["dynamic_instructions"]
-            lines.append(f"{label}: {_summarize_value(left)}")
+            label = tr(_PRESET_SUMMARY_LABEL_KEYS["dynamic_instructions"], config=config)
+            lines.append(f"{label}: {_summarize_value(left, config=config)}")
 
     runtime_n = normalize_runtime_values(runtime)
     if runtime_n is not None:
@@ -358,10 +405,11 @@ def preset_diff_from_builtin(
             if runtime_n.get(key) == builtin_runtime.get(key):
                 continue
             runtime_diffs += 1
-            label = _PRESET_SUMMARY_LABELS.get(key, key)
-            lines.append(f"{label}: {_summarize_value(runtime_n.get(key))}")
+            label_key = _PRESET_SUMMARY_LABEL_KEYS.get(key)
+            label = tr(label_key, config=config) if label_key else key
+            lines.append(f"{label}: {_summarize_value(runtime_n.get(key), config=config)}")
         if runtime_diffs == 0:
-            lines.append("runtime: factory defaults")
+            lines.append(tr("settings.presets.summary.runtime_defaults", config=config))
     return lines
 
 

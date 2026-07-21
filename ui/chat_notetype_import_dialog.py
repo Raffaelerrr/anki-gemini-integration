@@ -59,7 +59,11 @@ class ChatNotetypeImportDialog(QDialog):
         self._list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         for model in sorted(mw.col.models.all(), key=lambda item: str(item.get("name") or "").lower()):
             notetype_id = int(model.get("id") or 0)
-            name = str(model.get("name") or "").strip() or f"Note type {notetype_id}"
+            name = str(model.get("name") or "").strip() or tr(
+                "common.note_type_fallback",
+                config=self._config,
+                id=notetype_id,
+            )
             item = QListWidgetItem(name, self._list)
             item.setData(Qt.ItemDataRole.UserRole, notetype_id)
             self._list.addItem(item)

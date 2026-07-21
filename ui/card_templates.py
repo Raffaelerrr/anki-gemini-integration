@@ -38,7 +38,8 @@ def _templates_from_model(model: dict[str, Any]) -> list[CardTemplateData]:
     for index, template in enumerate(model.get("tmpls") or []):
         templates.append(
             CardTemplateData(
-                name=str(template.get("name") or "").strip() or f"Card {index + 1}",
+                name=str(template.get("name") or "").strip()
+                or tr("common.card_fallback", n=index + 1),
                 front=str(template.get("qfmt") or ""),
                 back=str(template.get("afmt") or ""),
                 notetype_name=notetype_name or None,
@@ -54,7 +55,10 @@ def imported_notetype_from_model(
     include_css: bool = True,
 ) -> ImportedNotetypeData:
     notetype_id = int(model.get("id") or 0)
-    name = str(model.get("name") or "").strip() or f"Note type {notetype_id}"
+    name = str(model.get("name") or "").strip() or tr(
+        "common.note_type_fallback",
+        id=notetype_id,
+    )
     return ImportedNotetypeData(
         notetype_id=notetype_id,
         name=name,

@@ -5,8 +5,11 @@ from .chat_context_wrapper import PLACEHOLDER_SECTIONS, wrapper_content_tag
 Segment = tuple[str, str]
 
 
-def wrapper_token_display_label(section_id: str) -> str:
-    return section_id
+def wrapper_token_display_label(section_id: str, config: dict | None = None) -> str:
+    from .i18n import tr
+
+    key = f"settings.wrapper_section.{section_id}"
+    return tr(key, config=config)
 
 
 def parse_wrapper_prefix_segments(text: str, section_id: str) -> list[Segment]:

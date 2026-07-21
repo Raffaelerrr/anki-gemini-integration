@@ -124,7 +124,7 @@ Automated tests cannot click editor buttons or verify scroll behavior. After UI 
 
 ### Chat
 
-- [ ] Open chat from editor or **Tools → Anki AI: Gemini chat**.
+- [ ] Open chat from editor or **Tools → Gemini chat**.
 - [ ] **Brain icon** — imported fields appear in preview; send with **Include note context** checked.
 - [ ] **Lens / inspect prompt** — pre-send or read-only preview opens; cached vs live views switch when cache is active.
 - [ ] **Modify prompt before send** (if enabled) — pre-send dialog blocks send until confirmed.
@@ -140,7 +140,7 @@ Automated tests cannot click editor buttons or verify scroll behavior. After UI 
 
 ### Dev playground
 
-- [ ] **Tools → Anki AI: Dev playground** — mock replies without billing; **Reset mock state** clears in-memory caches.
+- [ ] **Tools → Anki AI: Dev playground** — mock replies without billing; **Open chat** / **Open settings**; **Reset mock state** clears in-memory caches. Mock chat includes a sample `<APPLY_NOTE>` for Apply-to-Anki testing.
 - [ ] Turn mock mode **off** before expecting real Gemini responses.
 
 ---
@@ -149,12 +149,13 @@ Automated tests cannot click editor buttons or verify scroll behavior. After UI 
 
 **Tools → Anki AI: Dev playground** turns on **dev mock mode**. While active:
 
-- Chat and optimize use fake replies (streaming included).
+- Chat and optimize use fake replies (streaming included), including a sample `<APPLY_NOTE>` block for Apply-to-Anki smoke tests.
 - Prompt caches are created in memory only — no Google HTTP calls.
 - Model refresh returns the built-in model list.
 - No API key is required.
+- **Open chat** / **Open settings** shortcuts from the playground window.
 
-Use this to exercise cache-created notices, recreate dialogs, chat import, optimize preview, etc. as often as you like.
+Use this to exercise cache-created notices, recreate dialogs, chat import, optimize preview, Apply to Anki, etc. as often as you like.
 
 Click **Reset mock state** to clear mock remote caches and local cache tracking without touching your real Google caches (when mock mode is off again).
 

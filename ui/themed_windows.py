@@ -22,12 +22,15 @@ def configure_snappable_window(
     window: QWidget,
     *,
     application_modal: bool = False,
+    register_theme: bool = True,
 ) -> None:
     """Apply standard window chrome and own taskbar entry (Windows requires no Qt parent)."""
     window.setParent(None)
     window.setWindowFlags(SNAPPABLE_WINDOW_FLAGS)
     if application_modal:
         window.setWindowModality(Qt.WindowModality.ApplicationModal)
+    if register_theme:
+        register_themed_window(window)
 
 
 def register_themed_window(window: QWidget) -> None:
@@ -37,8 +40,6 @@ def register_themed_window(window: QWidget) -> None:
 def refresh_registered_themed_windows() -> None:
     for window in list(_THEMED_WINDOWS):
         try:
-            if not window.isVisible():
-                continue
             apply_theme = getattr(window, "apply_theme", None)
             if apply_theme is not None:
                 apply_theme()

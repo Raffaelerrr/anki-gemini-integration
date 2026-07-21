@@ -677,7 +677,7 @@ class TestI18n(unittest.TestCase):
             context="Field [Front]\nHi",
             request="Split this?",
         )
-        self.assertEqual(result, "Note:\nField [Front]\nHi\n\nAsk: Split this?")
+        self.assertEqual(result, "Ask: Split this?\n\nNote:\nField [Front]\nHi")
 
     def test_format_chat_context_message_accepts_session_section_override(self):
         config = {"language": "en"}
@@ -696,7 +696,7 @@ class TestI18n(unittest.TestCase):
         )
         self.assertEqual(
             result,
-            "Note:\nField [Front]\nHi\n\nAsk:\nSplit this?",
+            "Ask:\nSplit this?\n\nNote:\nField [Front]\nHi",
         )
         result_with_templates = self.i18n.format_chat_context_message(
             {**config, "brain_import_templates": True},
@@ -738,7 +738,7 @@ class TestI18n(unittest.TestCase):
             request="req",
             section_prefixes={"request": "Broken"},
         )
-        self.assertEqual(result, "Settings:\nctx\n\nQ: req")
+        self.assertEqual(result, "Q: req\n\nSettings:\nctx")
 
     def test_format_chat_context_message_omits_templates_without_placeholder(self):
         config = {"language": "en", "brain_import_templates": True}
@@ -755,7 +755,7 @@ class TestI18n(unittest.TestCase):
             templates="tmpl-body",
             section_prefixes=section_prefixes,
         )
-        self.assertEqual(result, "Note:\nctx\n\nQ: req")
+        self.assertEqual(result, "Q: req\n\nNote:\nctx")
         self.assertNotIn("tmpl-body", result)
         self.assertNotIn("[TEMPLATES]", result)
 
@@ -774,7 +774,7 @@ class TestI18n(unittest.TestCase):
             styling=".card { color: red; }",
             section_prefixes=section_prefixes,
         )
-        self.assertEqual(result, "Note:\nctx\n\nQ: req")
+        self.assertEqual(result, "Q: req\n\nNote:\nctx")
         self.assertNotIn(".card", result)
         self.assertNotIn("[STYLE]", result)
 
@@ -845,7 +845,7 @@ class TestI18n(unittest.TestCase):
             request="req",
             templates="tmpl-block",
         )
-        self.assertEqual(result, "Note:\nctx\n\nAsk: req")
+        self.assertEqual(result, "Ask: req\n\nNote:\nctx")
 
     def test_apply_wrapper_placeholders_does_not_expand_inside_values(self):
         templates = "[CARD TYPE 1 NAME] Basic\n[FRONT TEMPLATE]\n{{Front}}"
@@ -1191,7 +1191,8 @@ class TestI18n(unittest.TestCase):
             text,
         )
         self.assertTrue(tokens.wrapper_prefix_has_token(segments, "context"))
-        self.assertEqual(tokens.wrapper_token_display_label("context"), "context")
+        self.assertEqual(tokens.wrapper_token_display_label("context", config={"language": "en"}), "Note context")
+        self.assertEqual(tokens.wrapper_token_display_label("context", config={"language": "it"}), "Contesto nota")
         self.assertTrue(tokens.wrapper_prefix_requires_token("request"))
         self.assertFalse(tokens.wrapper_prefix_requires_token("format_guide"))
 
@@ -2831,7 +2832,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(merged["prompt_cache_custom_text_optimize"], "shared")
         self.assertTrue(merged["prompt_cache_segments_chat"]["imported_note"])
         self.assertNotIn("imported_note", merged["prompt_cache_segments_optimize"])
-        self.assertEqual(merged["config_version"], 3)
+        self.assertEqual(merged["config_version"], self.config.CONFIG_VERSION)
 
     def test_apply_config_normalization_migrates_legacy_prompt_cache_enabled(self):
         stored = {
@@ -3893,6 +3894,16 @@ class TestDevMock(unittest.TestCase):
         self.assertIsNotNone(reply)
         assert reply is not None
         self.assertIn("[Dev mock", reply)
+        self.assertIn("<APPLY_NOTE>", reply)
+        self.assertIn("Mock front", reply)
+
+    def test_call_gemini_rejects_empty_api_key_when_mock_off(self) -> None:
+        with self.assertRaises(self.gc.GeminiAuthError):
+            self.gc.call_gemini(
+                config={"language": "en", "api_key": "", "dev_mock_mode": False},
+                user_text="hello",
+                purpose="chat",
+            )
 
     def test_mock_prompt_cache_create_without_api_key(self) -> None:
         config = {
@@ -4212,8 +4223,17 @@ class TestSettingsPresets(unittest.TestCase):
     def test_preset_diff_and_apply(self) -> None:
         values = self.presets.builtin_preset_values()
         values["system_instruction"] = "Custom"
-        diffs = self.presets.preset_diff_from_builtin(values, None)
+        diffs = self.presets.preset_diff_from_builtin(values, None, config={"language": "en"})
         self.assertTrue(any("system instruction" in line for line in diffs))
+        diffs_it = self.presets.preset_diff_from_builtin(values, None, config={"language": "it"})
+        self.assertTrue(any("istruzione di sistema" in line for line in diffs_it))
+        self.assertEqual(
+            self.presets.translate_preset_import_error(
+                "invalid json",
+                config={"language": "it"},
+            ),
+            "JSON non valido",
+        )
         config = dict(self.config.DEFAULT_CONFIG)
         config["dynamic_instructions"] = "keep me"
         config["model_chat"] = "keep-model"
@@ -4226,6 +4246,17 @@ class TestSettingsPresets(unittest.TestCase):
         self.assertEqual(applied["system_instruction"], "Custom")
         self.assertEqual(applied["dynamic_instructions"], "")
         self.assertEqual(applied["model_chat"], "keep-model")
+        values["system_instruction"] = "Mutate after apply"
+        self.assertEqual(applied["system_instruction"], "Custom")
+        runtime = self.presets.builtin_runtime_values()
+        runtime["model_chat"] = "runtime-model"
+        with_runtime = self.presets.apply_preset_to_config(
+            config,
+            values=values,
+            runtime=runtime,
+            apply_runtime=True,
+        )
+        self.assertEqual(with_runtime["model_chat"], "runtime-model")
         values_resolved, runtime_resolved = self.presets.resolve_preset_payload([], self.presets.BUILTIN_SETTINGS_PRESET_ID)
         self.assertEqual(values_resolved["dynamic_instructions"], "")
         self.assertIsNone(runtime_resolved)
@@ -4641,6 +4672,88 @@ class TestSettingsWarningsLogic(unittest.TestCase):
             "skip_cache",
         )
         save.assert_called_once()
+
+
+class TestNoteApplyExecuteRouting(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.note_apply = _load_addon_module("note_apply")
+        cls.execute = _load_addon_module("ui.note_apply_execute")
+
+    def test_update_without_collection_returns_error(self) -> None:
+        from aqt import mw
+
+        previous = mw.col
+        mw.col = None
+        try:
+            plan = self.note_apply.NoteApplyPlan(
+                mode="update",
+                proposal_index=0,
+                proposal=self.note_apply.NoteApplyNote(fields={"Front": "x"}),
+                target_note_id=1,
+            )
+            result = self.execute.execute_note_apply_plan(plan, config={"language": "en"})
+            self.assertFalse(result.ok)
+            self.assertEqual(result.mode, "update")
+            self.assertEqual(result.message_key, "chat.apply_note.error.no_collection")
+        finally:
+            mw.col = previous
+
+    def test_undo_without_snapshot_returns_none(self) -> None:
+        self.note_apply.clear_apply_undo()
+        result = self.execute.undo_last_note_apply(config={"language": "en"})
+        self.assertFalse(result.ok)
+        self.assertEqual(result.message_key, "chat.apply_note.undo.none")
+
+
+class TestChatRequestGate(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.gate_mod = _load_addon_module("ui.chat_request_lifecycle")
+
+    def test_begin_issue_token_and_stale_handling(self) -> None:
+        gate = self.gate_mod.ChatRequestGate()
+        gate.set_in_flight(True)
+        token = gate.issue_token()
+        self.assertTrue(gate.in_flight)
+        self.assertTrue(gate.should_handle(token))
+        gate.invalidate()
+        self.assertFalse(gate.should_handle(token))
+        self.assertTrue(gate.should_handle(token + 1))
+
+    def test_cancel_closes_active_response(self) -> None:
+        gate = self.gate_mod.ChatRequestGate()
+        gate.set_in_flight(True)
+        closed = {"n": 0}
+
+        class _Resp:
+            def close(self) -> None:
+                closed["n"] += 1
+
+        gate.register_response(_Resp())
+        self.assertTrue(gate.request_cancel())
+        self.assertEqual(closed["n"], 1)
+        self.assertTrue(gate.should_cancel())
+        gate.set_in_flight(False)
+        self.assertFalse(gate.request_cancel())
+
+    def test_closing_blocks_handle(self) -> None:
+        gate = self.gate_mod.ChatRequestGate()
+        token = gate.issue_token()
+        self.assertFalse(gate.should_handle(token, closing=True))
+
+
+class TestWrapperTokenLabels(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tokens = _load_addon_module("wrapper_prefix_tokens")
+
+    def test_wrapper_token_display_label_uses_i18n(self) -> None:
+        en = self.tokens.wrapper_token_display_label("request", config={"language": "en"})
+        it = self.tokens.wrapper_token_display_label("request", config={"language": "it"})
+        self.assertNotEqual(en, "request")
+        self.assertNotEqual(it, "request")
+        self.assertNotEqual(en, it)
 
 
 class TestUiModuleImports(unittest.TestCase):
