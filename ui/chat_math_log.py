@@ -28,12 +28,17 @@ _CHAT_LOG_CSS = """
 
 _COPY_CLICK_JS = """
 document.addEventListener('click', function (event) {
-    var link = event.target.closest('a[href^="copy:"]');
+    var link = event.target.closest('a[href^="copy:"], a[href^="preview:"]');
     if (!link) {
         return;
     }
     event.preventDefault();
-    pycmd('addon-chat-copy:' + link.getAttribute('href').slice(5));
+    var href = link.getAttribute('href') || '';
+    if (href.indexOf('copy:') === 0) {
+        pycmd('addon-chat-copy:' + href.slice(5));
+    } else if (href.indexOf('preview:') === 0) {
+        pycmd('addon-chat-preview:' + href.slice(8));
+    }
 }, true);
 """
 

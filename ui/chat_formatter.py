@@ -2,12 +2,36 @@ from __future__ import annotations
 
 import html
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from ..i18n import tr
 from ..markdown_loader import get_markdown_converter
 from .html_utils import render_code_block_header, render_field_table, seal_appended_html
 from .theme import get_theme_colors
+
+
+@dataclass(frozen=True)
+class StoredCodeBlock:
+    """Clipboard/preview payload for one chat field or code fence."""
+
+    text: str
+    label: str = ""
+
+
+def stored_block_text(value: StoredCodeBlock | str | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, StoredCodeBlock):
+        return value.text
+    return str(value)
+
+
+def stored_block_label(value: StoredCodeBlock | str | None) -> str:
+    if isinstance(value, StoredCodeBlock):
+        return (value.label or "").strip()
+    return ""
+
 
 _FENCE_RE = re.compile(
     r"```[ \t]*([^\n`]*)\n(.*?)```",
@@ -53,6 +77,31 @@ def _restore_inline_backticks(text: str, stored: list[str]) -> str:
         return match.group(0)
 
     return _INLINE_BACKTICK_SHIELD_RE.sub(repl, text)
+
+
+def _restore_inline_backticks_as_html(text: str, stored: list[str]) -> str:
+    """Re-insert shielded ``code`` spans as escaped HTML (tags stay literal)."""
+    if not stored:
+        return text
+
+    def repl(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        if not (0 <= index < len(stored)):
+            return match.group(0)
+        original = stored[index]
+        inner = original[1:-1] if len(original) >= 2 and original.startswith("`") else original
+        return (
+            '<span class="chat-code-inline tex2jax_ignore">'
+            f"{html.escape(inner)}"
+            "</span>"
+        )
+
+    return _INLINE_BACKTICK_SHIELD_RE.sub(repl, text)
+
+
+def _escape_html_for_markdown_input(text: str) -> str:
+    """Escape raw HTML so Markdown cannot emit live tags from model prose."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _protect_math_for_markdown(text: str) -> tuple[str, list[str]]:
@@ -129,6 +178,19 @@ def _field_name_before(text: str) -> str | None:
     if not lines:
         return None
     return _parse_field_label_line(lines[-1])
+
+
+def prose_contains_labeled_field_fences(text: str) -> bool:
+    """True if markdown already has Front:/Back:-style labeled code fences."""
+    if not (text or "").strip():
+        return False
+    last_end = 0
+    for match in _FENCE_RE.finditer(text):
+        before = text[last_end : match.start()]
+        if _field_name_before(before):
+            return True
+        last_end = match.end()
+    return False
 
 
 def _strip_trailing_field_label(text: str, field_name: str) -> str:
@@ -217,10 +279,13 @@ def _render_markdown_prose(text: str) -> str:
 
     markdown_input, inline_shields = _shield_inline_backticks(prose)
     markdown_input, protected = _protect_math_for_markdown(markdown_input)
+    # Model prose often cites HTML tags (<b>, <ol>, …). Escape them so they stay
+    # visible as text instead of becoming real markup (or vanishing).
+    markdown_input = _escape_html_for_markdown_input(markdown_input)
     rendered = converter.convert(markdown_input)
     converter.reset()
     rendered = _restore_math_for_markdown(rendered, protected)
-    rendered = _restore_inline_backticks(rendered, inline_shields)
+    rendered = _restore_inline_backticks_as_html(rendered, inline_shields)
     rendered = _qt_compatible_html(rendered)
     return f'<div class="chat-prose">{rendered}</div>'
 
@@ -233,6 +298,7 @@ def _render_code_block(
     config: dict[str, Any] | None = None,
 ) -> str:
     copy_title = tr("formatter.copy", config=config)
+    preview_title = tr("formatter.preview", config=config)
     safe_content = html.escape(content.strip())
     palette = get_theme_colors()
     if label:
@@ -247,6 +313,7 @@ def _render_code_block(
         label_html,
         block_id,
         copy_title=copy_title,
+        preview_title=preview_title,
     )
 
     return render_field_table(
@@ -255,6 +322,31 @@ def _render_code_block(
         f"{safe_content}</pre>",
         header_bg=palette.code_block_bg,
         body_bg=palette.code_pre_bg,
+    )
+
+
+def _render_note_group(field_html_parts: list[str]) -> str:
+    """Wrap consecutive labeled field blocks as one visual note unit."""
+    if not field_html_parts:
+        return ""
+    if len(field_html_parts) == 1:
+        return field_html_parts[0]
+    palette = get_theme_colors()
+    inner = "".join(field_html_parts)
+    # Side gutters (not CSS padding) so nested width=100% field tables stay inset
+    # inside the note frame in Qt/WebEngine table layout.
+    return (
+        f"<table class='chat-note-group' width='100%' border='0' cellspacing='0' "
+        f"cellpadding='0' bgcolor='{palette.note_group_bg}'>"
+        f"<tr>"
+        f"<td class='chat-note-group-gutter' width='10' "
+        f"style='width:10px;padding:0;line-height:0;'>&nbsp;</td>"
+        f"<td class='chat-note-group-cell' style='padding:10px 0 6px 0;'>"
+        f"{inner}"
+        f"</td>"
+        f"<td class='chat-note-group-gutter' width='10' "
+        f"style='width:10px;padding:0;line-height:0;'>&nbsp;</td>"
+        f"</tr></table>"
     )
 
 
@@ -354,7 +446,7 @@ def format_streaming_reply_html(
 
 def format_gemini_reply_html(
     text: str,
-    copy_store: dict[str, str],
+    copy_store: dict[str, StoredCodeBlock | str],
     id_prefix: str,
     *,
     config: dict[str, Any] | None = None,
@@ -364,8 +456,16 @@ def format_gemini_reply_html(
         return ""
 
     parts: list[str] = []
+    pending_fields: list[str] = []
+    pending_labels: list[str] = []
     last_end = 0
     block_index = 0
+
+    def flush_fields() -> None:
+        if pending_fields:
+            parts.append(_render_note_group(pending_fields))
+            pending_fields.clear()
+            pending_labels.clear()
 
     for match in _FENCE_RE.finditer(text):
         before = text[last_end : match.start()]
@@ -376,9 +476,11 @@ def format_gemini_reply_html(
         if before.strip():
             prose = _strip_trailing_field_label(before, field_name) if field_name else before
             if prose.strip():
+                flush_fields()
                 parts.append(_render_markdown_prose(prose))
 
         if lang == "markdown" and not field_name:
+            flush_fields()
             if content:
                 parts.append(_render_markdown_prose(content))
             last_end = match.end()
@@ -390,10 +492,23 @@ def format_gemini_reply_html(
 
         block_id = f"{id_prefix}-{block_index}"
         block_index += 1
-        copy_store[block_id] = content
-        parts.append(_render_code_block(field_name, content, block_id, config=config))
+        copy_store[block_id] = StoredCodeBlock(
+            text=content,
+            label=(field_name or "").strip(),
+        )
+        block_html = _render_code_block(field_name, content, block_id, config=config)
+        if field_name:
+            label_key = field_name.casefold()
+            if label_key in pending_labels:
+                flush_fields()
+            pending_fields.append(block_html)
+            pending_labels.append(label_key)
+        else:
+            flush_fields()
+            parts.append(block_html)
         last_end = match.end()
 
+    flush_fields()
     tail = text[last_end:]
     if tail.strip():
         parts.append(_render_markdown_prose(tail))

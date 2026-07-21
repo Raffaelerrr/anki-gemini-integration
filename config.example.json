@@ -24,6 +24,7 @@
     "brain_import_templates": false,
     "brain_import_css": false,
     "chat_payload_warning_chars": 12000,
+    "chat_apply_history_max": 7,
     "chat_send_empty_fields": false,
     "chat_modify_prompt_before_send": false,
     "chat_download_directory": "",

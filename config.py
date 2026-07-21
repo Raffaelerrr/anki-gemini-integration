@@ -20,7 +20,7 @@ ADDON_MODULE = os.path.basename(ADDON_DIR)
 LEGACY_CONFIG_PATH = os.path.join(ADDON_DIR, "config_gemini.json")
 META_CONFIG_PATH = os.path.join(ADDON_DIR, "meta.json")
 
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 
 _OBSOLETE_CONFIG_KEYS: tuple[str, ...] = (
     "thinking_budget",
@@ -71,6 +71,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "brain_import_templates": False,
     "brain_import_css": False,
     "chat_payload_warning_chars": 12000,
+    "chat_apply_history_max": 7,
     "prompt_optimize_user": "",
     "prompt_chat_addon": "",
     "prompt_dynamic_rules_prefix": "",
@@ -163,6 +164,7 @@ RESTORABLE_SETTING_KEYS: tuple[str, ...] = (
     "brain_import_templates",
     "brain_import_css",
     "chat_payload_warning_chars",
+    "chat_apply_history_max",
     "prompt_optimize_user",
     "prompt_chat_addon",
     "prompt_dynamic_rules_prefix",
@@ -198,6 +200,7 @@ RESTORABLE_SETTING_LABELS: dict[str, str] = {
     "brain_import_templates": "settings.brain_import_templates",
     "brain_import_css": "settings.brain_import_css",
     "chat_payload_warning_chars": "settings.chat_payload_warning_chars",
+    "chat_apply_history_max": "settings.chat_apply_history_max",
     "prompt_optimize_user": "settings.prompt_optimize_user",
     "prompt_chat_addon": "settings.prompt_chat_addon",
     "prompt_dynamic_rules_prefix": "settings.prompt_dynamic_rules_prefix",
@@ -392,6 +395,14 @@ def _normalize_config(config: dict[str, Any], stored: dict[str, Any] | None = No
                 config[key] = default_config_value(key)
         if stored_version < 3:
             _migrate_prompt_cache_purpose_split(config, stored)
+        if stored_version < 4:
+            from .chat_context_wrapper import LEGACY_DEFAULT_WRAPPER_SECTION_ORDER
+
+            order = config.get("prompt_chat_context_order")
+            if list(order or []) == list(LEGACY_DEFAULT_WRAPPER_SECTION_ORDER):
+                config["prompt_chat_context_order"] = list(
+                    DEFAULT_CONFIG["prompt_chat_context_order"]
+                )
         config["config_version"] = CONFIG_VERSION
 
     for key in _OBSOLETE_CONFIG_KEYS:
@@ -464,6 +475,12 @@ def _normalize_config(config: dict[str, Any], stored: dict[str, Any] | None = No
 
     config["chat_export_quick_folders"] = normalize_chat_export_quick_folders(
         config.get("chat_export_quick_folders")
+    )
+
+    from .note_apply import clamp_apply_history_max
+
+    config["chat_apply_history_max"] = clamp_apply_history_max(
+        config.get("chat_apply_history_max", DEFAULT_CONFIG["chat_apply_history_max"])
     )
 
     return config

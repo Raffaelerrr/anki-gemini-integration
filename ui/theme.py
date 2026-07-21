@@ -48,6 +48,8 @@ class ThemeColors:
     code_block_bg: str
     code_label: str
     code_pre_bg: str
+    note_group_bg: str
+    note_group_border: str
     panel_bg: str
     panel_border: str
     panel_text: str
@@ -73,6 +75,8 @@ _LIGHT = ThemeColors(
     code_block_bg="#e8eaf6",
     code_label="#3949ab",
     code_pre_bg="#f3f4f6",
+    note_group_bg="#eef2ff",
+    note_group_border="#c5cae9",
     panel_bg="#f6f8fa",
     panel_border="#d0d7de",
     panel_text="#2c3e50",
@@ -98,6 +102,8 @@ _DARK = ThemeColors(
     code_block_bg="#3a3f5c",
     code_label="#9fa8da",
     code_pre_bg="#353535",
+    note_group_bg="#32375a",
+    note_group_border="#5c6bc0",
     panel_bg="rgba(255, 255, 255, 0.06)",
     panel_border="#555555",
     panel_text="#eceff1",
@@ -777,10 +783,19 @@ def chat_document_stylesheet(*, colors: ThemeColors | None = None) -> str:
         f".chat-label-system {{ color: {palette.msg_system}; }}"
         f".chat-label-error {{ color: {palette.msg_error}; }}"
         f".chat-stream-text {{ color: {palette.text}; }}"
-        f".chat-code-block {{ margin: 10px 0; border: 1px solid {palette.code_block_border}; "
-        f"border-radius: 6px; background-color: {palette.code_block_bg}; padding: 8px; }}"
+        f".chat-code-block {{ margin: 8px 0; border: 1px solid {palette.code_block_border}; "
+        f"border-radius: 6px; background-color: {palette.code_block_bg}; "
+        f"box-sizing: border-box; }}"
+        f".chat-note-group {{ margin: 12px 0; border: 1px solid {palette.note_group_border}; "
+        f"border-radius: 10px; background-color: {palette.note_group_bg}; "
+        f"border-collapse: separate; border-spacing: 0; box-sizing: border-box; "
+        f"table-layout: fixed; }}"
+        f".chat-note-group .chat-code-block {{ margin: 6px 0; max-width: 100%; "
+        f"box-sizing: border-box; }}"
         f".chat-code-label {{ color: {palette.code_label}; }}"
-        f".chat-code-copy {{ color: {palette.link}; text-decoration: none; font-size: 15px; }}"
+        f".chat-code-copy, .chat-code-preview {{ color: {palette.link}; text-decoration: none; "
+        f"font-size: 15px; }}"
+        f".chat-code-action-gap {{ font-size: 10px; }}"
         f".chat-code-pre {{ margin: 0; white-space: pre-wrap; word-wrap: break-word; "
         f"font-family: Consolas, monospace; font-size: 11px; color: {palette.text}; "
         f"background-color: {palette.code_pre_bg}; padding: 8px; border-radius: 4px; }}"

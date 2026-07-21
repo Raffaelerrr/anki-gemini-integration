@@ -72,7 +72,14 @@ def _install_anki_mocks() -> None:
             WindowMaximizeButtonHint=4,
             WindowCloseButtonHint=8,
         )
-        WidgetAttribute = _Enum(WA_QuitOnClose=1, WA_StyledBackground=2)
+        WidgetAttribute = _Enum(
+            WA_QuitOnClose=1,
+            WA_StyledBackground=2,
+            WA_DeleteOnClose=3,
+            WA_AlwaysShowToolTips=4,
+            WA_Hover=5,
+            WA_TranslucentBackground=6,
+        )
         WindowModality = _Enum(NonModal=0)
         ScrollBarPolicy = _Enum(
             ScrollBarAlwaysOff=0,
@@ -709,10 +716,19 @@ def _install_anki_mocks() -> None:
         def currentData(self):
             return None
 
+        def setStyle(self, *args, **kwargs):
+            return None
+
+    class QStyleFactory:
+        @staticmethod
+        def create(name):
+            return _Stub()
+
     aqt_qt.QFrame = _Frame
     aqt_qt.QColor = QColor
     aqt_qt.QPalette = QPalette
     aqt_qt.QComboBox = QComboBox
+    aqt_qt.QStyleFactory = QStyleFactory
     aqt_qt.QCompleter = QCompleter
     aqt_qt.QStringListModel = QStringListModel
     aqt_qt.Qt = Qt

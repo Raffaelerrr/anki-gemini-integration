@@ -15,7 +15,7 @@ from aqt.qt import (
     QWidget,
 )
 
-from ..chat_context_wrapper import WRAPPER_SECTION_IDS
+from ..chat_context_wrapper import DEFAULT_WRAPPER_SECTION_ORDER
 from ..i18n import (
     effective_card_templates_format_prompt,
     effective_wrapper_layout,
@@ -66,7 +66,7 @@ class WrapperSectionsEditor(QWidget):
         self._show_newlines = show_newlines
         self._wrap = wrap
         self._config: dict[str, Any] = {}
-        self._order: list[str] = list(WRAPPER_SECTION_IDS)
+        self._order: list[str] = list(DEFAULT_WRAPPER_SECTION_ORDER)
         self._rows: dict[str, _WrapperSectionRow] = {}
         self._text_changed_slot = None
         self._rows_layout = QVBoxLayout()

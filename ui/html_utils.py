@@ -70,16 +70,30 @@ def render_code_block_header(
     block_id: str,
     *,
     copy_title: str,
+    preview_title: str | None = None,
     copy_icon: str = "⧉",
+    preview_icon: str = "◉",
 ) -> str:
-    """Header row: label left, copy icon link upper-right (Qt table layout)."""
-    safe_title = html.escape(copy_title, quote=True)
+    """Header row: label left, preview + copy icon links upper-right (Qt table layout)."""
+    safe_copy_title = html.escape(copy_title, quote=True)
+    actions = (
+        f"<a href='copy:{block_id}' class='chat-code-copy' title='{safe_copy_title}'>"
+        f"{copy_icon}</a>"
+    )
+    if preview_title:
+        safe_preview_title = html.escape(preview_title, quote=True)
+        actions = (
+            f"<a href='preview:{block_id}' class='chat-code-preview' "
+            f"title='{safe_preview_title}'>{preview_icon}</a>"
+            f"<span class='chat-code-action-gap'>&nbsp;</span>"
+            f"{actions}"
+        )
     return (
         f"<table class='chat-code-header' width='100%' border='0' cellspacing='0' cellpadding='0'>"
         f"<tr>"
         f"<td valign='middle' style='padding:0;'>{label_html}</td>"
         f"<td valign='middle' align='right' style='padding:0;width:1%;white-space:nowrap;'>"
-        f"<a href='copy:{block_id}' class='chat-code-copy' title='{safe_title}'>{copy_icon}</a>"
+        f"{actions}"
         f"</td>"
         f"</tr>"
         f"</table>"

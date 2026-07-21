@@ -578,6 +578,20 @@ class SettingsDialog(QDialog):
             token_warn_shell,
         )
 
+        apply_hist_shell, self.chat_apply_history_max_input = create_settings_spinbox(
+            form_host
+        )
+        self.chat_apply_history_max_input.setRange(1, 30)
+        self.chat_apply_history_max_input.setValue(
+            int(self.config.get("chat_apply_history_max", 7))
+        )
+        add_settings_labeled_field(
+            layout,
+            form_host,
+            tr("settings.chat_apply_history_max", config=config),
+            apply_hist_shell,
+        )
+
         temp_optimize_shell, self.temp_optimize_input = create_settings_double_spinbox(form_host)
         self.temp_optimize_input.setRange(0.0, 2.0)
         self.temp_optimize_input.setSingleStep(0.1)
@@ -1668,6 +1682,7 @@ class SettingsDialog(QDialog):
         config["max_retries"] = self.retries_input.value()
         config["max_history_turns"] = self.history_input.value()
         config["chat_payload_warning_chars"] = self.chat_payload_warning_input.value()
+        config["chat_apply_history_max"] = self.chat_apply_history_max_input.value()
         config["temperature_optimize"] = self.temp_optimize_input.value()
         config["temperature_chat"] = self.temp_chat_input.value()
         config["confirm_before_apply"] = self.confirm_checkbox.isChecked()
@@ -1955,6 +1970,10 @@ class SettingsDialog(QDialog):
             self.chat_payload_warning_input.setValue(int(default_value))
             return
 
+        if key == "chat_apply_history_max":
+            self.chat_apply_history_max_input.setValue(int(default_value))
+            return
+
         if key == "temperature_optimize":
             self.temp_optimize_input.setValue(float(default_value))
             return
@@ -2042,18 +2061,16 @@ class SettingsDialog(QDialog):
             return
 
         if key == "prompt_card_templates_format":
+            # Reset only the format guide. Keep the editor's current order/sections so
+            # a later restore of this key (checked by default after the wrapper keys)
+            # does not undo a just-applied default wrapper layout.
             lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
+            order, sections, _current_guide = self.wrapper_sections_editor.collect()
             self.wrapper_sections_editor.load_from_config(
                 {
                     "language": lang,
-                    "prompt_chat_context_order": self._baseline_config.get(
-                        "prompt_chat_context_order",
-                        default_wrapper_section_order(),
-                    ),
-                    "prompt_chat_context_sections": self._baseline_config.get(
-                        "prompt_chat_context_sections",
-                        {},
-                    ),
+                    "prompt_chat_context_order": order,
+                    "prompt_chat_context_sections": sections,
                     "prompt_card_templates_format": "",
                 }
             )

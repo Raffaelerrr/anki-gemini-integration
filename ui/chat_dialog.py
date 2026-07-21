@@ -49,7 +49,11 @@ from ..note_context_fields import (
     merge_imported_notes,
 )
 from ..note_apply import (
+    ApplyNoteHistory,
     NoteApplyBatch,
+    NoteApplyPlan,
+    apply_note_tags_present,
+    clamp_apply_history_max,
     extract_apply_note,
     format_apply_batch_for_display,
 )
@@ -67,6 +71,8 @@ from .chat_include_panel import ChatIncludePanel
 from .chat_prompt_cache_dialog import ChatPromptCacheDialog
 from .chat_templates_edit_window import ChatTemplatesEditWindow
 from .chat_wrapper_edit_window import ChatWrapperEditWindow
+from .note_apply_dialog import open_note_apply_dialog
+from .note_apply_execute import execute_note_apply_plan
 from ..prompt_inspection import (
     build_chat_prompt_inspection,
     chat_session_config_changed,
@@ -122,7 +128,13 @@ from .chat_export import (
     normalize_chat_export_quick_folders,
     save_chat_export_text_to_directory,
 )
-from .chat_formatter import format_gemini_reply_html, format_streaming_reply_html
+from .chat_formatter import (
+    format_gemini_reply_html,
+    format_streaming_reply_html,
+    prose_contains_labeled_field_fences,
+    stored_block_label,
+    stored_block_text,
+)
 from .chat_body_splitter import ChatBodySplitter
 from .chat_log_renderer import render_chat_document
 from .chat_math_log import (
@@ -192,11 +204,17 @@ class ChatWindow(QWidget):
         self._preview_note_id: int | None = None
         self._include_mask = IncludeNextMessageMask()
         self._pending_apply_batch: NoteApplyBatch | None = None
+        self._pending_apply_plan: NoteApplyPlan | None = None
+        self._apply_history = ApplyNoteHistory(
+            clamp_apply_history_max(load_config().get("chat_apply_history_max", 7))
+        )
         self._session_wrapper_override: dict[str, Any] | None = None
         self._messages: list[ChatMessage] = []
         self._loading_phase = 0
         self._loading_rotation_degrees = 0
-        self._copy_blocks: dict[str, str] = {}
+        self._copy_blocks: dict[str, Any] = {}
+        self._field_preview_window: ImportedNotePreviewWindow | None = None
+        self._field_preview_payload: list[tuple[str, str]] = []
         self._copy_counter = 0
         self._streaming_message_index: int | None = None
         self._stream_visible = False
@@ -211,6 +229,7 @@ class ChatWindow(QWidget):
         self._note_edit_window: ChatNoteEditWindow | None = None
         self._wrapper_edit_window: ChatWrapperEditWindow | None = None
         self._templates_edit_window: ChatTemplatesEditWindow | None = None
+        self._note_apply_dialog = None
         self._include_panel: ChatIncludePanel | None = None
         self._prompt_preview_dialog = None
         self._prompt_cache_dialog = None
@@ -258,6 +277,9 @@ class ChatWindow(QWidget):
         self._edit_wrapper_action.triggered.connect(self._open_wrapper_edit_window)
         self._edit_templates_action = self._edit_menu.addAction("")
         self._edit_templates_action.triggered.connect(self._open_templates_edit_window)
+        self._edit_menu.addSeparator()
+        self._apply_note_action = self._edit_menu.addAction("")
+        self._apply_note_action.triggered.connect(self._open_note_apply_dialog)
         self.btn_edit_menu.setMenu(self._edit_menu)
         toolbar.addWidget(self.btn_edit_menu)
 
@@ -835,6 +857,9 @@ class ChatWindow(QWidget):
 
     def apply_settings_refresh(self) -> None:
         config = load_config()
+        self._apply_history.set_max_items(
+            clamp_apply_history_max(config.get("chat_apply_history_max", 7))
+        )
         self.apply_language()
         self._update_settings_stale_banner(config)
         show_newlines = bool(config.get("settings_show_text_newlines", False))
@@ -875,6 +900,8 @@ class ChatWindow(QWidget):
             self._include_panel.apply_theme()
         if self._note_preview_window is not None:
             self._note_preview_window.apply_theme()
+        if self._field_preview_window is not None:
+            self._field_preview_window.apply_theme()
         refresh_native_text_edits_in(self)
         if self.loading_row.isVisible():
             self._apply_loading_display()
@@ -950,13 +977,16 @@ class ChatWindow(QWidget):
         has_note = bool(self._imported_notes)
         can_edit_templates = self._has_imported_templates_or_styling()
         has_context = self._has_sendable_context()
+        has_apply = len(self._apply_history) > 0
         self._edit_note_action.setText(tr("chat.edit_note", config=config))
         self._edit_wrapper_action.setText(tr("chat.edit_wrapper", config=config))
         self._edit_templates_action.setText(tr("chat.edit_templates", config=config))
+        self._apply_note_action.setText(tr("chat.apply_note.menu", config=config))
         self._edit_note_action.setEnabled(has_note)
         self._edit_wrapper_action.setEnabled(has_context)
         self._edit_templates_action.setEnabled(can_edit_templates)
-        self.btn_edit_menu.setEnabled(has_note or has_context)
+        self._apply_note_action.setEnabled(has_apply)
+        self.btn_edit_menu.setEnabled(has_note or has_context or has_apply)
 
     def _preview_fields_provider(self) -> list[tuple[str, str]]:
         config = load_config()
@@ -1145,21 +1175,53 @@ class ChatWindow(QWidget):
         )
 
     def _copy_codeblock(self, block_id: str) -> None:
-        content = self._copy_blocks.get(block_id)
+        content = stored_block_text(self._copy_blocks.get(block_id))
         if content is None:
             return
         QApplication.clipboard().setText(content)
         tooltip(tr("chat.copied"))
 
+    def _preview_codeblock(self, block_id: str) -> None:
+        stored = self._copy_blocks.get(block_id)
+        content = stored_block_text(stored)
+        if content is None:
+            return
+        label = stored_block_label(stored) or tr(
+            "formatter.code_block",
+            config=load_config(),
+        )
+        self._field_preview_payload = [(label, content)]
+        config = load_config()
+        if self._field_preview_window is None:
+            self._field_preview_window = ImportedNotePreviewWindow(
+                self,
+                field_provider=lambda: list(self._field_preview_payload),
+            )
+            self._field_preview_window.destroyed.connect(
+                lambda *_args: setattr(self, "_field_preview_window", None)
+            )
+        self._field_preview_window.apply_language(config)
+        self._field_preview_window.setWindowTitle(
+            tr("formatter.preview.window_title", config=config, name=label)
+        )
+        self._field_preview_window.apply_theme()
+        self._field_preview_window.refresh()
+        self._field_preview_window.show()
+        self._field_preview_window.raise_()
+        self._field_preview_window.activateWindow()
+
     def _on_chat_log_bridge_cmd(self, cmd: str) -> None:
         if cmd.startswith("addon-chat-copy:"):
             self._copy_codeblock(cmd[len("addon-chat-copy:") :])
+        elif cmd.startswith("addon-chat-preview:"):
+            self._preview_codeblock(cmd[len("addon-chat-preview:") :])
 
     def _on_anchor_clicked(self, url: QUrl) -> None:
         url_str = url.toString()
-        if not url_str.startswith("copy:"):
-            return
-        self._copy_codeblock(url_str[5:])
+        if url_str.startswith("copy:"):
+            self._copy_codeblock(url_str[5:])
+        elif url_str.startswith("preview:"):
+            self._preview_codeblock(url_str[8:])
 
     def eventFilter(self, obj, event):
         if obj is self.input_field and event.type() == event.Type.KeyPress:
@@ -1336,6 +1398,9 @@ class ChatWindow(QWidget):
         self._preview_note_id = None
         self._include_mask = IncludeNextMessageMask()
         self._pending_apply_batch = None
+        self._pending_apply_plan = None
+        self._apply_history.clear()
+        self._refresh_edit_menu_actions()
         self._session_wrapper_override = None
         self._messages.clear()
         self._copy_blocks.clear()
@@ -1349,6 +1414,9 @@ class ChatWindow(QWidget):
         if cache_choice == "clear":
             clear_prompt_cache(config=config, purpose="chat")
         self._close_note_preview_window()
+        if self._field_preview_window is not None:
+            self._field_preview_window.close()
+            self._field_preview_window = None
         self.btn_note_preview.setEnabled(False)
         self._add_system_message(
             tr("chat.cleared", config=config),
@@ -1419,7 +1487,7 @@ class ChatWindow(QWidget):
 
         self._imported_notes = merge_imported_notes(self._imported_notes, notes)
         self._imported_notetype_id = notes[-1].notetype_id
-        self._pending_apply_batch = None
+        self._refresh_edit_menu_actions()
 
         for note in notes:
             notetype_data = imported_notetype_from_id(note.notetype_id)
@@ -1507,7 +1575,7 @@ class ChatWindow(QWidget):
             incoming,
         )
         self._sync_legacy_notetype_cache()
-        self._pending_apply_batch = None
+        self._refresh_edit_menu_actions()
         if import_cache_choice == "proceed":
             clear_prompt_cache(config=config, purpose="chat")
         self._apply_default_mask_for_notetype_import(incoming)
@@ -1785,6 +1853,77 @@ class ChatWindow(QWidget):
         self._wrapper_edit_window.close()
         self._wrapper_edit_window = None
 
+    def _open_note_apply_dialog(self) -> None:
+        if len(self._apply_history) == 0:
+            return
+        config = load_config()
+        self._apply_history.set_max_items(
+            clamp_apply_history_max(config.get("chat_apply_history_max", 7))
+        )
+
+        def on_apply(plan: NoteApplyPlan):
+            result = execute_note_apply_plan(plan, config=config)
+            if result.ok and result.mode == "update" and result.note_id is not None:
+                self._refresh_imported_note_after_apply(result.note_id)
+            self._pending_apply_plan = plan if result.ok else self._pending_apply_plan
+            self._messages.append(
+                ChatMessage(
+                    label_class=(
+                        "chat-label-system" if result.ok else "chat-label-error"
+                    ),
+                    label=tr("chat.label.system", config=config),
+                    body_html=html.escape(
+                        tr(
+                            result.message_key,
+                            config=config,
+                            **result.message_kwargs,
+                        )
+                    ),
+                    trailing_spacer=True,
+                )
+            )
+            self._render_chat_log(preserve_scroll=True)
+            return result
+
+        dialog = open_note_apply_dialog(
+            self,
+            self._apply_history,
+            on_apply=on_apply,
+            imported_notes=self._imported_notes,
+            session_notetypes=list(self._imported_notetypes.values()),
+            config=config,
+            existing=self._note_apply_dialog,
+        )
+        if dialog is not None and dialog is not self._note_apply_dialog:
+            self._note_apply_dialog = dialog
+            dialog.destroyed.connect(
+                lambda *_: setattr(self, "_note_apply_dialog", None)
+            )
+        self._refresh_edit_menu_actions(config)
+
+    def _refresh_imported_note_after_apply(self, note_id: int) -> None:
+        """Keep chat's imported note copy in sync after a collection update."""
+        if mw.col is None:
+            return
+        try:
+            note = mw.col.get_note(note_id)
+        except Exception:
+            return
+        imported = imported_note_from_anki_note(note)
+        if imported is None:
+            return
+        self._imported_notes = merge_imported_notes(self._imported_notes, [imported])
+        edit_window = self._note_edit_window
+        if (
+            edit_window is not None
+            and getattr(edit_window, "_note_id", None) == note_id
+        ):
+            edit_window.load_fields(
+                imported.fields,
+                note_id=imported.note_id,
+                note_label=imported.display_label(),
+            )
+
     def _open_note_edit_window(self) -> None:
         if not self._imported_notes:
             return
@@ -1851,7 +1990,18 @@ class ChatWindow(QWidget):
         self._close_note_edit_window()
         self._close_wrapper_edit_window()
         self._close_templates_edit_window()
+        self._close_note_apply_dialog()
         self._close_include_panel()
+
+    def _close_note_apply_dialog(self) -> None:
+        dialog = self._note_apply_dialog
+        if dialog is None:
+            return
+        try:
+            dialog.close()
+        except RuntimeError:
+            pass
+        self._note_apply_dialog = None
 
     def _apply_wrapper_edit(
         self,
@@ -2158,6 +2308,7 @@ class ChatWindow(QWidget):
             return
         config = load_config()
         display_text, dynamic_rules = extract_dynamic_rules(raw_text)
+        had_apply_tags = apply_note_tags_present(display_text)
         display_text, apply_batch = extract_apply_note(display_text)
         rules_updated = False
 
@@ -2168,12 +2319,20 @@ class ChatWindow(QWidget):
 
         if apply_batch is not None:
             self._pending_apply_batch = apply_batch
+            self._pending_apply_plan = None
+            self._apply_history.set_max_items(
+                clamp_apply_history_max(config.get("chat_apply_history_max", 7))
+            )
+            self._apply_history.extend_from_batch(apply_batch)
             preview_text = format_apply_batch_for_display(apply_batch)
-            if preview_text.strip():
+            if preview_text.strip() and not prose_contains_labeled_field_fences(
+                display_text
+            ):
                 if display_text.strip():
                     display_text = f"{display_text.rstrip()}\n\n{preview_text}"
                 else:
                     display_text = preview_text
+            self._refresh_edit_menu_actions(config)
 
         self.api_history.append({"role": "model", "parts": [{"text": display_text}]})
 
@@ -2225,6 +2384,17 @@ class ChatWindow(QWidget):
                             count=apply_batch.note_count,
                             fields=apply_batch.field_names_summary(),
                         )
+                    ),
+                    trailing_spacer=True,
+                )
+            )
+        elif had_apply_tags:
+            self._messages.append(
+                ChatMessage(
+                    label_class="chat-label-error",
+                    label=tr("chat.label.system", config=config),
+                    body_html=html.escape(
+                        tr("chat.apply_note.parse_failed", config=config)
                     ),
                     trailing_spacer=True,
                 )

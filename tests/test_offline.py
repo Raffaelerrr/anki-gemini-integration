@@ -640,9 +640,15 @@ class TestI18n(unittest.TestCase):
         self.assertIn("should we", en)
         self.assertIn("UPDATE_DYNAMIC_RULES", en)
         self.assertIn("META-SYSTEM RULE", en)
+        self.assertIn("HTML tag names", en)
+        self.assertIn("double every MathJax backslash", en)
+        self.assertIn("do NOT also repeat the same Front:/Back:", en)
         it = self.i18n.default_chat_system_addon({"language": "it"})
         self.assertIn("<APPLY_NOTE>", it)
         self.assertIn("Non usare APPLY_NOTE", it)
+        self.assertIn("tag HTML", it)
+        self.assertIn("backslash MathJax", it)
+        self.assertIn("NON ripetere gli stessi campi", it)
 
     def test_default_wrapper_order_puts_request_first(self):
         order = self.i18n.default_wrapper_section_order()
@@ -1430,6 +1436,34 @@ class TestChatFormatter(unittest.TestCase):
         restored = self.fmt._restore_inline_backticks(protected, stored)
         self.assertIn("`\\(\\)`", restored)
 
+    def test_prose_escapes_raw_html_tags(self):
+        html_out = self.fmt.format_gemini_reply_html(
+            "All notes use tags (<b>, <i>, <ol>, <li>) and MathJax.",
+            {},
+            "t1",
+            config={"language": "en"},
+        )
+        self.assertIn("&lt;b&gt;", html_out)
+        self.assertIn("&lt;ol&gt;", html_out)
+        self.assertIn("&lt;li&gt;", html_out)
+        # Must not become a real ordered list from the cited tags.
+        self.assertNotIn("<ol>", html_out)
+        self.assertNotIn("<li>", html_out)
+        self.assertNotIn("<b>", html_out)
+
+    def test_prose_backtick_html_tags_stay_literal(self):
+        html_out = self.fmt.format_gemini_reply_html(
+            "Use `<b>` and `<ol>` in fields.",
+            {},
+            "t1",
+            config={"language": "en"},
+        )
+        self.assertIn("chat-code-inline", html_out)
+        self.assertIn("&lt;b&gt;", html_out)
+        self.assertIn("&lt;ol&gt;", html_out)
+        self.assertNotIn("<b>", html_out)
+        self.assertNotIn("<ol>", html_out)
+
     def test_format_reply_with_code_block(self):
         text = "Front:\n```\n<b>Hi</b>\n```"
         store: dict[str, str] = {}
@@ -1442,7 +1476,47 @@ class TestChatFormatter(unittest.TestCase):
         self.assertNotIn(">Copy<", html_out)
         self.assertNotIn("chat-html-endcap", html_out)
         self.assertIn("class='chat-code-block", html_out)
-        self.assertEqual(store["t1-0"], "<b>Hi</b>")
+        self.assertEqual(store["t1-0"].text, "<b>Hi</b>")
+        self.assertEqual(store["t1-0"].label, "Front")
+
+    def test_format_reply_groups_consecutive_field_blocks(self):
+        text = (
+            "Front:\n```\nQ\n```\n\n"
+            "Back:\n```\nA\n```\n"
+        )
+        html_out = self.fmt.format_gemini_reply_html(
+            text, {}, "t1", config={"language": "en"}
+        )
+        self.assertIn("chat-note-group", html_out)
+        self.assertIn("chat-note-group-gutter", html_out)
+        self.assertIn("chat-code-preview", html_out)
+        self.assertIn("preview:t1-0", html_out)
+        self.assertIn("copy:t1-0", html_out)
+
+    def test_format_reply_flushes_group_when_field_label_repeats(self):
+        text = (
+            "Front:\n```\nQ1\n```\n\n"
+            "Back:\n```\nA1\n```\n\n"
+            "Front:\n```\nQ2\n```\n\n"
+            "Back:\n```\nA2\n```\n"
+        )
+        html_out = self.fmt.format_gemini_reply_html(
+            text, {}, "t1", config={"language": "en"}
+        )
+        self.assertEqual(html_out.count("class='chat-note-group'"), 2)
+        self.assertIn("Q1", html_out)
+        self.assertIn("Q2", html_out)
+
+    def test_prose_contains_labeled_field_fences(self):
+        self.assertTrue(
+            self.fmt.prose_contains_labeled_field_fences("Front:\n```\nx\n```")
+        )
+        self.assertFalse(
+            self.fmt.prose_contains_labeled_field_fences("Here is an explanation only.")
+        )
+        self.assertFalse(
+            self.fmt.prose_contains_labeled_field_fences("```\nunlabeled\n```")
+        )
 
     def test_format_reply_legacy_endcap(self):
         html_out = self.fmt.format_gemini_reply_html(
@@ -2118,6 +2192,55 @@ class TestNoteApply(unittest.TestCase):
         self.assertIsNone(batch)
         self.assertIn("<APPLY_NOTE>", cleaned)
 
+    def test_parse_apply_note_payload_accepts_markdown_fence(self):
+        payload = (
+            "```json\n"
+            '{"notes": [{"fields": {"Front": "A", "Back": "B"}}]}\n'
+            "```"
+        )
+        batch = self.note_apply.parse_apply_note_payload(payload)
+        self.assertIsNotNone(batch)
+        assert batch is not None
+        self.assertEqual(batch.notes[0].fields["Front"], "A")
+
+    def test_parse_apply_note_payload_repairs_mathjax_escapes(self):
+        # Single backslash before ( is invalid JSON; repair doubles it.
+        payload = '{"fields": {"Front": "f", "Back": "If \\(x_1 < x_2\\) then"}}'
+        batch = self.note_apply.parse_apply_note_payload(payload)
+        self.assertIsNotNone(batch)
+        assert batch is not None
+        self.assertIn("\\(", batch.notes[0].fields["Back"])
+
+    def test_parse_apply_note_payload_ignores_trailing_junk(self):
+        payload = '{"fields": {"Front": "A", "Back": "B"}}\n// trailing'
+        batch = self.note_apply.parse_apply_note_payload(payload)
+        self.assertIsNotNone(batch)
+        assert batch is not None
+        self.assertEqual(batch.notes[0].fields["Front"], "A")
+
+    def test_extract_apply_note_html_fields_multi_note(self):
+        raw = (
+            "Great!\n"
+            "<APPLY_NOTE>\n"
+            '{"notes": ['
+            '{"notetype": "Basic", "fields": {'
+            '"Front": "What is an <b>increasing function</b>?", '
+            '"Back": "<p>If x1 < x2 then f(x1) < f(x2).</p>"'
+            "}},"
+            '{"notetype": "Basic", "fields": {'
+            '"Front": "What is a <b>decreasing function</b>?", '
+            '"Back": "<p>If x1 < x2 then f(x1) > f(x2).</p>"'
+            "}}"
+            "]}\n"
+            "</APPLY_NOTE>"
+        )
+        cleaned, batch = self.note_apply.extract_apply_note(raw)
+        self.assertIsNotNone(batch)
+        assert batch is not None
+        self.assertEqual(batch.note_count, 2)
+        self.assertNotIn("<APPLY_NOTE>", cleaned)
+        self.assertIn("<b>increasing", batch.notes[0].fields["Front"])
+
     def test_format_apply_batch_for_display(self):
         batch = self.note_apply.NoteApplyBatch(
             notes=[
@@ -2130,6 +2253,165 @@ class TestNoteApply(unittest.TestCase):
         text = self.note_apply.format_apply_batch_for_display(batch)
         self.assertIn("Front:\n```\nQ\n```", text)
         self.assertIn("Back:\n```\nA\n```", text)
+
+    def test_field_mapping_report(self):
+        report = self.note_apply.field_mapping_report(
+            {"Front": "a", "Extra": "x"},
+            ["Front", "Back"],
+        )
+        self.assertEqual(report.matched, ("Front",))
+        self.assertEqual(report.missing_in_proposal, ("Back",))
+        self.assertEqual(report.extra_in_proposal, ("Extra",))
+        self.assertTrue(report.has_mismatches)
+        self.assertAlmostEqual(report.overlap_score, 1 / 3)
+
+    def test_rank_imported_update_targets_prefers_matching_notetype(self):
+        notes_mod = _load_addon_module("note_context_fields")
+        proposal = self.note_apply.NoteApplyNote(
+            fields={"Front": "Q", "Back": "A"},
+            notetype="Basic",
+        )
+        imported = [
+            notes_mod.ImportedNoteData(
+                note_id=2,
+                notetype_id=20,
+                notetype_name="Cloze",
+                fields=[("Text", "c"), ("Back Extra", "")],
+            ),
+            notes_mod.ImportedNoteData(
+                note_id=1,
+                notetype_id=10,
+                notetype_name="Basic",
+                fields=[("Front", "old"), ("Back", "old")],
+            ),
+        ]
+        ranked = self.note_apply.rank_imported_update_targets(proposal, imported)
+        self.assertEqual(ranked[0].note_id, 1)
+        self.assertTrue(ranked[0].preferred)
+        self.assertGreater(ranked[0].score, ranked[1].score)
+
+    def test_rank_notetypes_for_create_requires_overlap(self):
+        proposal = self.note_apply.NoteApplyNote(
+            fields={"Front": "Q", "Back": "A"},
+            notetype="Basic",
+        )
+        available = [
+            self.note_apply.AvailableNotetype(
+                notetype_id=1,
+                name="Basic",
+                field_names=("Front", "Back"),
+            ),
+            self.note_apply.AvailableNotetype(
+                notetype_id=2,
+                name="Unrelated",
+                field_names=("Prompt", "Answer"),
+            ),
+        ]
+        matches = self.note_apply.rank_notetypes_for_create(proposal, available)
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].notetype.notetype_id, 1)
+
+    def test_proposal_with_fields_preserves_metadata(self):
+        original = self.note_apply.NoteApplyNote(
+            fields={"Front": "old"},
+            notetype="Basic",
+            deck="Default",
+            tags=["a", "b"],
+        )
+        updated = self.note_apply.proposal_with_fields(
+            original,
+            [("Front", "new"), ("Back", "B")],
+        )
+        self.assertEqual(updated.fields, {"Front": "new", "Back": "B"})
+        self.assertEqual(updated.notetype, "Basic")
+        self.assertEqual(updated.deck, "Default")
+        self.assertEqual(updated.tags, ["a", "b"])
+
+    def test_mapped_field_values_case_insensitive(self):
+        mapped = self.note_apply.mapped_field_values(
+            {"front": "Q", "Extra": "x"},
+            ["Front", "Back"],
+        )
+        self.assertEqual(mapped, {"Front": "Q"})
+        self.assertNotIn("Extra", mapped)
+        self.assertNotIn("Back", mapped)
+
+    def test_apply_mapped_fields_to_note_and_tags(self):
+        class FakeNote:
+            def __init__(self):
+                self._data = {"Front": "old", "Back": "oldB"}
+                self.tags = ["keep"]
+
+            def __setitem__(self, key, value):
+                self._data[key] = value
+
+            def __getitem__(self, key):
+                return self._data[key]
+
+        note = FakeNote()
+        updated = self.note_apply.apply_mapped_fields_to_note(
+            note,
+            {"Front": "new"},
+            tags=["t1"],
+        )
+        self.assertEqual(updated, ["Front"])
+        self.assertEqual(note["Front"], "new")
+        self.assertEqual(note["Back"], "oldB")
+        self.assertEqual(note.tags, ["t1"])
+
+        leave_tags = FakeNote()
+        self.note_apply.apply_mapped_fields_to_note(
+            leave_tags,
+            {"Front": "x"},
+            tags=None,
+        )
+        self.assertEqual(leave_tags.tags, ["keep"])
+
+    def test_proposal_tags_for_apply(self):
+        with_tags = self.note_apply.NoteApplyNote(
+            fields={"Front": "a"},
+            tags=["x"],
+        )
+        empty_tags = self.note_apply.NoteApplyNote(fields={"Front": "a"}, tags=[])
+        self.assertEqual(self.note_apply.proposal_tags_for_apply(with_tags), ["x"])
+        self.assertIsNone(self.note_apply.proposal_tags_for_apply(empty_tags))
+
+    def test_apply_history_fifo_and_focus(self):
+        history = self.note_apply.ApplyNoteHistory(max_items=3)
+        batch = self.note_apply.NoteApplyBatch(
+            notes=[
+                self.note_apply.NoteApplyNote(fields={"Front": str(i)})
+                for i in range(1, 5)
+            ]
+        )
+        history.extend_from_batch(batch)
+        self.assertEqual(len(history), 3)
+        fronts = [item.proposal.fields["Front"] for item in history.items]
+        self.assertEqual(fronts, ["2", "3", "4"])
+
+        first = history.suggest_focus_item()
+        self.assertIsNotNone(first)
+        assert first is not None
+        self.assertEqual(first.proposal.fields["Front"], "2")
+        history.remember_offered(first.item_id)
+
+        # Skip without applying → next chronological unapplied
+        second = history.suggest_focus_item()
+        assert second is not None
+        self.assertEqual(second.proposal.fields["Front"], "3")
+
+        history.mark_applied(second.item_id)
+        # After applying middle, earliest unapplied is still "2"
+        history.remember_offered(second.item_id)
+        nxt = history.suggest_focus_item()
+        assert nxt is not None
+        self.assertEqual(nxt.proposal.fields["Front"], "4")
+
+    def test_clamp_apply_history_max(self):
+        self.assertEqual(self.note_apply.clamp_apply_history_max(7), 7)
+        self.assertEqual(self.note_apply.clamp_apply_history_max(0), 1)
+        self.assertEqual(self.note_apply.clamp_apply_history_max(99), 30)
+        self.assertEqual(self.note_apply.clamp_apply_history_max("x"), 7)
 
 
 class TestChatPromptCacheSettings(unittest.TestCase):
@@ -2375,6 +2657,50 @@ class TestConfig(unittest.TestCase):
         )
         self.assertEqual(merged["prompt_card_templates_format"], "")
         self.assertNotIn("model", merged)
+
+    def test_apply_config_normalization_migrates_legacy_wrapper_order(self):
+        legacy_order = [
+            "context",
+            "format_guide",
+            "templates",
+            "styling",
+            "request",
+        ]
+        stored = {
+            "config_version": 3,
+            "language": "en",
+            "prompt_chat_context_order": list(legacy_order),
+            "prompt_chat_context_sections": {},
+        }
+        merged = self.config._normalize_config(
+            {**self.config.DEFAULT_CONFIG, **stored},
+            stored,
+        )
+        self.assertEqual(merged["config_version"], self.config.CONFIG_VERSION)
+        self.assertEqual(
+            merged["prompt_chat_context_order"],
+            self.config.DEFAULT_CONFIG["prompt_chat_context_order"],
+        )
+        self.assertEqual(merged["prompt_chat_context_order"][0], "request")
+
+    def test_apply_config_normalization_keeps_custom_wrapper_order(self):
+        custom_order = [
+            "templates",
+            "request",
+            "context",
+            "format_guide",
+            "styling",
+        ]
+        stored = {
+            "config_version": 3,
+            "language": "en",
+            "prompt_chat_context_order": list(custom_order),
+        }
+        merged = self.config._normalize_config(
+            {**self.config.DEFAULT_CONFIG, **stored},
+            stored,
+        )
+        self.assertEqual(merged["prompt_chat_context_order"], custom_order)
         self.assertNotIn("thinking_budget", merged)
 
     def test_apply_config_normalization_strips_obsolete_keys(self):

@@ -262,6 +262,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Avviso caratteri payload chat oltre",
         "en": "Chat payload warning above (characters)",
     },
+    "settings.chat_apply_history_max": {
+        "it": "Cronologia note da applicare (max)",
+        "en": "Apply-note history size (max)",
+    },
     "settings.advanced": {
         "it": "Avanzate",
         "en": "Advanced",
@@ -871,19 +875,27 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
     },
     "settings.mathjax_preview_preamble": {
-        "it": "Preambolo MathJax anteprima nota",
-        "en": "MathJax note preview preamble",
+        "it": "Preambolo MathJax anteprima",
+        "en": "MathJax preview preamble",
     },
     "settings.mathjax_preview_preamble.hint": {
         "it": (
-            "HTML inserito prima dei campi nella finestra di anteprima nota (chat). "
-            "Usato solo se il tipo di nota importato non fornisce un preambolo nei template. "
-            "Utile per blocchi nascosti con <code>\\newcommand</code> come nei template carte."
+            "HTML inserito prima dei campi nelle anteprime chat (anteprima nota importata e "
+            "anteprima campo ◉ sui blocchi Front/Back). "
+            "Per l'anteprima nota importata: se il tipo di nota fornisce un preambolo nei template, "
+            "quello ha priorità; altrimenti vale questo testo. "
+            "Per l'anteprima dei singoli campi generati da Gemini serve questo preambolo globale "
+            "(non usa i template del tipo di nota). "
+            "Utile per blocchi nascosti con <code>\\newcommand</code> / scorciatoie MathJax."
         ),
         "en": (
-            "HTML inserted before fields in the chat note preview window. "
-            "Used only when the imported note type does not supply a preamble from its templates. "
-            "Useful for hidden <code>\\newcommand</code> blocks like in card templates."
+            "HTML inserted before fields in chat previews (imported-note preview and "
+            "the ◉ field preview on Front/Back blocks). "
+            "For imported-note preview: if the note type supplies a preamble from its templates, "
+            "that takes priority; otherwise this text is used. "
+            "For Gemini field previews, this global preamble is required "
+            "(those previews do not use the note type's templates). "
+            "Useful for hidden <code>\\newcommand</code> / MathJax shortcut blocks."
         ),
     },
     "settings.system_instruction": {
@@ -1800,17 +1812,24 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
     "settings.help.mathjax_preview_preamble": {
         "it": (
-            "HTML opzionale per l'<b>anteprima nota</b> nella chat (finestra separata). "
+            "HTML opzionale per le <b>anteprime</b> in chat: finestra anteprima nota importata e "
+            "pulsante ◉ Anteprima sui campi generati da Gemini. "
             "All'import con {icon:brain}, se i template fronte/retro del tipo di nota contengono un preambolo "
             "MathJax (es. un <code>div</code> nascosto con <code>\\newcommand</code>), "
-            "quello ha priorità. Altrimenti viene usato questo testo. "
+            "quello ha priorità per l'anteprima della nota importata. "
+            "Le anteprime dei singoli campi (◉) usano invece sempre questo preambolo globale: "
+            "metti qui le scorciatoie MathJax se vuoi vederle in quelle anteprime. "
             "Non influisce sui messaggi inviati a Gemini."
         ),
         "en": (
-            "Optional HTML for the chat <b>note preview window</b>. "
+            "Optional HTML for chat <b>previews</b>: the imported-note preview window and "
+            "the ◉ Preview button on Gemini field blocks. "
             "On {icon:brain} import, if the note type's front/back templates contain a MathJax preamble "
-            "(e.g. a hidden <code>div</code> with <code>\\newcommand</code>), that takes priority. "
-            "Otherwise this text is used. Does not affect messages sent to Gemini."
+            "(e.g. a hidden <code>div</code> with <code>\\newcommand</code>), that takes priority "
+            "for the imported-note preview. "
+            "Per-field previews (◉) always use this global preamble instead—"
+            "put MathJax shortcuts here if you want them in those previews. "
+            "Does not affect messages sent to Gemini."
         ),
     },
     "settings.help.temperature_optimize": {
@@ -1899,6 +1918,20 @@ _STRINGS: dict[str, dict[str, str]] = {
             "(system instructions, history, and outgoing message). "
             "Above this threshold, a warning appears and you can cancel the send. "
             "This is not a token count or a cost. Applies immediately even with an open chat."
+        ),
+    },
+    "settings.help.chat_apply_history_max": {
+        "it": (
+            "Quante note proposte da Gemini tenere nella cronologia di "
+            "<b>Applica ad Anki…</b> (da 1 a 30, predefinito 7). "
+            "Le nuove proposte si aggiungono; se si supera il limite, le più vecchie escono (FIFO). "
+            "Una nuova conversazione svuota la cronologia. Import note/tipi non la cancellano."
+        ),
+        "en": (
+            "How many Gemini-proposed notes to keep for "
+            "<b>Apply to Anki…</b> (1–30, default 7). "
+            "New proposals are appended; when over the limit the oldest are dropped (FIFO). "
+            "A new conversation clears the history. Importing notes/types does not."
         ),
     },
     "settings.help.inspect_optimize_prompt": {
@@ -3029,11 +3062,227 @@ _STRINGS: dict[str, dict[str, str]] = {
     "chat.apply_note.detected": {
         "it": (
             "Aggiornamento nota strutturato rilevato ({count} nota/e, campi: {fields}). "
-            "Il dialogo Applica ad Anki arriverà nel prossimo passo."
+            "Apri Modifica → Applica ad Anki… per aggiornare una nota o aprire Aggiungi."
         ),
         "en": (
             "Structured note update detected ({count} note(s), fields: {fields}). "
-            "Apply-to-Anki dialog coming in the next step."
+            "Open Edit → Apply to Anki… to update a note or open Add."
+        ),
+    },
+    "chat.apply_note.menu": {
+        "it": "Applica ad Anki…",
+        "en": "Apply to Anki…",
+    },
+    "chat.apply_note.title": {
+        "it": "Applica nota ad Anki",
+        "en": "Apply note to Anki",
+    },
+    "chat.apply_note.intro": {
+        "it": (
+            "Rivedi i campi proposti da Gemini e scegli se aggiornare una nota "
+            "già importata o aprire Aggiungi con i campi precompilati. "
+            "La finestra resta aperta finché restano note non ancora applicate "
+            "(puoi chiuderla quando vuoi)."
+        ),
+        "en": (
+            "Review the fields Gemini proposed and choose whether to update an "
+            "imported note or open Add with the fields prefilled. "
+            "This window stays open while unapplied notes remain "
+            "(you can close it anytime)."
+        ),
+    },
+    "chat.apply_note.proposal": {
+        "it": "Nota proposta",
+        "en": "Proposed note",
+    },
+    "chat.apply_note.proposal_item": {
+        "it": "Nota {n}",
+        "en": "Note {n}",
+    },
+    "chat.apply_note.mode.update": {
+        "it": "Aggiorna una nota esistente",
+        "en": "Update an existing note",
+    },
+    "chat.apply_note.mode.update_count": {
+        "it": "Aggiorna una nota esistente ({count})",
+        "en": "Update an existing note ({count})",
+    },
+    "chat.apply_note.mode.create": {
+        "it": "Crea una nota nuova",
+        "en": "Create a new note",
+    },
+    "chat.apply_note.mode.create_count": {
+        "it": "Crea una nota nuova ({count} tipi compatibili)",
+        "en": "Create a new note ({count} matching types)",
+    },
+    "chat.apply_note.target.note": {
+        "it": "Nota destinazione",
+        "en": "Target note",
+    },
+    "chat.apply_note.target.notetype": {
+        "it": "Tipo di nota",
+        "en": "Note type",
+    },
+    "chat.apply_note.target.notetype_item": {
+        "it": "{name} ({overlap}% campi in comune)",
+        "en": "{name} ({overlap}% field overlap)",
+    },
+    "chat.apply_note.target.suggested": {
+        "it": "consigliata",
+        "en": "suggested",
+    },
+    "chat.apply_note.target.unavailable": {
+        "it": "Nessuna destinazione disponibile",
+        "en": "No target available",
+    },
+    "chat.apply_note.meta.notetype": {
+        "it": "Tipo proposto: {name}",
+        "en": "Proposed type: {name}",
+    },
+    "chat.apply_note.meta.deck": {
+        "it": "Mazzo: {name}",
+        "en": "Deck: {name}",
+    },
+    "chat.apply_note.meta.tags": {
+        "it": "Tag: {tags}",
+        "en": "Tags: {tags}",
+    },
+    "chat.apply_note.meta.none": {
+        "it": "Nessun metadato (tipo/mazzo/tag) nella proposta.",
+        "en": "No metadata (type/deck/tags) in the proposal.",
+    },
+    "chat.apply_note.warn.missing": {
+        "it": "Campi del tipo di nota assenti nella proposta: {fields}.",
+        "en": "Note-type fields missing from the proposal: {fields}.",
+    },
+    "chat.apply_note.warn.extra": {
+        "it": "Campi nella proposta non presenti nel tipo: {fields}.",
+        "en": "Proposal fields not on the note type: {fields}.",
+    },
+    "chat.apply_note.no_write_yet": {
+        "it": (
+            "Applica aggiorna la nota nella collezione, oppure apre Aggiungi "
+            "con i campi precompilati (devi ancora premere Aggiungi)."
+        ),
+        "en": (
+            "Apply updates the note in your collection, or opens Add "
+            "with fields prefilled (you still press Add)."
+        ),
+    },
+    "chat.apply_note.apply_hint": {
+        "it": (
+            "Applica aggiorna subito la nota nella collezione, oppure apre "
+            "Aggiungi con i campi precompilati (devi ancora premere Aggiungi). "
+            "Con più note, la finestra resta aperta fino a quando tutte sono applicate."
+        ),
+        "en": (
+            "Apply updates the note in your collection immediately, or opens "
+            "Add with fields prefilled (you still press Add). "
+            "With multiple notes, this window stays open until all are applied."
+        ),
+    },
+    "chat.apply_note.applied_mark": {
+        "it": "[ok] ",
+        "en": "[ok] ",
+    },
+    "chat.apply_note.meta.applied": {
+        "it": "Già applicata",
+        "en": "Already applied",
+    },
+    "chat.apply_note.target.already_applied": {
+        "it": "Nota già applicata",
+        "en": "Note already applied",
+    },
+    "chat.apply_note.warn.already_applied": {
+        "it": "Questa proposta è già stata applicata in questa conversazione (puoi applicarla di nuovo).",
+        "en": "This proposal was already applied in this conversation (you can apply it again).",
+    },
+    "chat.apply_note.confirm_plan": {
+        "it": "Applica",
+        "en": "Apply",
+    },
+    "chat.apply_note.apply": {
+        "it": "Applica",
+        "en": "Apply",
+    },
+    "chat.apply_note.plan.update": {
+        "it": "aggiornamento",
+        "en": "update",
+    },
+    "chat.apply_note.plan.create": {
+        "it": "creazione",
+        "en": "create",
+    },
+    "chat.apply_note.plan_saved": {
+        "it": (
+            "Piano di applicazione salvato ({mode} → {target}; campi: {fields})."
+        ),
+        "en": (
+            "Apply plan saved ({mode} → {target}; fields: {fields})."
+        ),
+    },
+    "chat.apply_note.applied.update": {
+        "it": "Nota #{note_id} aggiornata (campi: {fields}).",
+        "en": "Updated note #{note_id} (fields: {fields}).",
+    },
+    "chat.apply_note.applied.create": {
+        "it": (
+            "Finestra Aggiungi aperta per «{notetype}» (campi: {fields}). "
+            "Premi Aggiungi in Anki per salvare la nota."
+        ),
+        "en": (
+            "Add window opened for “{notetype}” (fields: {fields}). "
+            "Press Add in Anki to save the note."
+        ),
+    },
+    "chat.apply_note.tooltip.updated": {
+        "it": "Nota aggiornata ({count} campi).",
+        "en": "Note updated ({count} fields).",
+    },
+    "chat.apply_note.tooltip.addcards": {
+        "it": "Finestra Aggiungi aperta.",
+        "en": "Add window opened.",
+    },
+    "chat.apply_note.error.no_collection": {
+        "it": "Collezione Anki non disponibile.",
+        "en": "Anki collection is not available.",
+    },
+    "chat.apply_note.error.missing_note": {
+        "it": "Nota destinazione non trovata (forse eliminata o non sincronizzata).",
+        "en": "Target note was not found (it may have been deleted or not synced).",
+    },
+    "chat.apply_note.error.missing_notetype": {
+        "it": "Tipo di nota destinazione non trovato.",
+        "en": "Target note type was not found.",
+    },
+    "chat.apply_note.error.no_field_overlap": {
+        "it": "Nessun campo in comune tra la proposta e il tipo di nota.",
+        "en": "No matching fields between the proposal and the note type.",
+    },
+    "chat.apply_note.error.write_failed": {
+        "it": "Scrittura della nota non riuscita: {detail}",
+        "en": "Failed to write the note: {detail}",
+    },
+    "chat.apply_note.error.addcards_failed": {
+        "it": "Impossibile aprire Aggiungi: {detail}",
+        "en": "Could not open Add: {detail}",
+    },
+    "chat.apply_note.error.generic": {
+        "it": "Applicazione non riuscita.",
+        "en": "Apply failed.",
+    },
+    "chat.apply_note.parse_failed": {
+        "it": (
+            "Blocco APPLY_NOTE trovato ma il JSON non è valido "
+            "(escape MathJax, fence markdown o testo extra). "
+            "Chiedi a Gemini di riproporre il JSON con backslash MathJax raddoppiati "
+            "e senza ``` intorno."
+        ),
+        "en": (
+            "APPLY_NOTE block found but the JSON is invalid "
+            "(MathJax escapes, markdown fences, or trailing text). "
+            "Ask Gemini to resend the JSON with doubled MathJax backslashes "
+            "and without ``` fences around it."
         ),
     },
     "chat.prompt_cache.session.section": {
@@ -3398,6 +3647,10 @@ _STRINGS: dict[str, dict[str, str]] = {
             "racchiudili SEMPRE in backtick inline così non diventano MathJax. "
             "Esempio: ho usato `\\(...\\)` per inline e `\\[...\\]` per display. "
             "Non scrivere mai `\\(\\)` o `\\[\\]` nudi nel testo esplicativo.\n"
+            "- Se nel testo esplicativo citi nomi di tag HTML, racchiudili SEMPRE in backtick inline "
+            "(es. `<b>`, `<i>`, `<ol>`, `<li>`). Non scrivere tag HTML grezzi nella prosa della chat: "
+            "verrebbero nascosti o diventerebbero liste vere. L'HTML grezzo va solo dentro i blocchi code "
+            "dei campi o nel JSON di APPLY_NOTE.\n"
             "- Quando proponi contenuto da incollare in un campo Anki, scrivi il NOME DEL CAMPO sulla riga immediatamente sopra il blocco code, seguito da due punti. Poi apri un blocco code con tre backtick.\n"
             "- Esempio (ripeti per ogni campo):\n\n"
             "Front:\n"
@@ -3409,11 +3662,14 @@ _STRINGS: dict[str, dict[str, str]] = {
             "(contenuto HTML/MathJax grezzo)\n"
             "```\n\n"
             "- Il nome del campo va FUORI dal blocco code, mai dentro.\n"
-            "- Dentro ogni blocco code metti SOLO ciò che va incollato nel campo: niente spiegazioni, niente Markdown (usa tag HTML <b>, <i> per grassetto/corsivo nei campi).\n"
+            "- Dentro ogni blocco code metti SOLO ciò che va incollato nel campo: niente spiegazioni, niente Markdown "
+            "(nei campi usa tag HTML come `<b>` e `<i>` per grassetto/corsivo).\n"
             "- Nei campi Anki, usa \\(...\\) per matematica inline e \\[...\\] per display; non usare $...$ o $$...$$.\n"
-            "- Ogni blocco code avrà un pulsante Copia: l'utente decide cosa incollare in Anki.\n"
+            "- Ogni blocco code avrà i pulsanti Anteprima e Copia: l'utente decide cosa incollare in Anki.\n"
             "- I blocchi code possono anche servire per esempi non legati a un campo; in quel caso non mettere un nome campo sulla riga sopra.\n"
-            "- Usa i blocchi code sopra per suggerimenti parziali o copia manuale di singoli campi.\n\n"
+            "- Usa i blocchi code sopra per suggerimenti parziali o copia manuale di singoli campi.\n"
+            "- Se usi <APPLY_NOTE>, NON ripetere gli stessi campi Front:/Back: nei blocchi code della risposta "
+            "visibile: l'add-on ricostruisce le anteprime dal JSON. Nella prosa spiega solo le modifiche.\n\n"
             "[META-REGOLA DI SISTEMA — AGGIORNAMENTO NOTA ANKI]: Usa <APPLY_NOTE> solo quando l'utente "
             "chiede di applicare, scrivere, creare, riscrivere, ottimizzare, scomporre per atomicità "
             "o restituire valori aggiornati per l'intera nota importata (o più note). "
@@ -3433,6 +3689,10 @@ _STRINGS: dict[str, dict[str, str]] = {
             '{"notetype": "Basic", "tags": ["atomica", "parte2"], "fields": {"Front": "...", "Back": "..."}}]}\n'
             "`tags` è un array JSON di stringhe (zero, uno o più tag). `deck` è opzionale. "
             "I nomi in `fields` devono corrispondere esattamente ai campi del tipo nota. "
+            "Nei valori stringa del JSON APPLY_NOTE raddoppia ogni backslash MathJax (JSON valido): "
+            "scrivi \\\\( , \\\\in , \\\\ge , \\\\mathbb{R} tra le virgolette così dopo il parse "
+            "il campo contiene \\( , \\in , \\ge , \\mathbb{R}. "
+            "Un solo \\in o \\ge nel JSON è un escape non valido e rovina la matematica. "
             "Il JSON va SOLO dentro i tag; spiega le modifiche nel testo visibile sopra.\n\n"
             "[META-REGOLA DI SISTEMA]: Se l'utente ti chiede esplicitamente di memorizzare, ricordare, "
             "salvare o aggiungere una nuova regola globalmente o per il futuro, accetta la richiesta e includi "
@@ -3449,6 +3709,9 @@ _STRINGS: dict[str, dict[str, str]] = {
             "ALWAYS wrap them in inline backticks so they are not rendered as MathJax. "
             "Example: I used `\\(...\\)` for inline math and `\\[...\\]` for display math. "
             "Never write raw empty `\\(\\)` or `\\[\\]` in explanatory prose.\n"
+            "- When mentioning HTML tag names in explanatory prose, ALWAYS wrap them in inline backticks "
+            "(e.g. `<b>`, `<i>`, `<ol>`, `<li>`). Never write raw HTML tags in chat prose—they will be "
+            "hidden or turn into real lists. Raw HTML belongs only inside field code blocks or APPLY_NOTE JSON.\n"
             "- When suggesting content for an Anki field, write the FIELD NAME on the line immediately above the code block, followed by a colon. Then open a three-backtick code block.\n"
             "- Example (repeat for each field):\n\n"
             "Front:\n"
@@ -3460,11 +3723,14 @@ _STRINGS: dict[str, dict[str, str]] = {
             "(raw HTML/MathJax)\n"
             "```\n\n"
             "- The field name goes OUTSIDE the code block, never inside.\n"
-            "- Inside each code block put ONLY field content: no explanations, no Markdown (use HTML <b>, <i> for bold/italic in fields).\n"
+            "- Inside each code block put ONLY field content: no explanations, no Markdown "
+            "(in fields use HTML tags such as `<b>` and `<i>` for bold/italic).\n"
             "- In Anki fields use \\(...\\) for inline math and \\[...\\] for display; never $...$ or $$...$$.\n"
-            "- Each code block gets a Copy button; the user chooses what to paste into Anki.\n"
+            "- Each code block gets Preview and Copy buttons; the user chooses what to paste into Anki.\n"
             "- Code blocks may also show examples not tied to a field; then omit the field name line above.\n"
-            "- Use the code blocks above for partial suggestions or manual copy of individual fields.\n\n"
+            "- Use the code blocks above for partial suggestions or manual copy of individual fields.\n"
+            "- When you use <APPLY_NOTE>, do NOT also repeat the same Front:/Back: field code blocks in the "
+            "visible reply—the add-on rebuilds copyable previews from the JSON. In prose, only explain the changes.\n\n"
             "[META-SYSTEM RULE — ANKI NOTE UPDATE]: Use <APPLY_NOTE> only when the user asks to apply, write, "
             "create, rewrite, optimize, split for atomicity, or return updated values for the entire imported "
             "note (or multiple notes). In those cases you MUST include at the end of your reply a JSON block "
@@ -3482,6 +3748,10 @@ _STRINGS: dict[str, dict[str, str]] = {
             '{"notetype": "Basic", "tags": ["atomic", "part2"], "fields": {"Front": "...", "Back": "..."}}]}\n'
             "`tags` is a JSON array of strings (zero, one, or many tags). `deck` is optional. "
             "Keys in `fields` must exactly match the note type's field names. "
+            "In APPLY_NOTE JSON string values, double every MathJax backslash (valid JSON): "
+            "write \\\\( , \\\\in , \\\\ge , \\\\mathbb{R} inside the quotes so after parsing "
+            "the field contains \\( , \\in , \\ge , \\mathbb{R}. "
+            "A bare \\in or \\ge in JSON is an invalid escape and corrupts the math. "
             "Put JSON ONLY inside the tags; explain changes in the visible text above.\n\n"
             "[META-SYSTEM RULE]: If the user explicitly asks you to memorize, remember, save, or add a new "
             "rule globally or for the future, accept the request and MUST include at the end of your reply the "
@@ -3567,6 +3837,14 @@ _STRINGS: dict[str, dict[str, str]] = {
     "formatter.copy": {
         "it": "Copia",
         "en": "Copy",
+    },
+    "formatter.preview": {
+        "it": "Anteprima formattata",
+        "en": "Formatted preview",
+    },
+    "formatter.preview.window_title": {
+        "it": "Anteprima campo — {name}",
+        "en": "Field preview — {name}",
     },
     "formatter.code_block": {
         "it": "Blocco code",

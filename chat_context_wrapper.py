@@ -11,6 +11,14 @@ DEFAULT_WRAPPER_SECTION_ORDER = (
     "templates",
     "styling",
 )
+# Pre-request-first default; used to migrate saved configs that never customized order.
+LEGACY_DEFAULT_WRAPPER_SECTION_ORDER = (
+    "context",
+    "format_guide",
+    "templates",
+    "styling",
+    "request",
+)
 PLACEHOLDER_SECTIONS = ("context", "templates", "styling", "request")
 
 
