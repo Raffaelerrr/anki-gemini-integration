@@ -6,6 +6,14 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **Apply to Anki from chat** — review Gemini `<APPLY_NOTE>` proposals, update imported or collection notes, or open prefilled Add; session history, before/after preview, and undo for the last update.
+- **Collection update targets** — choose notes beyond the chat import list (compatible note types), including Browser selection when open.
+- **Stale-note fallback** — if an update target was deleted, open Add with fields prefilled instead of failing hard.
+- **Duplicate-update warning** — dismissible confirm when an update would match Anki’s first-field duplicate rule.
+- **Browser selection sync** — reactivating the apply window refreshes update targets from the current Browser selection.
+
 ### Changed
 
 - **Chat note import UI** — imported fields are editable in the preview above the chat log; **Edit wrapper** replaces the old “Edit imported context” panel (wrapper template only). Smaller default chat window (`520×520`).

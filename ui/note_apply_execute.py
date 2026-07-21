@@ -13,9 +13,13 @@ from ..note_apply import (
     NoteApplyExecutionResult,
     NoteApplyPlan,
     apply_mapped_fields_to_note,
+    has_apply_undo,
     mapped_field_values,
     model_field_names_from_note,
     proposal_tags_for_apply,
+    snapshot_note_for_undo,
+    store_apply_undo,
+    take_apply_undo,
 )
 
 
@@ -34,6 +38,72 @@ def execute_note_apply_plan(
         mode=plan.mode,
         message_key="chat.apply_note.error.generic",
     )
+
+
+def undo_last_note_apply(
+    *,
+    config: dict[str, Any] | None = None,
+) -> NoteApplyExecutionResult:
+    """Restore the last successful update snapshot, if any."""
+    snapshot = take_apply_undo()
+    if snapshot is None:
+        return NoteApplyExecutionResult(
+            ok=False,
+            mode="update",
+            message_key="chat.apply_note.undo.none",
+        )
+    col = _collection()
+    if col is None:
+        store_apply_undo(snapshot)
+        return NoteApplyExecutionResult(
+            ok=False,
+            mode="update",
+            message_key="chat.apply_note.error.no_collection",
+        )
+    try:
+        note = col.get_note(snapshot.note_id)
+    except Exception:
+        return NoteApplyExecutionResult(
+            ok=False,
+            mode="update",
+            message_key="chat.apply_note.undo.missing_note",
+            message_kwargs={"note_id": snapshot.note_id},
+        )
+
+    apply_mapped_fields_to_note(
+        note,
+        dict(snapshot.fields),
+        tags=list(snapshot.tags),
+    )
+    try:
+        if hasattr(col, "update_note"):
+            col.update_note(note)
+        else:
+            note.flush()
+    except Exception as exc:
+        # Put the snapshot back so the user can retry.
+        store_apply_undo(snapshot)
+        return NoteApplyExecutionResult(
+            ok=False,
+            mode="update",
+            message_key="chat.apply_note.error.write_failed",
+            message_kwargs={"detail": str(exc)},
+            note_id=snapshot.note_id,
+        )
+
+    _refresh_open_editors_for_note(snapshot.note_id)
+    tooltip(tr("chat.apply_note.undo.done", config=config))
+    return NoteApplyExecutionResult(
+        ok=True,
+        mode="update",
+        message_key="chat.apply_note.undo.done",
+        note_id=snapshot.note_id,
+        updated_fields=tuple(snapshot.fields.keys()),
+    )
+
+
+def can_undo_last_note_apply() -> bool:
+    return has_apply_undo()
 
 
 def _collection():
@@ -64,12 +134,8 @@ def _execute_update(
     try:
         note = col.get_note(note_id)
     except Exception:
-        return NoteApplyExecutionResult(
-            ok=False,
-            mode="update",
-            message_key="chat.apply_note.error.missing_note",
-            message_kwargs={"note_id": note_id},
-        )
+        # Stale / deleted note → fall back to create when possible.
+        return _fallback_create_from_missing_update(plan, config=config)
 
     field_names = model_field_names_from_note(note)
     mapped = mapped_field_values(plan.proposal.fields, field_names)
@@ -81,6 +147,7 @@ def _execute_update(
             note_id=note_id,
         )
 
+    undo_snapshot = snapshot_note_for_undo(note)
     updated = apply_mapped_fields_to_note(
         note,
         mapped,
@@ -99,6 +166,9 @@ def _execute_update(
             message_kwargs={"detail": str(exc)},
             note_id=note_id,
         )
+
+    if undo_snapshot is not None:
+        store_apply_undo(undo_snapshot)
 
     _refresh_open_editors_for_note(note_id)
     tooltip(
@@ -121,6 +191,45 @@ def _execute_update(
     )
 
 
+def _fallback_create_from_missing_update(
+    plan: NoteApplyPlan,
+    *,
+    config: dict[str, Any] | None,
+) -> NoteApplyExecutionResult:
+    notetype_id = plan.target_notetype_id
+    if notetype_id is None:
+        return NoteApplyExecutionResult(
+            ok=False,
+            mode="update",
+            message_key="chat.apply_note.error.missing_note",
+            message_kwargs={"note_id": plan.target_note_id},
+        )
+    create_plan = NoteApplyPlan(
+        mode="create",
+        proposal_index=plan.proposal_index,
+        proposal=plan.proposal,
+        target_notetype_id=int(notetype_id),
+        target_notetype_name=plan.target_notetype_name,
+        field_report=plan.field_report,
+        history_item_id=plan.history_item_id,
+    )
+    result = _execute_create(create_plan, config=config, show_tooltip=False)
+    if not result.ok:
+        return result
+    tooltip(tr("chat.apply_note.tooltip.create_fallback", config=config))
+    return NoteApplyExecutionResult(
+        ok=True,
+        mode="create",
+        message_key="chat.apply_note.applied.create_fallback",
+        message_kwargs={
+            "note_id": plan.target_note_id,
+            "notetype": plan.target_notetype_name or f"#{notetype_id}",
+            "fields": result.message_kwargs.get("fields", "—"),
+        },
+        updated_fields=result.updated_fields,
+    )
+
+
 def _resolve_deck_id(deck_name: str | None) -> Any | None:
     if not deck_name or mw is None or mw.col is None:
         return None
@@ -129,7 +238,6 @@ def _resolve_deck_id(deck_name: str | None) -> Any | None:
         if hasattr(decks, "id_for_name"):
             deck_id = decks.id_for_name(deck_name)
             return deck_id
-        # Older Anki: id(name, create=False) may still create; prefer lookup.
         for item in decks.all_names_and_ids():
             if str(getattr(item, "name", "") or "") == deck_name:
                 return getattr(item, "id", None)
@@ -181,6 +289,7 @@ def _execute_create(
     plan: NoteApplyPlan,
     *,
     config: dict[str, Any] | None,
+    show_tooltip: bool = True,
 ) -> NoteApplyExecutionResult:
     col = _collection()
     if col is None or mw is None:
@@ -250,7 +359,6 @@ def _execute_create(
 
     editor = getattr(add_dialog, "editor", None)
     if editor is not None and getattr(editor, "note", None) is not None:
-        # New AddCards.set_note may only switch notetype; always push fields.
         apply_mapped_fields_to_note(
             editor.note,
             mapped,
@@ -260,7 +368,8 @@ def _execute_create(
 
     _focus_addcards_window(add_dialog)
 
-    tooltip(tr("chat.apply_note.tooltip.addcards", config=config))
+    if show_tooltip:
+        tooltip(tr("chat.apply_note.tooltip.addcards", config=config))
     return NoteApplyExecutionResult(
         ok=True,
         mode="create",
@@ -324,10 +433,6 @@ def _refresh_open_editors_for_note(note_id: int) -> None:
 
 
 def _maybe_reload_editor_widget(widget: Any, note_id: int) -> None:
-    note = getattr(widget, "note", None)
-    if note is not None and getattr(note, "id", None) == note_id:
-        # Some windows expose note directly (rare).
-        pass
     editor = getattr(widget, "editor", None)
     if editor is not None:
         _maybe_reload_editor(editor, note_id)

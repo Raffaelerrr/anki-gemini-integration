@@ -740,6 +740,7 @@ def _install_anki_mocks() -> None:
         class Type:
             Wheel = 31
             Close = 19
+            ActivationChange = 99
 
     class QDialogButtonBox(_Stub):
         StandardButton = _Enum(Ok=1, Cancel=2, Save=2, Close=4)

@@ -2413,6 +2413,82 @@ class TestNoteApply(unittest.TestCase):
         self.assertEqual(self.note_apply.clamp_apply_history_max(99), 30)
         self.assertEqual(self.note_apply.clamp_apply_history_max("x"), 7)
 
+    def test_fields_after_apply_preview_keeps_unmapped(self):
+        proposal = self.note_apply.NoteApplyNote(
+            fields={"Front": "new front", "Extra": "x"}
+        )
+        before = [("Front", "old"), ("Back", "keep")]
+        after = self.note_apply.fields_after_apply_preview(proposal, before)
+        self.assertEqual(
+            after,
+            [("Front", "new front"), ("Back", "keep"), ("Extra", "x")],
+        )
+
+    def test_merge_update_targets_prefers_first_and_re_marks(self):
+        report = self.note_apply.FieldMappingReport(matched=("Front",))
+        a = self.note_apply.ImportedNoteTarget(
+            note_id=1,
+            notetype_id=10,
+            notetype_name="Basic",
+            label="A",
+            score=0.9,
+            report=report,
+            source="imported",
+        )
+        b = self.note_apply.ImportedNoteTarget(
+            note_id=1,
+            notetype_id=10,
+            notetype_name="Basic",
+            label="A-dupe",
+            score=0.5,
+            report=report,
+            source="collection",
+        )
+        c = self.note_apply.ImportedNoteTarget(
+            note_id=2,
+            notetype_id=10,
+            notetype_name="Basic",
+            label="B",
+            score=0.4,
+            report=report,
+            source="browser",
+        )
+        merged = self.note_apply.merge_update_targets([a, c], [b])
+        self.assertEqual([t.note_id for t in merged], [1, 2])
+        self.assertEqual(merged[0].label, "A")
+        self.assertTrue(merged[0].preferred)
+        self.assertFalse(merged[1].preferred)
+
+    def test_apply_undo_store_and_take(self):
+        self.note_apply.clear_apply_undo()
+        self.assertFalse(self.note_apply.has_apply_undo())
+        snap = self.note_apply.ApplyUndoSnapshot(
+            note_id=42,
+            fields={"Front": "old"},
+            tags=("tag1",),
+        )
+        self.note_apply.store_apply_undo(snap)
+        self.assertTrue(self.note_apply.has_apply_undo())
+        taken = self.note_apply.take_apply_undo()
+        self.assertEqual(taken.note_id, 42)
+        self.assertFalse(self.note_apply.has_apply_undo())
+
+    def test_fields_check_is_duplicate_helper(self):
+        self.assertTrue(self.note_apply._fields_check_is_duplicate(2))
+        self.assertFalse(self.note_apply._fields_check_is_duplicate(0))
+        self.assertFalse(self.note_apply._fields_check_is_duplicate(1))
+
+        class _State:
+            name = "DUPLICATE"
+
+        self.assertTrue(self.note_apply._fields_check_is_duplicate(_State()))
+
+    def test_strip_html_for_duplicate(self):
+        self.assertEqual(
+            self.note_apply._strip_html_for_duplicate("<b>Hello</b> world"),
+            "Hello world",
+        )
+
 
 class TestChatPromptCacheSettings(unittest.TestCase):
     @classmethod

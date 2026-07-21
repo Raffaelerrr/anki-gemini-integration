@@ -138,6 +138,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "suppress_import_note_cache_warning": False,
     "suppress_prompt_cache_custom_text_load_confirm": False,
     "suppress_prompt_cache_delete_orphans_confirm": False,
+    "suppress_apply_note_duplicate_warning": False,
     "dev_mock_mode": False,
 }
 
@@ -238,6 +239,7 @@ DISMISSIBLE_WARNING_KEYS: tuple[str, ...] = (
     "suppress_import_note_cache_warning",
     "suppress_prompt_cache_custom_text_load_confirm",
     "suppress_prompt_cache_delete_orphans_confirm",
+    "suppress_apply_note_duplicate_warning",
 )
 
 DISMISSIBLE_WARNING_LABELS: dict[str, str] = {
@@ -254,6 +256,7 @@ DISMISSIBLE_WARNING_LABELS: dict[str, str] = {
     "suppress_import_note_cache_warning": "warnings.import_note_cache",
     "suppress_prompt_cache_custom_text_load_confirm": "warnings.prompt_cache_custom_text_load",
     "suppress_prompt_cache_delete_orphans_confirm": "warnings.prompt_cache_delete_orphans",
+    "suppress_apply_note_duplicate_warning": "warnings.apply_note_duplicate",
 }
 
 DEFAULT_ACTION_SETTINGS: tuple[tuple[str, str, tuple[str, ...]], ...] = (

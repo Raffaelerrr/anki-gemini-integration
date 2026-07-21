@@ -5,10 +5,13 @@ from typing import Any
 
 from aqt.qt import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDialog,
+    QEvent,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QRadioButton,
     QTimer,
@@ -17,7 +20,7 @@ from aqt.qt import (
 )
 from aqt.utils import showWarning
 
-from ..config import load_config
+from ..config import is_warning_dismissed, load_config, save_config
 from ..i18n import tr
 from ..note_apply import (
     ApplyHistoryItem,
@@ -28,18 +31,30 @@ from ..note_apply import (
     NoteApplyExecutionResult,
     NoteApplyPlan,
     collect_available_notetypes,
+    fields_after_apply_preview,
     fields_as_tuples,
+    filter_existing_update_targets,
+    has_apply_undo,
+    load_browser_selected_notes,
+    load_collection_notes_for_notetypes,
+    load_note_fields_for_preview,
+    merge_update_targets,
     proposal_with_fields,
     rank_imported_update_targets,
     rank_notetypes_for_create,
+    rank_update_targets,
+    update_would_create_anki_duplicate,
 )
 from ..note_context_fields import ImportedNoteData, ordered_imported_notes
+from .note_apply_collection_picker import pick_collection_note
+from .note_apply_diff_preview import NoteApplyDiffPreviewWindow
 from .note_fields_editor import NoteFieldsEditor
 from .settings_compact_controls import create_settings_hint_label
 from .theme import muted_hint_html
 from .themed_windows import configure_snappable_window, register_themed_window
 
 _OnApply = Callable[[NoteApplyPlan], NoteApplyExecutionResult]
+_OnUndo = Callable[[], NoteApplyExecutionResult]
 
 
 class NoteApplyDialog(QDialog):
@@ -51,6 +66,7 @@ class NoteApplyDialog(QDialog):
         history: ApplyNoteHistory,
         *,
         on_apply: _OnApply,
+        on_undo: _OnUndo | None = None,
         imported_notes: dict[int, ImportedNoteData] | None = None,
         session_notetypes: list[Any] | None = None,
         available_notetypes: list[AvailableNotetype] | None = None,
@@ -60,6 +76,7 @@ class NoteApplyDialog(QDialog):
         self._config = config or load_config()
         self._history = history
         self._on_apply = on_apply
+        self._on_undo = on_undo
         self._imported_notes = dict(imported_notes or {})
         self._available_notetypes = list(
             available_notetypes
@@ -73,6 +90,8 @@ class NoteApplyDialog(QDialog):
         self._create_matches: list[Any] = []
         self._syncing_ui = False
         self._applied_any = False
+        self._diff_preview: NoteApplyDiffPreviewWindow | None = None
+        self._extra_collection_notes: dict[int, ImportedNoteData] = {}
 
         # Modeless (show(), not exec()) so AddCards / other windows can take focus.
         configure_snappable_window(self, application_modal=False)
@@ -136,6 +155,9 @@ class NoteApplyDialog(QDialog):
         _prefer_combo_without_native_check(self._target_combo)
         self._target_combo.currentIndexChanged.connect(self._on_target_changed)
         target_row.addWidget(self._target_combo, 1)
+        self._collection_btn = QPushButton(self)
+        self._collection_btn.clicked.connect(self._choose_collection_note)
+        target_row.addWidget(self._collection_btn)
         root.addLayout(target_row)
 
         self._warning_label = create_settings_hint_label(self, "")
@@ -152,6 +174,12 @@ class NoteApplyDialog(QDialog):
         root.addWidget(self._footer_hint)
 
         buttons = QHBoxLayout()
+        self._preview_btn = QPushButton(self)
+        self._preview_btn.clicked.connect(self._open_diff_preview)
+        buttons.addWidget(self._preview_btn)
+        self._undo_btn = QPushButton(self)
+        self._undo_btn.clicked.connect(self._undo_last_apply)
+        buttons.addWidget(self._undo_btn)
         buttons.addStretch(1)
         self._cancel_btn = QPushButton(
             tr("preview.cancel", config=self._config),
@@ -170,6 +198,7 @@ class NoteApplyDialog(QDialog):
 
         self._rebuild_proposal_combo(select_suggested=True)
         self.apply_theme()
+        self._refresh_action_buttons()
 
     def applied_any(self) -> bool:
         return self._applied_any
@@ -177,6 +206,91 @@ class NoteApplyDialog(QDialog):
     def refresh_from_history(self, *, select_suggested: bool = True) -> None:
         """Reload proposals from the shared history (e.g. dialog already open)."""
         self._rebuild_proposal_combo(select_suggested=select_suggested)
+
+    def refresh_actions(self) -> None:
+        """Refresh Preview / Undo / Collection button enabled state."""
+        self._refresh_action_buttons()
+
+    def changeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        super().changeEvent(event)
+        try:
+            if event.type() != QEvent.Type.ActivationChange:
+                return
+            if not self.isActiveWindow():
+                return
+        except Exception:
+            return
+        self._refresh_browser_targets_on_focus()
+
+    def _refresh_browser_targets_on_focus(self) -> None:
+        """Refresh Browser-selected update targets when this window is reactivated."""
+        item = self._current_item()
+        if item is None or self._syncing_ui:
+            return
+        selected_id = self._target_combo.currentData()
+        proposal = proposal_with_fields(item.proposal, self._editor.get_fields())
+        before = [(t.note_id, t.source) for t in self._update_targets]
+        self._rebuild_update_targets(proposal)
+        after = [(t.note_id, t.source) for t in self._update_targets]
+        if before == after:
+            return
+        was_update = self._update_radio.isChecked()
+        self._syncing_ui = True
+        try:
+            if was_update or self._update_targets:
+                self._update_radio.setChecked(True)
+            self._populate_targets()
+            if selected_id is not None:
+                for row in range(self._target_combo.count()):
+                    if self._target_combo.itemData(row) == selected_id:
+                        self._target_combo.setCurrentIndex(row)
+                        break
+        finally:
+            self._syncing_ui = False
+        self._refresh_mode_labels()
+        self._refresh_warning()
+        self._update_confirm_enabled()
+
+    def _confirm_duplicate_update(self, plan: NoteApplyPlan) -> bool:
+        if plan.mode != "update" or plan.target_note_id is None:
+            return True
+        config = load_config()
+        if is_warning_dismissed(config, "suppress_apply_note_duplicate_warning"):
+            return True
+        try:
+            is_dupe = update_would_create_anki_duplicate(
+                int(plan.target_note_id),
+                plan.proposal.fields,
+            )
+        except Exception:
+            is_dupe = False
+        if not is_dupe:
+            return True
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(
+            tr("chat.apply_note.duplicate.title", config=config)
+        )
+        box.setText(tr("chat.apply_note.duplicate.message", config=config))
+        box.setInformativeText(
+            tr("chat.apply_note.duplicate.detail", config=config)
+        )
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        dismiss = QCheckBox(tr("optimize.warning.dismiss", config=config), box)
+        box.setCheckBox(dismiss)
+
+        if box.exec() != QMessageBox.StandardButton.Ok:
+            return False
+        if dismiss.isChecked():
+            updated = load_config()
+            updated["suppress_apply_note_duplicate_warning"] = True
+            save_config(updated)
+            self._config = updated
+        return True
 
     def apply_theme(self) -> None:
         self._editor.apply_theme()
@@ -187,6 +301,7 @@ class NoteApplyDialog(QDialog):
             muted_hint_html(tr("chat.apply_note.apply_hint", config=self._config))
         )
         self._refresh_warning()
+        self._refresh_action_buttons()
 
     def apply_language(self, config: dict[str, Any] | None = None) -> None:
         self._config = config or load_config()
@@ -198,12 +313,20 @@ class NoteApplyDialog(QDialog):
         self._create_radio.setText(
             tr("chat.apply_note.mode.create", config=self._config)
         )
+        self._collection_btn.setText(
+            tr("chat.apply_note.collection.button", config=self._config)
+        )
+        self._preview_btn.setText(
+            tr("chat.apply_note.diff.button", config=self._config)
+        )
+        self._undo_btn.setText(tr("chat.apply_note.undo.button", config=self._config))
         self._cancel_btn.setText(tr("preview.cancel", config=self._config))
         self._confirm_btn.setText(tr("chat.apply_note.apply", config=self._config))
         self._rebuild_proposal_combo(select_suggested=False)
         self.apply_theme()
         self._refresh_mode_labels()
         self._refresh_warning()
+        self._refresh_action_buttons()
 
     def _current_item(self) -> ApplyHistoryItem | None:
         item_id = self._proposal_combo.currentData()
@@ -286,19 +409,42 @@ class NoteApplyDialog(QDialog):
         self._refresh_mode_labels()
         self._refresh_warning()
         self._update_confirm_enabled()
+        self._refresh_action_buttons()
 
     def _on_target_changed(self, _index: int) -> None:
         if self._syncing_ui:
             return
         self._refresh_warning()
         self._update_confirm_enabled()
+        self._refresh_action_buttons()
 
-    def _reload_for_item(self, item: ApplyHistoryItem) -> None:
-        proposal = item.proposal
-        self._update_targets = rank_imported_update_targets(
+    def _rebuild_update_targets(self, proposal) -> None:
+        imported = rank_imported_update_targets(
             proposal,
             ordered_imported_notes(self._imported_notes),
         )
+        browser_notes = load_browser_selected_notes(
+            exclude_ids={t.note_id for t in imported}
+        )
+        browser = rank_update_targets(
+            proposal,
+            browser_notes,
+            source="browser",
+            require_overlap=False,
+        )
+        extras = rank_update_targets(
+            proposal,
+            list(self._extra_collection_notes.values()),
+            source="collection",
+            require_overlap=False,
+        )
+        # Prefer imported, then browser selection, then manually picked collection notes.
+        merged = merge_update_targets(imported, browser, extras)
+        self._update_targets = filter_existing_update_targets(merged)
+
+    def _reload_for_item(self, item: ApplyHistoryItem) -> None:
+        proposal = item.proposal
+        self._rebuild_update_targets(proposal)
         self._create_matches = rank_notetypes_for_create(
             proposal,
             self._available_notetypes,
@@ -309,15 +455,21 @@ class NoteApplyDialog(QDialog):
             self._meta_label.setText(self._format_meta(proposal, item.applied))
             self._editor.set_fields(fields_as_tuples(proposal))
 
-            can_update = bool(self._update_targets)
             can_create = bool(self._create_matches)
+            can_update = (
+                bool(self._update_targets)
+                or can_create
+                or bool(self._available_notetypes)
+            )
             self._update_radio.setEnabled(can_update)
             self._create_radio.setEnabled(can_create)
 
-            if can_update:
+            if self._update_targets:
                 self._update_radio.setChecked(True)
             elif can_create:
                 self._create_radio.setChecked(True)
+            elif can_update:
+                self._update_radio.setChecked(True)
             else:
                 self._update_radio.setChecked(False)
                 self._create_radio.setChecked(False)
@@ -329,6 +481,7 @@ class NoteApplyDialog(QDialog):
         self._refresh_mode_labels()
         self._refresh_warning()
         self._update_confirm_enabled()
+        self._refresh_action_buttons()
 
     def _populate_targets(self) -> None:
         self._syncing_ui = True
@@ -340,17 +493,28 @@ class NoteApplyDialog(QDialog):
                 )
                 preferred_row = 0
                 for row, target in enumerate(self._update_targets):
-                    suffix = (
-                        tr("chat.apply_note.target.suggested", config=self._config)
-                        if target.preferred
-                        else ""
-                    )
-                    label = target.label
-                    if target.notetype_name:
-                        label = f"{label} ({target.notetype_name})"
-                    if suffix:
-                        label = f"{label} — {suffix}"
-                    self._target_combo.addItem(label, target.note_id)
+                    bits = [target.label]
+                    if target.notetype_name and target.notetype_name not in target.label:
+                        bits[0] = f"{target.label} ({target.notetype_name})"
+                    if target.source == "browser":
+                        bits.append(
+                            tr(
+                                "chat.apply_note.target.from_browser",
+                                config=self._config,
+                            )
+                        )
+                    elif target.source == "collection":
+                        bits.append(
+                            tr(
+                                "chat.apply_note.target.from_collection",
+                                config=self._config,
+                            )
+                        )
+                    if target.preferred:
+                        bits.append(
+                            tr("chat.apply_note.target.suggested", config=self._config)
+                        )
+                    self._target_combo.addItem(" — ".join(bits), target.note_id)
                     if target.preferred:
                         preferred_row = row
                 if self._target_combo.count() > 0:
@@ -378,6 +542,7 @@ class NoteApplyDialog(QDialog):
             has_targets = self._target_combo.count() > 0
             self._target_combo.setVisible(has_targets)
             self._target_label.setVisible(True)
+            self._collection_btn.setVisible(self._update_radio.isChecked())
         finally:
             self._syncing_ui = False
 
@@ -453,12 +618,143 @@ class NoteApplyDialog(QDialog):
         item = self._current_item()
         if item is None:
             self._confirm_btn.setEnabled(False)
+            self._refresh_action_buttons()
             return
         has_mode = self._update_radio.isChecked() or self._create_radio.isChecked()
         has_target = self._target_combo.currentData() is not None
-        self._confirm_btn.setEnabled(
-            has_mode and has_target and self._editor.has_fields()
+        # Update mode can still proceed via collection picker even with empty combo.
+        if self._update_radio.isChecked() and not has_target:
+            self._confirm_btn.setEnabled(False)
+        else:
+            self._confirm_btn.setEnabled(
+                has_mode and has_target and self._editor.has_fields()
+            )
+        self._refresh_action_buttons()
+
+    def _refresh_action_buttons(self) -> None:
+        self._collection_btn.setText(
+            tr("chat.apply_note.collection.button", config=self._config)
         )
+        self._preview_btn.setText(
+            tr("chat.apply_note.diff.button", config=self._config)
+        )
+        self._undo_btn.setText(tr("chat.apply_note.undo.button", config=self._config))
+        self._collection_btn.setEnabled(self._update_radio.isChecked())
+        self._preview_btn.setEnabled(
+            self._update_radio.isChecked()
+            and self._target_combo.currentData() is not None
+            and self._editor.has_fields()
+        )
+        self._undo_btn.setEnabled(bool(self._on_undo) and has_apply_undo())
+
+    def _choose_collection_note(self) -> None:
+        item = self._current_item()
+        if item is None:
+            return
+        proposal = proposal_with_fields(item.proposal, self._editor.get_fields())
+        notetype_ids = [
+            match.notetype.notetype_id for match in self._create_matches
+        ]
+        if not notetype_ids:
+            notetype_ids = [nt.notetype_id for nt in self._available_notetypes]
+        exclude = set(self._imported_notes) | set(self._extra_collection_notes)
+        notes = load_collection_notes_for_notetypes(
+            notetype_ids,
+            exclude_ids=exclude,
+        )
+        # Also allow re-picking notes already listed so the filter UI is useful.
+        already = {
+            nid: data
+            for nid, data in {
+                **self._imported_notes,
+                **self._extra_collection_notes,
+            }.items()
+        }
+        for data in already.values():
+            if all(n.note_id != data.note_id for n in notes):
+                notes.append(data)
+        if not notes:
+            showWarning(
+                tr("chat.apply_note.collection.empty", config=self._config),
+                parent=self,
+            )
+            return
+        note_id = pick_collection_note(
+            self,
+            notes,
+            proposal=proposal,
+            config=self._config,
+        )
+        if note_id is None:
+            return
+        chosen = next((n for n in notes if n.note_id == note_id), None)
+        if chosen is None:
+            return
+        self._extra_collection_notes[chosen.note_id] = chosen
+        self._rebuild_update_targets(proposal)
+        if not self._update_radio.isChecked():
+            self._update_radio.setChecked(True)
+        self._populate_targets()
+        # Select the chosen note.
+        for row in range(self._target_combo.count()):
+            if self._target_combo.itemData(row) == chosen.note_id:
+                self._target_combo.setCurrentIndex(row)
+                break
+        self._refresh_mode_labels()
+        self._refresh_warning()
+        self._update_confirm_enabled()
+
+    def _open_diff_preview(self) -> None:
+        if not self._update_radio.isChecked():
+            return
+        note_id = self._target_combo.currentData()
+        if note_id is None:
+            return
+        item = self._current_item()
+        if item is None:
+            return
+        before, notetype_id = load_note_fields_for_preview(int(note_id))
+        if not before:
+            # Fall back to imported/extra session copy.
+            data = self._imported_notes.get(int(note_id)) or self._extra_collection_notes.get(
+                int(note_id)
+            )
+            if data is None:
+                showWarning(
+                    tr("chat.apply_note.error.missing_note", config=self._config),
+                    parent=self,
+                )
+                return
+            before = list(data.fields)
+            notetype_id = data.notetype_id
+        proposal = proposal_with_fields(item.proposal, self._editor.get_fields())
+        after = fields_after_apply_preview(proposal, before)
+        if self._diff_preview is None:
+            self._diff_preview = NoteApplyDiffPreviewWindow(self)
+            self._diff_preview.destroyed.connect(
+                lambda *_: setattr(self, "_diff_preview", None)
+            )
+        self._diff_preview.show_diff(
+            before=before,
+            after=after,
+            notetype_id=notetype_id,
+            config=self._config,
+        )
+
+    def _undo_last_apply(self) -> None:
+        if self._on_undo is None:
+            return
+        result = self._on_undo()
+        if not result.ok:
+            showWarning(
+                tr(
+                    result.message_key,
+                    config=self._config,
+                    **result.message_kwargs,
+                ),
+                parent=self,
+            )
+        self._refresh_action_buttons()
 
     def _format_meta(self, proposal, applied: bool) -> str:
         bits: list[str] = []
@@ -543,6 +839,8 @@ class NoteApplyDialog(QDialog):
         plan = self._build_plan()
         if plan is None:
             return
+        if not self._confirm_duplicate_update(plan):
+            return
         item = self._current_item()
         was_unapplied = item is not None and not item.applied
         result = self._on_apply(plan)
@@ -560,6 +858,7 @@ class NoteApplyDialog(QDialog):
         if plan.history_item_id:
             self._history.mark_applied(plan.history_item_id)
         self._applied_any = True
+        self._refresh_action_buttons()
 
         # Re-applying an already-applied note must not close the window (AddCards focus).
         all_done = was_unapplied and not self._history.has_unapplied()
@@ -572,6 +871,7 @@ class NoteApplyDialog(QDialog):
             return
 
         self._rebuild_proposal_combo(select_suggested=was_unapplied)
+        self._refresh_action_buttons()
 
 
 def _prefer_combo_without_native_check(combo: QComboBox) -> None:
@@ -703,6 +1003,7 @@ def open_note_apply_dialog(
     history: ApplyNoteHistory,
     *,
     on_apply: _OnApply,
+    on_undo: _OnUndo | None = None,
     imported_notes: dict[int, ImportedNoteData] | None = None,
     session_notetypes: list[Any] | None = None,
     available_notetypes: list[AvailableNotetype] | None = None,
@@ -725,6 +1026,7 @@ def open_note_apply_dialog(
         parent,
         history,
         on_apply=on_apply,
+        on_undo=on_undo,
         imported_notes=imported_notes,
         session_notetypes=session_notetypes,
         available_notetypes=available_notetypes,

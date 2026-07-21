@@ -93,9 +93,12 @@ class AvailableNotetype:
     field_names: tuple[str, ...] = ()
 
 
+UpdateTargetSource = Literal["imported", "collection", "browser"]
+
+
 @dataclass(frozen=True)
 class ImportedNoteTarget:
-    """Imported session note scored as an update target for a proposal."""
+    """Note scored as an update target for a proposal (imported or collection)."""
 
     note_id: int
     notetype_id: int
@@ -104,6 +107,19 @@ class ImportedNoteTarget:
     score: float
     report: FieldMappingReport
     preferred: bool = False
+    source: UpdateTargetSource = "imported"
+
+
+@dataclass(frozen=True)
+class ApplyUndoSnapshot:
+    """Previous field/tag values for one successful collection update."""
+
+    note_id: int
+    fields: dict[str, str]
+    tags: tuple[str, ...] = ()
+
+
+_last_apply_undo: ApplyUndoSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -419,44 +435,123 @@ def score_proposal_against_fields(
     return min(1.0, score), report
 
 
-def rank_imported_update_targets(
+def clear_apply_undo() -> None:
+    global _last_apply_undo
+    _last_apply_undo = None
+
+
+def store_apply_undo(snapshot: ApplyUndoSnapshot) -> None:
+    global _last_apply_undo
+    _last_apply_undo = snapshot
+
+
+def peek_apply_undo() -> ApplyUndoSnapshot | None:
+    return _last_apply_undo
+
+
+def has_apply_undo() -> bool:
+    return _last_apply_undo is not None
+
+
+def take_apply_undo() -> ApplyUndoSnapshot | None:
+    global _last_apply_undo
+    snapshot = _last_apply_undo
+    _last_apply_undo = None
+    return snapshot
+
+
+def snapshot_note_for_undo(note: Any) -> ApplyUndoSnapshot | None:
+    """Capture current field/tag values before an update write."""
+    try:
+        note_id = int(note.id)
+    except Exception:
+        return None
+    fields: dict[str, str] = {}
+    try:
+        for name, value in note.items():
+            fields[str(name)] = str(value if value is not None else "")
+    except Exception:
+        try:
+            names = list(note.keys())
+            values = list(note.fields)
+            for name, value in zip(names, values):
+                fields[str(name)] = str(value if value is not None else "")
+        except Exception:
+            return None
+    tags: tuple[str, ...] = ()
+    try:
+        tags = tuple(str(tag) for tag in (note.tags or []))
+    except Exception:
+        tags = ()
+    return ApplyUndoSnapshot(note_id=note_id, fields=fields, tags=tags)
+
+
+def collection_note_still_exists(note_id: int) -> bool:
+    """Return True when ``note_id`` resolves in the open collection."""
+    try:
+        from aqt import mw
+
+        col = mw.col if mw is not None else None
+        if col is None:
+            return False
+        col.get_note(int(note_id))
+        return True
+    except Exception:
+        return False
+
+
+def _target_from_note_data(
     proposal: NoteApplyNote,
-    imported_notes: Iterable[Any],
+    note: Any,
+    *,
+    source: UpdateTargetSource,
+) -> ImportedNoteTarget | None:
+    try:
+        note_id = int(note.note_id)
+        notetype_id = int(note.notetype_id)
+    except Exception:
+        return None
+    field_names = [name for name, _value in getattr(note, "fields", [])]
+    score, report = score_proposal_against_fields(
+        proposal,
+        field_names,
+        notetype_name=str(getattr(note, "notetype_name", "") or ""),
+    )
+    if hasattr(note, "display_label") and callable(note.display_label):
+        label = str(note.display_label())
+    else:
+        label = f"#{note_id}"
+    return ImportedNoteTarget(
+        note_id=note_id,
+        notetype_id=notetype_id,
+        notetype_name=str(getattr(note, "notetype_name", "") or ""),
+        label=label,
+        score=score,
+        report=report,
+        source=source,
+    )
+
+
+def rank_update_targets(
+    proposal: NoteApplyNote,
+    notes: Iterable[Any],
+    *,
+    source: UpdateTargetSource = "imported",
+    require_overlap: bool = False,
 ) -> list[ImportedNoteTarget]:
-    """Rank imported session notes as update targets (best first)."""
+    """Rank note-like objects as update targets (best first)."""
     ranked: list[ImportedNoteTarget] = []
-    for note in imported_notes:
-        field_names = [name for name, _value in getattr(note, "fields", [])]
-        score, report = score_proposal_against_fields(
-            proposal,
-            field_names,
-            notetype_name=str(getattr(note, "notetype_name", "") or ""),
-        )
-        if report.overlap_score <= 0 and not _notetype_name_bonus(
-            proposal.notetype,
-            str(getattr(note, "notetype_name", "") or ""),
-        ):
-            # Still list imported notes so the user can pick them; score stays low.
-            pass
-        label = ""
-        if hasattr(note, "display_label") and callable(note.display_label):
-            label = str(note.display_label())
-        else:
-            label = f"#{getattr(note, 'note_id', '?')}"
-        ranked.append(
-            ImportedNoteTarget(
-                note_id=int(note.note_id),
-                notetype_id=int(note.notetype_id),
-                notetype_name=str(getattr(note, "notetype_name", "") or ""),
-                label=label,
-                score=score,
-                report=report,
-            )
-        )
+    for note in notes:
+        target = _target_from_note_data(proposal, note, source=source)
+        if target is None:
+            continue
+        if require_overlap and target.report.overlap_score <= 0:
+            continue
+        ranked.append(target)
     ranked.sort(key=lambda item: (-item.score, item.label.lower(), item.note_id))
     if not ranked:
         return []
-    best = ranked[0]
+    best_id = ranked[0].note_id
     return [
         ImportedNoteTarget(
             note_id=item.note_id,
@@ -465,9 +560,52 @@ def rank_imported_update_targets(
             label=item.label,
             score=item.score,
             report=item.report,
-            preferred=(item.note_id == best.note_id),
+            preferred=(item.note_id == best_id),
+            source=item.source,
         )
         for item in ranked
+    ]
+
+
+def rank_imported_update_targets(
+    proposal: NoteApplyNote,
+    imported_notes: Iterable[Any],
+) -> list[ImportedNoteTarget]:
+    """Rank imported session notes as update targets (best first)."""
+    return rank_update_targets(
+        proposal,
+        imported_notes,
+        source="imported",
+        require_overlap=False,
+    )
+
+
+def merge_update_targets(
+    *groups: Iterable[ImportedNoteTarget],
+) -> list[ImportedNoteTarget]:
+    """Merge target lists by note id (first occurrence wins), re-mark preferred."""
+    by_id: dict[int, ImportedNoteTarget] = {}
+    for group in groups:
+        for item in group:
+            if item.note_id not in by_id:
+                by_id[item.note_id] = item
+    merged = list(by_id.values())
+    merged.sort(key=lambda item: (-item.score, item.label.lower(), item.note_id))
+    if not merged:
+        return []
+    best_id = merged[0].note_id
+    return [
+        ImportedNoteTarget(
+            note_id=item.note_id,
+            notetype_id=item.notetype_id,
+            notetype_name=item.notetype_name,
+            label=item.label,
+            score=item.score,
+            report=item.report,
+            preferred=(item.note_id == best_id),
+            source=item.source,
+        )
+        for item in merged
     ]
 
 
@@ -477,6 +615,248 @@ def suggest_imported_update_target(
 ) -> ImportedNoteTarget | None:
     ranked = rank_imported_update_targets(proposal, imported_notes)
     return ranked[0] if ranked else None
+
+
+def filter_existing_update_targets(
+    targets: Iterable[ImportedNoteTarget],
+) -> list[ImportedNoteTarget]:
+    """Drop targets whose notes no longer exist in the collection."""
+    kept = [item for item in targets if collection_note_still_exists(item.note_id)]
+    return merge_update_targets(kept)
+
+
+def load_collection_notes_for_notetypes(
+    notetype_ids: Iterable[int],
+    *,
+    limit_per_type: int = 150,
+    exclude_ids: Iterable[int] | None = None,
+) -> list[Any]:
+    """Load collection notes for the given note types (best-effort)."""
+    from .note_context_fields import imported_note_from_anki_note
+
+    exclude = {int(nid) for nid in (exclude_ids or ())}
+    results: list[Any] = []
+    seen: set[int] = set()
+    try:
+        from aqt import mw
+
+        col = mw.col if mw is not None else None
+    except Exception:
+        col = None
+    if col is None:
+        return []
+
+    for raw_id in notetype_ids:
+        try:
+            notetype_id = int(raw_id)
+        except Exception:
+            continue
+        try:
+            note_ids = list(col.find_notes(f"mid:{notetype_id}"))
+        except Exception:
+            continue
+        for nid in note_ids[: max(1, int(limit_per_type))]:
+            note_id = int(nid)
+            if note_id in exclude or note_id in seen:
+                continue
+            try:
+                note = col.get_note(note_id)
+            except Exception:
+                continue
+            imported = imported_note_from_anki_note(note)
+            if imported is None:
+                continue
+            seen.add(note_id)
+            results.append(imported)
+    return results
+
+
+def load_browser_selected_notes(
+    *,
+    exclude_ids: Iterable[int] | None = None,
+) -> list[Any]:
+    """Notes currently selected in an open Browser (if any)."""
+    from .note_context_fields import imported_note_from_anki_note
+
+    exclude = {int(nid) for nid in (exclude_ids or ())}
+    results: list[Any] = []
+    try:
+        from aqt import dialogs, mw
+
+        if mw is None or mw.col is None:
+            return []
+        browser = None
+        try:
+            browser = dialogs._dialogs.get("Browser", [None, None])[1]
+        except Exception:
+            browser = None
+        if browser is None:
+            return []
+        selected: list[int] = []
+        if hasattr(browser, "selected_notes"):
+            selected = [int(nid) for nid in browser.selected_notes()]
+        elif hasattr(browser, "selectedNotes"):
+            selected = [int(nid) for nid in browser.selectedNotes()]
+        for note_id in selected:
+            if note_id in exclude:
+                continue
+            try:
+                note = mw.col.get_note(note_id)
+            except Exception:
+                continue
+            imported = imported_note_from_anki_note(note)
+            if imported is not None:
+                results.append(imported)
+    except Exception:
+        return []
+    return results
+
+
+def fields_after_apply_preview(
+    proposal: NoteApplyNote,
+    before_fields: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Note fields as they would look after applying ``proposal`` (unmapped kept)."""
+    mapped = mapped_field_values(
+        proposal.fields,
+        [name for name, _value in before_fields],
+    )
+    after: list[tuple[str, str]] = []
+    for name, value in before_fields:
+        if name in mapped:
+            after.append((name, mapped[name]))
+        else:
+            after.append((name, value))
+    before_lower = {str(name).strip().lower() for name, _ in before_fields}
+    for name, value in proposal.fields.items():
+        if str(name).strip().lower() not in before_lower:
+            after.append((name, value))
+    return after
+
+
+def load_note_fields_for_preview(
+    note_id: int,
+) -> tuple[list[tuple[str, str]], int | None]:
+    """Load live collection fields for before/after preview."""
+    try:
+        from aqt import mw
+
+        col = mw.col if mw is not None else None
+        if col is None:
+            return [], None
+        note = col.get_note(int(note_id))
+        fields = [(str(name), str(value or "")) for name, value in note.items()]
+        return fields, int(note.mid)
+    except Exception:
+        return [], None
+
+
+def _strip_html_for_duplicate(value: str) -> str:
+    text = str(value or "")
+    try:
+        from anki.utils import strip_html_media
+
+        return str(strip_html_media(text) or "").strip()
+    except Exception:
+        return re.sub(r"<[^>]+>", "", text).strip()
+
+
+def _fields_check_is_duplicate(state: Any) -> bool:
+    if state is None:
+        return False
+    name = str(getattr(state, "name", "") or "").upper()
+    if name == "DUPLICATE":
+        return True
+    try:
+        return int(state) == 2
+    except Exception:
+        return "DUPLICATE" in str(state).upper()
+
+
+def update_would_create_anki_duplicate(
+    note_id: int,
+    proposal_fields: dict[str, str],
+) -> bool:
+    """True when applying ``proposal_fields`` would make Anki flag a first-field duplicate.
+
+    Matches Anki's rule: same note type + same first field (HTML stripped), excluding
+    the note being updated. Empty first field is not a duplicate.
+    """
+    try:
+        from aqt import mw
+
+        col = mw.col if mw is not None else None
+        if col is None:
+            return False
+        note = col.get_note(int(note_id))
+    except Exception:
+        return False
+
+    field_names = model_field_names_from_note(note)
+    mapped = mapped_field_values(proposal_fields, field_names)
+    if not mapped:
+        return False
+
+    original_fields: list[str] | None = None
+    try:
+        original_fields = list(note.fields)
+    except Exception:
+        original_fields = None
+
+    apply_mapped_fields_to_note(note, mapped, tags=None)
+
+    checked = False
+    is_duplicate = False
+    try:
+        if hasattr(note, "fields_check"):
+            checked = True
+            is_duplicate = _fields_check_is_duplicate(note.fields_check())
+        elif hasattr(note, "dupeOrEmpty"):
+            checked = True
+            is_duplicate = _fields_check_is_duplicate(note.dupeOrEmpty())
+    except Exception:
+        checked = False
+        is_duplicate = False
+    finally:
+        if original_fields is not None:
+            try:
+                note.fields = list(original_fields)
+            except Exception:
+                pass
+
+    if checked:
+        return is_duplicate
+
+    # Fallback when fields_check is unavailable: same mid + stripped first field.
+    try:
+        model = col.models.get(int(note.mid))
+        first_name = str((model.get("flds") or [{}])[0].get("name") or "").strip()
+        if not first_name:
+            return False
+        if first_name in mapped:
+            current_first = mapped[first_name]
+        else:
+            try:
+                current_first = str(note[first_name])
+            except Exception:
+                current_first = ""
+        needle = _strip_html_for_duplicate(current_first)
+        if not needle:
+            return False
+        for other_id in col.find_notes(f"mid:{int(note.mid)}"):
+            oid = int(other_id)
+            if oid == int(note_id):
+                continue
+            try:
+                other = col.get_note(oid)
+                other_val = _strip_html_for_duplicate(str(other[first_name]))
+            except Exception:
+                continue
+            if other_val == needle:
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def rank_notetypes_for_create(

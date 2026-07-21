@@ -31,13 +31,25 @@ After **brain icon** note import, imported fields appear in an **editable previe
 **Chat toolbar (compact icons — hover for tooltips):**
 
 - **Brain** — include/exclude imported note in the next message
-- **Pencil menu** — edit note fields, context wrapper, or card templates (session only)
+- **Pencil menu** — edit note fields, context wrapper, card templates, **Apply to Anki**, or undo last note apply
 - **Eye** — open imported-note preview in a separate window
 - **Lens** — read-only **prompt inspect** (preview full outgoing prompt without sending)
 - **Stop / priority** — toggle **pre-send review** (edit prompt before Gemini) vs send directly
 - **Plus** — new conversation (applies settings that require a fresh session)
 
 From **Edit note**, you can optionally **send empty fields** when building note context.
+
+### Apply to Anki (chat · Edit → Apply to Anki…)
+
+When Gemini rewrites a full note, it can emit a structured `<APPLY_NOTE>` block. Chat shows the proposed fields and enables **Edit → Apply to Anki…** to:
+
+- **Update** an existing note — prefers notes imported into the chat session; you can also pick from the **collection** (compatible note types) or from the current **Browser** selection
+- **Create** a new note — opens Anki’s Add window with note type / fields (and deck/tags when present) prefilled; you still press Add
+- **Preview** before/after as formatted fields (MathJax)
+- **Undo** the last successful update (dialog button or **Edit → Undo last note apply…**)
+- **Duplicate warning** (Anki’s first-field + note type rule) before update — proceed/cancel, dismissible
+
+Session history keeps recent proposals (configurable). Starting a **new conversation** clears apply history and undo. If an update target was deleted, the add-on falls back to opening Add. Reactivating the apply window refreshes targets from the current Browser selection.
 
 ### Settings (settings button)
 
@@ -135,6 +147,7 @@ Use the **settings** dialog for normal setup; manual file copy is rarely needed.
 | `prompt_cache_custom_text_chat` / `_optimize` | `""` | Optional extra reference text to cache |
 | `prompt_cache_segments_chat` / `_optimize` | *(see example)* | Which prompt parts to include in the cache |
 | `chat_payload_warning_chars` | `12000` | Warn before chat send when total input characters exceed this |
+| `chat_apply_history_max` | `7` | How many APPLY_NOTE proposals to keep in the chat session (1–30) |
 
 Enable prompt caching separately for **chat** and **optimize**. **Chat** caching is configured from the cache button in the chat window; **optimize** caching and preset libraries live under **Settings → Advanced prompts**. Cached content is billed at Gemini’s cached-input rate for the TTL; changing cached text or model invalidates the tracked cache and prompts you to confirm before recreating (with character count and a link to AI Studio Billing).
 

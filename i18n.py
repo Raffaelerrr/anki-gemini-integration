@@ -1102,6 +1102,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Avviso: eliminare cache orfane",
         "en": "Delete orphan caches warning",
     },
+    "warnings.apply_note_duplicate": {
+        "it": "Avviso: aggiornamento nota duplicata",
+        "en": "Apply note duplicate update warning",
+    },
     "warnings.default_actions.title": {
         "it": "Azioni predefinite",
         "en": "Default actions",
@@ -3080,13 +3084,15 @@ _STRINGS: dict[str, dict[str, str]] = {
     "chat.apply_note.intro": {
         "it": (
             "Rivedi i campi proposti da Gemini e scegli se aggiornare una nota "
-            "già importata o aprire Aggiungi con i campi precompilati. "
+            "(importata, Browser o collezione) o aprire Aggiungi con i campi precompilati. "
+            "Usa Anteprima per il confronto formattato e Annulla applica per l’ultimo aggiornamento. "
             "La finestra resta aperta finché restano note non ancora applicate "
             "(puoi chiuderla quando vuoi)."
         ),
         "en": (
-            "Review the fields Gemini proposed and choose whether to update an "
-            "imported note or open Add with the fields prefilled. "
+            "Review the fields Gemini proposed and choose whether to update a note "
+            "(imported, Browser, or collection) or open Add with the fields prefilled. "
+            "Use Preview for a formatted comparison and Undo apply for the last update. "
             "This window stays open while unapplied notes remain "
             "(you can close it anytime)."
         ),
@@ -3204,6 +3210,120 @@ _STRINGS: dict[str, dict[str, str]] = {
     "chat.apply_note.apply": {
         "it": "Applica",
         "en": "Apply",
+    },
+    "chat.apply_note.collection.button": {
+        "it": "Collezione…",
+        "en": "Collection…",
+    },
+    "chat.apply_note.collection.title": {
+        "it": "Scegli nota dalla collezione",
+        "en": "Choose note from collection",
+    },
+    "chat.apply_note.collection.intro": {
+        "it": (
+            "Seleziona una nota esistente (tipi compatibili) da aggiornare. "
+            "Le note importate in chat restano suggerite per prime."
+        ),
+        "en": (
+            "Pick an existing note (compatible types) to update. "
+            "Notes imported into chat stay suggested first."
+        ),
+    },
+    "chat.apply_note.collection.filter": {
+        "it": "Filtra",
+        "en": "Filter",
+    },
+    "chat.apply_note.collection.choose": {
+        "it": "Scegli",
+        "en": "Choose",
+    },
+    "chat.apply_note.collection.empty": {
+        "it": "Nessuna nota trovata per i tipi compatibili.",
+        "en": "No notes found for compatible note types.",
+    },
+    "chat.apply_note.target.from_browser": {
+        "it": "Browser",
+        "en": "Browser",
+    },
+    "chat.apply_note.target.from_collection": {
+        "it": "Collezione",
+        "en": "Collection",
+    },
+    "chat.apply_note.diff.button": {
+        "it": "Anteprima",
+        "en": "Preview",
+    },
+    "chat.apply_note.diff.title": {
+        "it": "Anteprima prima / dopo",
+        "en": "Before / after preview",
+    },
+    "chat.apply_note.diff.intro": {
+        "it": "Confronto formattato tra la nota attuale e la proposta (MathJax incluso).",
+        "en": "Formatted comparison of the current note and the proposal (including MathJax).",
+    },
+    "chat.apply_note.diff.before": {
+        "it": "Prima",
+        "en": "Before",
+    },
+    "chat.apply_note.diff.after": {
+        "it": "Dopo",
+        "en": "After",
+    },
+    "chat.apply_note.diff.unavailable": {
+        "it": "Anteprima MathJax non disponibile in questa versione di Anki.",
+        "en": "MathJax preview is not available in this Anki version.",
+    },
+    "chat.apply_note.undo.button": {
+        "it": "Annulla applica",
+        "en": "Undo apply",
+    },
+    "chat.apply_note.undo.menu": {
+        "it": "Annulla ultimo applica nota…",
+        "en": "Undo last note apply…",
+    },
+    "chat.apply_note.undo.none": {
+        "it": "Nessun aggiornamento nota da annullare in questa sessione.",
+        "en": "No note update to undo in this session.",
+    },
+    "chat.apply_note.undo.missing_note": {
+        "it": "Impossibile annullare: la nota #{note_id} non esiste più.",
+        "en": "Cannot undo: note #{note_id} no longer exists.",
+    },
+    "chat.apply_note.undo.done": {
+        "it": "Ultimo aggiornamento nota annullato.",
+        "en": "Last note update undone.",
+    },
+    "chat.apply_note.applied.create_fallback": {
+        "it": (
+            "La nota destinazione #{note_id} non esiste più; "
+            "aperta Aggiungi con tipo {notetype} (campi: {fields})."
+        ),
+        "en": (
+            "Target note #{note_id} no longer exists; "
+            "opened Add with type {notetype} (fields: {fields})."
+        ),
+    },
+    "chat.apply_note.tooltip.create_fallback": {
+        "it": "Nota mancante: aperta Aggiungi con i campi precompilati.",
+        "en": "Missing note: opened Add with fields prefilled.",
+    },
+    "chat.apply_note.duplicate.title": {
+        "it": "Nota duplicata",
+        "en": "Duplicate note",
+    },
+    "chat.apply_note.duplicate.message": {
+        "it": (
+            "Dopo l’aggiornamento, il primo campo coinciderebbe con un’altra nota "
+            "dello stesso tipo (come il controllo duplicati di Anki)."
+        ),
+        "en": (
+            "After this update, the first field would match another note of the "
+            "same type (Anki’s duplicate check)."
+        ),
+    },
+    "chat.apply_note.duplicate.detail": {
+        "it": "Puoi comunque applicare, oppure annullare e modificare i campi.",
+        "en": "You can still apply, or cancel and edit the fields.",
     },
     "chat.apply_note.plan.update": {
         "it": "aggiornamento",

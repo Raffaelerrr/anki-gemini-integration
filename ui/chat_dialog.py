@@ -54,6 +54,7 @@ from ..note_apply import (
     NoteApplyPlan,
     apply_note_tags_present,
     clamp_apply_history_max,
+    clear_apply_undo,
     extract_apply_note,
     format_apply_batch_for_display,
 )
@@ -72,7 +73,11 @@ from .chat_prompt_cache_dialog import ChatPromptCacheDialog
 from .chat_templates_edit_window import ChatTemplatesEditWindow
 from .chat_wrapper_edit_window import ChatWrapperEditWindow
 from .note_apply_dialog import open_note_apply_dialog
-from .note_apply_execute import execute_note_apply_plan
+from .note_apply_execute import (
+    can_undo_last_note_apply,
+    execute_note_apply_plan,
+    undo_last_note_apply,
+)
 from ..prompt_inspection import (
     build_chat_prompt_inspection,
     chat_session_config_changed,
@@ -280,6 +285,8 @@ class ChatWindow(QWidget):
         self._edit_menu.addSeparator()
         self._apply_note_action = self._edit_menu.addAction("")
         self._apply_note_action.triggered.connect(self._open_note_apply_dialog)
+        self._undo_apply_note_action = self._edit_menu.addAction("")
+        self._undo_apply_note_action.triggered.connect(self._undo_last_note_apply)
         self.btn_edit_menu.setMenu(self._edit_menu)
         toolbar.addWidget(self.btn_edit_menu)
 
@@ -978,15 +985,22 @@ class ChatWindow(QWidget):
         can_edit_templates = self._has_imported_templates_or_styling()
         has_context = self._has_sendable_context()
         has_apply = len(self._apply_history) > 0
+        can_undo_apply = can_undo_last_note_apply()
         self._edit_note_action.setText(tr("chat.edit_note", config=config))
         self._edit_wrapper_action.setText(tr("chat.edit_wrapper", config=config))
         self._edit_templates_action.setText(tr("chat.edit_templates", config=config))
         self._apply_note_action.setText(tr("chat.apply_note.menu", config=config))
+        self._undo_apply_note_action.setText(
+            tr("chat.apply_note.undo.menu", config=config)
+        )
         self._edit_note_action.setEnabled(has_note)
         self._edit_wrapper_action.setEnabled(has_context)
         self._edit_templates_action.setEnabled(can_edit_templates)
         self._apply_note_action.setEnabled(has_apply)
-        self.btn_edit_menu.setEnabled(has_note or has_context or has_apply)
+        self._undo_apply_note_action.setEnabled(can_undo_apply)
+        self.btn_edit_menu.setEnabled(
+            has_note or has_context or has_apply or can_undo_apply
+        )
 
     def _preview_fields_provider(self) -> list[tuple[str, str]]:
         config = load_config()
@@ -1400,6 +1414,7 @@ class ChatWindow(QWidget):
         self._pending_apply_batch = None
         self._pending_apply_plan = None
         self._apply_history.clear()
+        clear_apply_undo()
         self._refresh_edit_menu_actions()
         self._session_wrapper_override = None
         self._messages.clear()
@@ -1883,12 +1898,38 @@ class ChatWindow(QWidget):
                 )
             )
             self._render_chat_log(preserve_scroll=True)
+            self._refresh_edit_menu_actions(config)
+            return result
+
+        def on_undo():
+            result = undo_last_note_apply(config=config)
+            if result.ok and result.note_id is not None:
+                self._refresh_imported_note_after_apply(result.note_id)
+            self._messages.append(
+                ChatMessage(
+                    label_class=(
+                        "chat-label-system" if result.ok else "chat-label-error"
+                    ),
+                    label=tr("chat.label.system", config=config),
+                    body_html=html.escape(
+                        tr(
+                            result.message_key,
+                            config=config,
+                            **result.message_kwargs,
+                        )
+                    ),
+                    trailing_spacer=True,
+                )
+            )
+            self._render_chat_log(preserve_scroll=True)
+            self._refresh_edit_menu_actions(config)
             return result
 
         dialog = open_note_apply_dialog(
             self,
             self._apply_history,
             on_apply=on_apply,
+            on_undo=on_undo,
             imported_notes=self._imported_notes,
             session_notetypes=list(self._imported_notetypes.values()),
             config=config,
@@ -1900,6 +1941,36 @@ class ChatWindow(QWidget):
                 lambda *_: setattr(self, "_note_apply_dialog", None)
             )
         self._refresh_edit_menu_actions(config)
+
+    def _undo_last_note_apply(self) -> None:
+        if not can_undo_last_note_apply():
+            return
+        config = load_config()
+        result = undo_last_note_apply(config=config)
+        if result.ok and result.note_id is not None:
+            self._refresh_imported_note_after_apply(result.note_id)
+        self._messages.append(
+            ChatMessage(
+                label_class=("chat-label-system" if result.ok else "chat-label-error"),
+                label=tr("chat.label.system", config=config),
+                body_html=html.escape(
+                    tr(
+                        result.message_key,
+                        config=config,
+                        **result.message_kwargs,
+                    )
+                ),
+                trailing_spacer=True,
+            )
+        )
+        self._render_chat_log(preserve_scroll=True)
+        self._refresh_edit_menu_actions(config)
+        dialog = self._note_apply_dialog
+        if dialog is not None:
+            try:
+                dialog.refresh_actions()
+            except Exception:
+                pass
 
     def _refresh_imported_note_after_apply(self, note_id: int) -> None:
         """Keep chat's imported note copy in sync after a collection update."""
