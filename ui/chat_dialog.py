@@ -72,6 +72,13 @@ from ..prompt_cache_policy import (
     chat_cache_includes_session_content,
     has_tracked_active_cache,
 )
+from ..settings_presets import (
+    BUILTIN_SETTINGS_PRESET_ID,
+    apply_preset_to_config,
+    normalize_settings_presets,
+    preset_diff_from_builtin,
+    resolve_preset_payload,
+)
 from .chat_include_panel import ChatIncludePanel
 from .chat_prompt_cache_dialog import ChatPromptCacheDialog
 from .chat_templates_edit_window import ChatTemplatesEditWindow
@@ -294,6 +301,10 @@ class ChatWindow(QWidget):
         self._apply_note_action.triggered.connect(self._open_note_apply_dialog)
         self._undo_apply_note_action = self._edit_menu.addAction("")
         self._undo_apply_note_action.triggered.connect(self._undo_last_note_apply)
+        self._edit_menu.addSeparator()
+        self._presets_menu = QMenu(self._edit_menu)
+        self._presets_menu.aboutToShow.connect(self._rebuild_presets_menu)
+        self._presets_menu_action = self._edit_menu.addMenu(self._presets_menu)
         self.btn_edit_menu.setMenu(self._edit_menu)
         toolbar.addWidget(self.btn_edit_menu)
 
@@ -1001,14 +1012,82 @@ class ChatWindow(QWidget):
         self._undo_apply_note_action.setText(
             tr("chat.apply_note.undo.menu", config=config)
         )
+        self._presets_menu_action.setText(tr("chat.presets.menu", config=config))
         self._edit_note_action.setEnabled(has_note)
         self._edit_wrapper_action.setEnabled(has_context)
         self._edit_templates_action.setEnabled(can_edit_templates)
         self._apply_note_action.setEnabled(has_apply)
         self._undo_apply_note_action.setEnabled(can_undo_apply)
-        self.btn_edit_menu.setEnabled(
-            has_note or has_context or has_apply or can_undo_apply
+        self.btn_edit_menu.setEnabled(True)
+
+    def _rebuild_presets_menu(self) -> None:
+        config = load_config()
+        self._presets_menu.clear()
+        presets = normalize_settings_presets(config.get("settings_presets"))
+        builtin_action = self._presets_menu.addAction(
+            tr("settings.presets.builtin", config=config)
         )
+        builtin_action.triggered.connect(
+            lambda *_: self._apply_settings_preset_from_chat(BUILTIN_SETTINGS_PRESET_ID)
+        )
+        if presets:
+            self._presets_menu.addSeparator()
+        for preset in presets:
+            preset_id = str(preset.get("id") or "")
+            name = str(preset.get("name") or preset_id[:8])
+            action = self._presets_menu.addAction(name)
+            action.triggered.connect(
+                lambda *_args, pid=preset_id: self._apply_settings_preset_from_chat(pid)
+            )
+
+    def _apply_settings_preset_from_chat(self, preset_id: str) -> None:
+        config = load_config()
+        presets = normalize_settings_presets(config.get("settings_presets"))
+        values, runtime = resolve_preset_payload(presets, preset_id)
+        if preset_id == BUILTIN_SETTINGS_PRESET_ID:
+            name = tr("settings.presets.builtin", config=config)
+        else:
+            match = next((p for p in presets if p.get("id") == preset_id), None)
+            name = str((match or {}).get("name") or preset_id[:8])
+        diffs = preset_diff_from_builtin(values, runtime)
+        if not diffs:
+            summary = tr("settings.presets.preview.matches_default", config=config)
+        else:
+            summary = "\n".join(f"• {line}" for line in diffs[:12])
+            if len(diffs) > 12:
+                summary += "\n" + tr(
+                    "settings.presets.preview.more",
+                    config=config,
+                    count=len(diffs) - 12,
+                )
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(tr("chat.presets.apply.title", config=config))
+        box.setText(tr("chat.presets.apply.message", config=config, name=name))
+        box.setInformativeText(summary)
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        if box.exec() != QMessageBox.StandardButton.Yes:
+            return
+        apply_runtime = runtime is not None
+        updated = apply_preset_to_config(
+            config,
+            values=values,
+            runtime=runtime,
+            apply_runtime=apply_runtime,
+        )
+        updated["active_settings_preset_id"] = preset_id
+        updated["settings_presets"] = presets
+        save_config(updated)
+        refresh_chat_from_settings()
+        self._add_system_message(
+            tr("chat.presets.applied", config=updated, name=name),
+            kind="system",
+            label=tr("chat.label.system", config=updated),
+        )
+        self._update_settings_stale_banner(updated)
 
     def _preview_fields_provider(self) -> list[tuple[str, str]]:
         config = load_config()
@@ -1432,7 +1511,7 @@ class ChatWindow(QWidget):
         self._streaming_message_index = None
         self.btn_include_context.setEnabled(False)
         self._apply_include_context_icon()
-        self.btn_edit_menu.setEnabled(False)
+        self._refresh_edit_menu_actions()
         self._close_session_edit_windows()
         self._on_body_section_visibility_changed()
         if cache_choice == "clear":

@@ -1244,6 +1244,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Includi istruzioni dinamiche",
         "en": "Include dynamic instructions",
     },
+    "settings.presets.include_runtime": {
+        "it": "Includi modelli, temperature e thinking",
+        "en": "Include models, temperatures, and thinking",
+    },
     "settings.presets.save_as": {
         "it": "Salva come…",
         "en": "Save as…",
@@ -1260,9 +1264,49 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Elimina",
         "en": "Delete",
     },
+    "settings.presets.duplicate": {
+        "it": "Duplica",
+        "en": "Duplicate",
+    },
+    "settings.presets.duplicate_name": {
+        "it": "{name} (copia)",
+        "en": "{name} copy",
+    },
+    "settings.presets.preview": {
+        "it": "Anteprima…",
+        "en": "Preview…",
+    },
+    "settings.presets.preview.body": {
+        "it": "Preset “{name}” rispetto al Predefinito:\n\n{summary}",
+        "en": "Preset “{name}” vs Default:\n\n{summary}",
+    },
+    "settings.presets.preview.matches_default": {
+        "it": "Coincide con il preset Predefinito.",
+        "en": "Matches the Default preset.",
+    },
+    "settings.presets.preview.more": {
+        "it": "…e altre {count} differenze",
+        "en": "…and {count} more differences",
+    },
+    "settings.presets.load.title": {
+        "it": "Caricare il preset?",
+        "en": "Load preset?",
+    },
+    "settings.presets.load.message": {
+        "it": "Caricare “{name}” nel modulo impostazioni?",
+        "en": "Load “{name}” into the settings form?",
+    },
+    "settings.presets.load.dirty_warning": {
+        "it": "Le modifiche non salvate nel modulo andranno perse.",
+        "en": "Unsaved form changes will be discarded.",
+    },
     "settings.presets.export": {
-        "it": "Esporta…",
-        "en": "Export…",
+        "it": "Esporta tutti…",
+        "en": "Export all…",
+    },
+    "settings.presets.export_selected": {
+        "it": "Esporta selezionato…",
+        "en": "Export selected…",
     },
     "settings.presets.import": {
         "it": "Importa…",
@@ -1284,6 +1328,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "it": "Il preset Predefinito non può essere modificato o eliminato.",
         "en": "The Default preset cannot be modified or deleted.",
     },
+    "settings.presets.cannot_export_builtin": {
+        "it": "Esporta un preset personalizzato, non il Predefinito.",
+        "en": "Export a custom preset, not Default.",
+    },
     "settings.presets.delete_confirm": {
         "it": "Eliminare il preset “{name}”?",
         "en": "Delete preset “{name}”?",
@@ -1291,6 +1339,10 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.presets.export.title": {
         "it": "Esporta preset prompt",
         "en": "Export prompt presets",
+    },
+    "settings.presets.export_selected.title": {
+        "it": "Esporta preset selezionato",
+        "en": "Export selected preset",
     },
     "settings.presets.import.title": {
         "it": "Importa preset prompt",
@@ -1315,6 +1367,34 @@ _STRINGS: dict[str, dict[str, str]] = {
     "settings.presets.export_error": {
         "it": "Esportazione non riuscita: {error}",
         "en": "Export failed: {error}",
+    },
+    "chat.presets.menu": {
+        "it": "Preset prompt",
+        "en": "Prompt presets",
+    },
+    "chat.presets.apply.title": {
+        "it": "Applicare il preset?",
+        "en": "Apply preset?",
+    },
+    "chat.presets.apply.message": {
+        "it": (
+            "Applicare “{name}” alle impostazioni salvate? "
+            "Avvia una nuova conversazione perché tutte le impostazioni vengano aggiornate."
+        ),
+        "en": (
+            "Apply “{name}” to saved settings? "
+            "Start a new conversation for all settings to be updated."
+        ),
+    },
+    "chat.presets.applied": {
+        "it": (
+            "Preset “{name}” applicato. "
+            "Avvia una nuova conversazione perché tutte le impostazioni vengano aggiornate."
+        ),
+        "en": (
+            "Preset “{name}” applied. "
+            "Start a new conversation for all settings to be updated."
+        ),
     },
     "chat.edit_wrapper.sync_from_settings": {
         "it": "Sincronizza dalle impostazioni",

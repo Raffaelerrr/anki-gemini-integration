@@ -75,14 +75,19 @@ from ..settings_presets import (
     builtin_preset_values,
     clone_settings_presets,
     collect_prompt_pack_from_config,
+    collect_runtime_pack_from_config,
     dumps_settings_presets_export,
+    duplicate_settings_preset,
     find_settings_preset,
     loads_settings_presets_import,
     merge_imported_settings_presets,
     new_settings_preset,
     normalize_settings_presets,
+    preset_diff_from_builtin,
     prompt_pack_values_equal,
     resolve_active_settings_preset_id,
+    resolve_preset_payload,
+    runtime_pack_values_equal,
 )
 from .chat_prompt_cache_dialog import ChatPromptCacheDialog
 from .chat_export import (
@@ -777,6 +782,16 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.settings_presets_include_dynamic_checkbox)
 
+        self.settings_presets_include_runtime_checkbox = QCheckBox(
+            tr("settings.presets.include_runtime", config=config),
+            form_host,
+        )
+        self.settings_presets_include_runtime_checkbox.setChecked(False)
+        self.settings_presets_include_runtime_checkbox.toggled.connect(
+            self._refresh_settings_preset_dirty_state
+        )
+        layout.addWidget(self.settings_presets_include_runtime_checkbox)
+
         self.settings_presets_dirty_label = create_settings_hint_label(form_host, "")
         self.settings_presets_dirty_label.setVisible(False)
         layout.addWidget(self.settings_presets_dirty_label)
@@ -793,6 +808,11 @@ class SettingsDialog(QDialog):
             form_host,
         )
         self.settings_presets_update_btn.clicked.connect(self._update_settings_preset)
+        self.settings_presets_duplicate_btn = QPushButton(
+            tr("settings.presets.duplicate", config=config),
+            form_host,
+        )
+        self.settings_presets_duplicate_btn.clicked.connect(self._duplicate_settings_preset)
         self.settings_presets_rename_btn = QPushButton(
             tr("settings.presets.rename", config=config),
             form_host,
@@ -805,6 +825,7 @@ class SettingsDialog(QDialog):
         self.settings_presets_delete_btn.clicked.connect(self._delete_settings_preset)
         preset_btn_row.addWidget(self.settings_presets_save_as_btn)
         preset_btn_row.addWidget(self.settings_presets_update_btn)
+        preset_btn_row.addWidget(self.settings_presets_duplicate_btn)
         preset_btn_row.addWidget(self.settings_presets_rename_btn)
         preset_btn_row.addWidget(self.settings_presets_delete_btn)
         preset_btn_row.addStretch(1)
@@ -812,17 +833,31 @@ class SettingsDialog(QDialog):
 
         preset_io_row = QHBoxLayout()
         preset_io_row.setSpacing(SETTINGS_SECTION_GAP)
+        self.settings_presets_preview_btn = QPushButton(
+            tr("settings.presets.preview", config=config),
+            form_host,
+        )
+        self.settings_presets_preview_btn.clicked.connect(self._preview_settings_preset)
         self.settings_presets_export_btn = QPushButton(
             tr("settings.presets.export", config=config),
             form_host,
         )
         self.settings_presets_export_btn.clicked.connect(self._export_settings_presets)
+        self.settings_presets_export_selected_btn = QPushButton(
+            tr("settings.presets.export_selected", config=config),
+            form_host,
+        )
+        self.settings_presets_export_selected_btn.clicked.connect(
+            self._export_selected_settings_preset
+        )
         self.settings_presets_import_btn = QPushButton(
             tr("settings.presets.import", config=config),
             form_host,
         )
         self.settings_presets_import_btn.clicked.connect(self._import_settings_presets)
+        preset_io_row.addWidget(self.settings_presets_preview_btn)
         preset_io_row.addWidget(self.settings_presets_export_btn)
+        preset_io_row.addWidget(self.settings_presets_export_selected_btn)
         preset_io_row.addWidget(self.settings_presets_import_btn)
         preset_io_row.addStretch(1)
         layout.addLayout(preset_io_row)
@@ -2277,7 +2312,12 @@ class SettingsDialog(QDialog):
                 "prompt_optimize_user_input",
                 "prompt_chat_addon_input",
                 "prompt_dynamic_rules_prefix_input",
+                "mathjax_preview_preamble_input",
                 "instruction_shared_checkbox",
+                "thinking_budget_optimize_input",
+                "thinking_budget_chat_input",
+                "temp_optimize_input",
+                "temp_chat_input",
             )
         ]
         for widget in widgets:
@@ -2285,11 +2325,17 @@ class SettingsDialog(QDialog):
                 continue
             if hasattr(widget, "textChanged"):
                 widget.textChanged.connect(self._refresh_settings_preset_dirty_state)
+            elif hasattr(widget, "valueChanged"):
+                widget.valueChanged.connect(self._refresh_settings_preset_dirty_state)
             elif hasattr(widget, "toggled"):
                 widget.toggled.connect(self._refresh_settings_preset_dirty_state)
         editor = getattr(self, "wrapper_sections_editor", None)
         if editor is not None and hasattr(editor, "connect_text_changed"):
             editor.connect_text_changed(self._refresh_settings_preset_dirty_state)
+        for name in ("model_optimize_input", "model_chat_input"):
+            combo = getattr(self, name, None)
+            if combo is not None and hasattr(combo, "currentTextChanged"):
+                combo.currentTextChanged.connect(self._refresh_settings_preset_dirty_state)
 
     def _selected_settings_preset_id(self) -> str:
         return str(self.settings_preset_combo.currentData() or BUILTIN_SETTINGS_PRESET_ID)
@@ -2314,23 +2360,71 @@ class SettingsDialog(QDialog):
         self.settings_preset_combo.blockSignals(False)
         self._settings_preset_loading = False
         self._active_settings_preset_id = self._selected_settings_preset_id()
+        self._sync_include_checkboxes_from_active_preset()
         self._refresh_settings_preset_actions()
         self._refresh_settings_preset_dirty_state()
 
-    def _active_settings_preset_values(self) -> dict[str, Any]:
-        preset_id = self._selected_settings_preset_id()
-        if preset_id == BUILTIN_SETTINGS_PRESET_ID:
-            return builtin_preset_values()
-        preset = find_settings_preset(self._settings_presets, preset_id)
-        if preset is None:
-            return builtin_preset_values()
-        return dict(preset.get("values") or {})
+    def _active_settings_preset_payload(
+        self,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        return resolve_preset_payload(
+            self._settings_presets,
+            self._selected_settings_preset_id(),
+        )
+
+    def _sync_include_checkboxes_from_active_preset(self) -> None:
+        values, runtime = self._active_settings_preset_payload()
+        self.settings_presets_include_dynamic_checkbox.blockSignals(True)
+        self.settings_presets_include_runtime_checkbox.blockSignals(True)
+        self.settings_presets_include_dynamic_checkbox.setChecked(
+            "dynamic_instructions" in values
+        )
+        self.settings_presets_include_runtime_checkbox.setChecked(runtime is not None)
+        self.settings_presets_include_dynamic_checkbox.blockSignals(False)
+        self.settings_presets_include_runtime_checkbox.blockSignals(False)
 
     def _current_form_prompt_pack(self, *, include_dynamic: bool | None = None) -> dict[str, Any]:
         if include_dynamic is None:
             include_dynamic = self.settings_presets_include_dynamic_checkbox.isChecked()
         pending = self._collect_pending_config()
         return collect_prompt_pack_from_config(pending, include_dynamic=include_dynamic)
+
+    def _current_form_runtime_pack(self) -> dict[str, Any]:
+        pending = self._collect_pending_config()
+        return collect_runtime_pack_from_config(pending)
+
+    def _form_matches_active_preset(self) -> bool:
+        active_values, active_runtime = self._active_settings_preset_payload()
+        include_dynamic = (
+            "dynamic_instructions" in active_values
+            or self.settings_presets_include_dynamic_checkbox.isChecked()
+        )
+        current_values = self._current_form_prompt_pack(include_dynamic=include_dynamic)
+        if "dynamic_instructions" not in active_values and not (
+            self.settings_presets_include_dynamic_checkbox.isChecked()
+        ):
+            current_values = {
+                key: value
+                for key, value in current_values.items()
+                if key != "dynamic_instructions"
+            }
+            active_values = {
+                key: value
+                for key, value in active_values.items()
+                if key != "dynamic_instructions"
+            }
+        if not prompt_pack_values_equal(current_values, active_values):
+            return False
+        include_runtime = (
+            active_runtime is not None
+            or self.settings_presets_include_runtime_checkbox.isChecked()
+        )
+        if not include_runtime:
+            return True
+        if active_runtime is None:
+            return False
+        current_runtime = self._current_form_runtime_pack()
+        return runtime_pack_values_equal(current_runtime, active_runtime)
 
     def _refresh_settings_preset_dirty_state(self) -> None:
         if not hasattr(self, "settings_presets_dirty_label"):
@@ -2342,20 +2436,7 @@ class SettingsDialog(QDialog):
         if getattr(self, "_settings_preset_loading", False):
             return
         config = self._ui_config()
-        active_values = self._active_settings_preset_values()
-        include_dynamic = "dynamic_instructions" in active_values
-        if self.settings_presets_include_dynamic_checkbox.isChecked():
-            include_dynamic = True
-        current = self._current_form_prompt_pack(include_dynamic=include_dynamic)
-        # When comparing to a pack without dynamic, ignore form dynamic unless checkbox on.
-        if "dynamic_instructions" not in active_values and not (
-            self.settings_presets_include_dynamic_checkbox.isChecked()
-        ):
-            current = {k: v for k, v in current.items() if k != "dynamic_instructions"}
-            active_cmp = {k: v for k, v in active_values.items() if k != "dynamic_instructions"}
-        else:
-            active_cmp = active_values
-        dirty = not prompt_pack_values_equal(current, active_cmp)
+        dirty = not self._form_matches_active_preset()
         self.settings_presets_dirty_label.setVisible(dirty)
         if dirty:
             self.settings_presets_dirty_label.setText(
@@ -2373,9 +2454,39 @@ class SettingsDialog(QDialog):
         self.settings_presets_delete_btn.setEnabled(not is_builtin)
         at_cap = len(self._settings_presets) >= MAX_SETTINGS_PRESETS
         self.settings_presets_save_as_btn.setEnabled(not at_cap)
+        self.settings_presets_duplicate_btn.setEnabled(not at_cap)
         self.settings_presets_export_btn.setEnabled(bool(self._settings_presets))
+        self.settings_presets_export_selected_btn.setEnabled(not is_builtin)
 
-    def _apply_prompt_pack_values_to_form(self, values: dict[str, Any]) -> None:
+    def _apply_runtime_pack_to_form(self, runtime: dict[str, Any] | None) -> None:
+        if runtime is None:
+            self.settings_presets_include_runtime_checkbox.setChecked(False)
+            return
+        self.settings_presets_include_runtime_checkbox.setChecked(True)
+        set_model_selector_value(
+            self.model_optimize_input,
+            str(runtime.get("model_optimize") or DEFAULT_MODEL_OPTIMIZE),
+        )
+        set_model_selector_value(
+            self.model_chat_input,
+            str(runtime.get("model_chat") or DEFAULT_MODEL_CHAT),
+        )
+        self.thinking_budget_optimize_input.setValue(
+            int(runtime.get("thinking_budget_optimize", DEFAULT_THINKING_BUDGET_OPTIMIZE))
+        )
+        self.thinking_budget_chat_input.setValue(
+            int(runtime.get("thinking_budget_chat", DEFAULT_THINKING_BUDGET_CHAT))
+        )
+        self.temp_optimize_input.setValue(float(runtime.get("temperature_optimize", 0.1)))
+        self.temp_chat_input.setValue(float(runtime.get("temperature_chat", 0.2)))
+
+    def _apply_prompt_pack_values_to_form(
+        self,
+        values: dict[str, Any],
+        runtime: dict[str, Any] | None = None,
+        *,
+        apply_runtime: bool = True,
+    ) -> None:
         lang = self.language_combo.currentData() or DEFAULT_LANGUAGE
         pack = dict(values)
         pack["language"] = lang
@@ -2405,25 +2516,97 @@ class SettingsDialog(QDialog):
             )
         if hasattr(self, "wrapper_sections_editor"):
             self.wrapper_sections_editor.load_from_config(pack)
+        if hasattr(self, "mathjax_preview_preamble_input"):
+            self.mathjax_preview_preamble_input.setPlainText(
+                effective_mathjax_preview_preamble(pack)
+            )
         if "dynamic_instructions" in values:
             self.dynamic_input.setPlainText(str(values.get("dynamic_instructions") or ""))
             self.settings_presets_include_dynamic_checkbox.setChecked(True)
         else:
             self.settings_presets_include_dynamic_checkbox.setChecked(False)
+        if apply_runtime:
+            self._apply_runtime_pack_to_form(runtime)
+
+    def _preset_display_name(self, preset_id: str) -> str:
+        config = self._ui_config()
+        if preset_id == BUILTIN_SETTINGS_PRESET_ID:
+            return tr("settings.presets.builtin", config=config)
+        preset = find_settings_preset(self._settings_presets, preset_id)
+        if preset is None:
+            return tr("settings.presets.builtin", config=config)
+        return str(preset.get("name") or preset_id[:8])
+
+    def _confirm_load_settings_preset(self, preset_id: str) -> bool:
+        config = self._ui_config()
+        values, runtime = resolve_preset_payload(self._settings_presets, preset_id)
+        diffs = preset_diff_from_builtin(values, runtime)
+        name = self._preset_display_name(preset_id)
+        if not diffs:
+            summary = tr("settings.presets.preview.matches_default", config=config)
+        else:
+            summary = "\n".join(f"• {line}" for line in diffs[:12])
+            if len(diffs) > 12:
+                summary += "\n" + tr(
+                    "settings.presets.preview.more",
+                    config=config,
+                    count=len(diffs) - 12,
+                )
+        dirty = not self._form_matches_active_preset()
+        message = tr(
+            "settings.presets.load.message",
+            config=config,
+            name=name,
+        )
+        if dirty:
+            message = (
+                tr("settings.presets.load.dirty_warning", config=config)
+                + "\n\n"
+                + message
+            )
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(tr("settings.presets.load.title", config=config))
+        box.setText(message)
+        box.setInformativeText(summary)
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        return box.exec() == QMessageBox.StandardButton.Yes
 
     def _on_settings_preset_changed(self) -> None:
         if self._settings_preset_loading:
             return
         preset_id = self._selected_settings_preset_id()
+        previous_id = self._active_settings_preset_id
+        if preset_id == previous_id:
+            return
+        if not self._confirm_load_settings_preset(preset_id):
+            self._settings_preset_loading = True
+            self.settings_preset_combo.blockSignals(True)
+            index = self.settings_preset_combo.findData(previous_id)
+            self.settings_preset_combo.setCurrentIndex(index if index >= 0 else 0)
+            self.settings_preset_combo.blockSignals(False)
+            self._settings_preset_loading = False
+            return
         self._active_settings_preset_id = preset_id
+        values, runtime = resolve_preset_payload(self._settings_presets, preset_id)
         self._settings_preset_loading = True
         try:
-            self._apply_prompt_pack_values_to_form(self._active_settings_preset_values())
+            self._apply_prompt_pack_values_to_form(values, runtime, apply_runtime=True)
         finally:
             self._settings_preset_loading = False
         self._refresh_settings_preset_actions()
         self._refresh_settings_preset_dirty_state()
         QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
+
+    def _build_preset_from_form(self, *, name: str) -> dict[str, Any]:
+        values = self._current_form_prompt_pack()
+        runtime = None
+        if self.settings_presets_include_runtime_checkbox.isChecked():
+            runtime = self._current_form_runtime_pack()
+        return new_settings_preset(name=name, values=values, runtime=runtime)
 
     def _save_settings_preset_as(self) -> None:
         config = self._ui_config()
@@ -2446,8 +2629,7 @@ class SettingsDialog(QDialog):
         name = name.strip()
         if not name:
             return
-        values = self._current_form_prompt_pack()
-        preset = new_settings_preset(name=name, values=values)
+        preset = self._build_preset_from_form(name=name)
         self._settings_presets.append(preset)
         self._rebuild_settings_preset_combo(select_id=preset["id"])
 
@@ -2460,8 +2642,59 @@ class SettingsDialog(QDialog):
         preset = find_settings_preset(self._settings_presets, preset_id)
         if preset is None:
             return
-        preset["values"] = self._current_form_prompt_pack()
+        updated = self._build_preset_from_form(name=str(preset.get("name") or ""))
+        preset["values"] = updated["values"]
+        if "runtime" in updated:
+            preset["runtime"] = updated["runtime"]
+        else:
+            preset.pop("runtime", None)
         self._refresh_settings_preset_dirty_state()
+
+    def _duplicate_settings_preset(self) -> None:
+        config = self._ui_config()
+        if len(self._settings_presets) >= MAX_SETTINGS_PRESETS:
+            showWarning(
+                tr(
+                    "settings.presets.limit",
+                    config=config,
+                    max=MAX_SETTINGS_PRESETS,
+                )
+            )
+            return
+        preset_id = self._selected_settings_preset_id()
+        if preset_id == BUILTIN_SETTINGS_PRESET_ID:
+            source_name = tr("settings.presets.builtin", config=config)
+            duplicate = new_settings_preset(
+                name=tr(
+                    "settings.presets.duplicate_name",
+                    config=config,
+                    name=source_name,
+                ),
+                values=builtin_preset_values(),
+                runtime=None,
+            )
+        else:
+            preset = find_settings_preset(self._settings_presets, preset_id)
+            if preset is None:
+                return
+            duplicate = duplicate_settings_preset(
+                preset,
+                name=tr(
+                    "settings.presets.duplicate_name",
+                    config=config,
+                    name=str(preset.get("name") or ""),
+                ),
+            )
+        self._settings_presets.append(duplicate)
+        self._rebuild_settings_preset_combo(select_id=duplicate["id"])
+        values, runtime = resolve_preset_payload(self._settings_presets, duplicate["id"])
+        self._settings_preset_loading = True
+        try:
+            self._apply_prompt_pack_values_to_form(values, runtime, apply_runtime=True)
+        finally:
+            self._settings_preset_loading = False
+        self._refresh_settings_preset_dirty_state()
+        QTimer.singleShot(0, lambda: refresh_settings_text_edit_layouts(self))
 
     def _rename_settings_preset(self) -> None:
         config = self._ui_config()
@@ -2510,15 +2743,38 @@ class SettingsDialog(QDialog):
             item for item in self._settings_presets if item.get("id") != preset_id
         ]
         self._rebuild_settings_preset_combo(select_id=BUILTIN_SETTINGS_PRESET_ID)
-        self._on_settings_preset_changed()
+        values, runtime = resolve_preset_payload(
+            self._settings_presets,
+            BUILTIN_SETTINGS_PRESET_ID,
+        )
+        self._settings_preset_loading = True
+        try:
+            self._apply_prompt_pack_values_to_form(values, runtime, apply_runtime=True)
+        finally:
+            self._settings_preset_loading = False
+        self._refresh_settings_preset_dirty_state()
 
-    def _export_settings_presets(self) -> None:
+    def _preview_settings_preset(self) -> None:
         config = self._ui_config()
-        if not self._settings_presets:
+        preset_id = self._selected_settings_preset_id()
+        values, runtime = resolve_preset_payload(self._settings_presets, preset_id)
+        diffs = preset_diff_from_builtin(values, runtime)
+        name = self._preset_display_name(preset_id)
+        if not diffs:
+            body = tr("settings.presets.preview.matches_default", config=config)
+        else:
+            body = "\n".join(f"• {line}" for line in diffs)
+        showInfo(
+            tr("settings.presets.preview.body", config=config, name=name, summary=body)
+        )
+
+    def _export_preset_list(self, presets: list[dict[str, Any]], *, title_key: str) -> None:
+        config = self._ui_config()
+        if not presets:
             return
         path, _filter = QFileDialog.getSaveFileName(
             self,
-            tr("settings.presets.export.title", config=config),
+            tr(title_key, config=config),
             "prompt-presets.json",
             tr("settings.presets.file_filter", config=config),
         )
@@ -2526,7 +2782,7 @@ class SettingsDialog(QDialog):
             return
         try:
             Path(path).write_text(
-                dumps_settings_presets_export(self._settings_presets),
+                dumps_settings_presets_export(presets),
                 encoding="utf-8",
             )
         except OSError as exc:
@@ -2538,8 +2794,28 @@ class SettingsDialog(QDialog):
             tr(
                 "settings.presets.export_done",
                 config=config,
-                count=len(self._settings_presets),
+                count=len(presets),
             )
+        )
+
+    def _export_settings_presets(self) -> None:
+        self._export_preset_list(
+            self._settings_presets,
+            title_key="settings.presets.export.title",
+        )
+
+    def _export_selected_settings_preset(self) -> None:
+        config = self._ui_config()
+        preset_id = self._selected_settings_preset_id()
+        if preset_id == BUILTIN_SETTINGS_PRESET_ID:
+            showWarning(tr("settings.presets.cannot_export_builtin", config=config))
+            return
+        preset = find_settings_preset(self._settings_presets, preset_id)
+        if preset is None:
+            return
+        self._export_preset_list(
+            [preset],
+            title_key="settings.presets.export_selected.title",
         )
 
     def _import_settings_presets(self) -> None:

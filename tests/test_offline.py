@@ -4175,13 +4175,60 @@ class TestSettingsPresets(unittest.TestCase):
             ),
             "prompt_chat_context_sections": {},
             "prompt_card_templates_format": "",
+            "mathjax_preview_preamble": "",
             "dynamic_instructions": "live rules",
         }
         without = self.presets.collect_prompt_pack_from_config(config, include_dynamic=False)
         self.assertNotIn("dynamic_instructions", without)
         with_dyn = self.presets.collect_prompt_pack_from_config(config, include_dynamic=True)
         self.assertEqual(with_dyn["dynamic_instructions"], "live rules")
+        self.assertIn("mathjax_preview_preamble", without)
 
+    def test_builtin_includes_empty_dynamic(self) -> None:
+        values = self.presets.builtin_preset_values()
+        self.assertIn("dynamic_instructions", values)
+        self.assertEqual(values["dynamic_instructions"], "")
+        self.assertIn("mathjax_preview_preamble", values)
+
+    def test_runtime_pack_roundtrip(self) -> None:
+        runtime = {
+            "model_optimize": "gemini-test",
+            "model_chat": "gemini-chat",
+            "thinking_budget_optimize": 12,
+            "thinking_budget_chat": 34,
+            "temperature_optimize": 0.3,
+            "temperature_chat": 0.4,
+        }
+        preset = self.presets.new_settings_preset(
+            name="Fast",
+            values={"system_instruction": "X"},
+            runtime=runtime,
+        )
+        self.assertEqual(preset["runtime"]["model_chat"], "gemini-chat")
+        exported = self.presets.dumps_settings_presets_export([preset])
+        imported = self.presets.loads_settings_presets_import(exported)
+        self.assertEqual(imported[0]["runtime"]["thinking_budget_chat"], 34)
+
+    def test_preset_diff_and_apply(self) -> None:
+        values = self.presets.builtin_preset_values()
+        values["system_instruction"] = "Custom"
+        diffs = self.presets.preset_diff_from_builtin(values, None)
+        self.assertTrue(any("system instruction" in line for line in diffs))
+        config = dict(self.config.DEFAULT_CONFIG)
+        config["dynamic_instructions"] = "keep me"
+        config["model_chat"] = "keep-model"
+        applied = self.presets.apply_preset_to_config(
+            config,
+            values=values,
+            runtime=None,
+            apply_runtime=False,
+        )
+        self.assertEqual(applied["system_instruction"], "Custom")
+        self.assertEqual(applied["dynamic_instructions"], "")
+        self.assertEqual(applied["model_chat"], "keep-model")
+        values_resolved, runtime_resolved = self.presets.resolve_preset_payload([], self.presets.BUILTIN_SETTINGS_PRESET_ID)
+        self.assertEqual(values_resolved["dynamic_instructions"], "")
+        self.assertIsNone(runtime_resolved)
     def test_export_import_roundtrip(self) -> None:
         preset = self.presets.new_settings_preset(
             name="Exam",
